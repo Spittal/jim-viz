@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Ableton-style device browser. Tools are grouped by section (Inputs, Modulation, Generation,
-/// one per generator category such as Low Poly, Effects);
+/// Ableton-style device browser. Tools are grouped by section (Inputs, Modulation, Cameras,
+/// Colour, one per generator category such as Low Poly, Effects); the Generation filter shows
+/// Cameras, Colour and the generator categories;
 /// each tool expands to show its presets. Drag a tool or a preset onto the chain, double-click
 /// it, or hover and click +. A tool on its own loads with default settings.
 struct DeviceBrowser: View {
@@ -43,7 +44,9 @@ struct DeviceBrowser: View {
                     if show(.inputs) { section("Inputs", [.input]) }
                     if show(.modulation) { section("Modulation", [.modulation]) }
                     if show(.generation) {
-                        section("Generation", [.camera, .palette])
+                        section("Cameras", [.camera])
+                        // Colour sources: palettes now, later anything else that makes colours.
+                        section("Colour", [.palette])
                         ForEach(generatorCategories, id: \.self) { category in
                             section(Tools.categoryLabel(category), [.generator], category: category)
                         }

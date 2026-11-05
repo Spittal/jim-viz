@@ -1,16 +1,25 @@
 {
   "camera" : {
     "params" : {
+      "angle" : -13.877929,
+      "bob" : 0.4321289,
+      "bobSpeed" : 0.5,
       "distance" : 9.682837,
       "fov" : 55,
       "height" : 8.811572,
+      "lookX" : 0,
       "lookY" : -0.5,
+      "lookZ" : 0,
       "orbitSpeed" : 0.25,
       "roll" : 18.46582,
       "rollSpeed" : 0.054492187,
-      "shake" : 0.011376955,
-      "sway" : 0.15,
-      "swing" : 28
+      "shake" : 0,
+      "shakeSpeed" : 0.63183594,
+      "snap" : 0,
+      "sway" : 0.14189452,
+      "swaySpeed" : 1.2535156,
+      "swing" : 28,
+      "tilt" : -52.620117
     },
     "type" : "orbit"
   },
