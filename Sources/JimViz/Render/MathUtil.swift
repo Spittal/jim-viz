@@ -14,6 +14,17 @@ extension simd_float4x4 {
         ))
     }
 
+    /// Rotation about the z axis, which in view space is the view axis.
+    static func rotationZ(_ radians: Float) -> simd_float4x4 {
+        let c = cos(radians), s = sin(radians)
+        return simd_float4x4(columns: (
+            SIMD4(c, s, 0, 0),
+            SIMD4(-s, c, 0, 0),
+            SIMD4(0, 0, 1, 0),
+            SIMD4(0, 0, 0, 1)
+        ))
+    }
+
     static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
         let f = simd_normalize(target - eye)
         let s = simd_normalize(simd_cross(f, up))

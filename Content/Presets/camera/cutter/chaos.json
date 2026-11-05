@@ -1,0 +1,15 @@
+{
+  "name": "Chaos",
+  "params": {
+    "rate": 6,
+    "glide": 0,
+    "minDistance": 1.5,
+    "maxDistance": 14,
+    "minHeight": -6,
+    "maxHeight": 8,
+    "minFov": 15,
+    "maxFov": 140,
+    "rollRange": 180,
+    "drift": 1
+  }
+}

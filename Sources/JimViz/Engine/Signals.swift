@@ -79,10 +79,6 @@ func devicePath(_ key: String) -> String {
 }
 
 enum Outputs {
-    static func camera(_ motion: CameraMotion) -> [OutputSignal] {
-        [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { _ in motion.orbitPhase }]
-    }
-
     /// Display name for a source key, including ones whose device isn't in the scene.
     static func label(_ key: String, in outputs: [OutputSignal]) -> String {
         if let o = outputs.first(where: { $0.key == key }) { return "\(o.device) · \(o.name)" }

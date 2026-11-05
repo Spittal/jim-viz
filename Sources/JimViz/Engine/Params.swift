@@ -134,23 +134,6 @@ final class ParamBank {
     }
 }
 
-enum CameraParams {
-    static let defs: [ParamDef] = [
-        ParamDef(name: "distance", defaultValue: 6, min: 0.5, max: 40, isInt: false),
-        ParamDef(name: "height", defaultValue: 1, min: -15, max: 15, isInt: false),
-        ParamDef(name: "orbitSpeed", defaultValue: 0.15, min: -3, max: 3, isInt: false),
-        // 0 orbits all the way round; above 0 the camera swings back and forth this many
-        // degrees either side of the front (+x) instead, for things meant to be seen face-on.
-        ParamDef(name: "swing", defaultValue: 0, min: 0, max: 180, isInt: false),
-        ParamDef(name: "fov", defaultValue: 55, min: 10, max: 150, isInt: false),
-        ParamDef(name: "roll", defaultValue: 0, min: -180, max: 180, isInt: false),
-        ParamDef(name: "rollSpeed", defaultValue: 0, min: -2, max: 2, isInt: false),
-        ParamDef(name: "lookY", defaultValue: 0, min: -10, max: 10, isInt: false),
-        ParamDef(name: "shake", defaultValue: 0, min: 0, max: 1, isInt: false),
-        ParamDef(name: "sway", defaultValue: 0.2, min: 0, max: 2, isInt: false),
-    ]
-}
-
 /// The palette's inputs: adjustments applied to every colour, so they can be mapped
 /// (a kick flashing brightness, an LFO drifting hue).
 enum PaletteParams {

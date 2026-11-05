@@ -1,0 +1,11 @@
+{
+  "name": "Breathing",
+  "params": {
+    "fov": 70,
+    "sweep": 20,
+    "sweepSpeed": 0.5,
+    "frame": 3.5,
+    "elevation": 25,
+    "orbitSpeed": 0.05
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Telephoto",
+  "params": {
+    "x": 25,
+    "y": 3,
+    "z": 8,
+    "fov": 12
+  }
+}

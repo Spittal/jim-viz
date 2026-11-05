@@ -11,7 +11,7 @@ enum ToolCardinality: String, CaseIterable, Codable, Hashable {
 struct Tool: Identifiable, Hashable {
     var id: String { "\(kind.rawValue):\(name)" }
     let kind: DeviceKind
-    /// Tool id: `audio`, `clock`, `midi`, `orbit`, `palette`, a generator shader or an effect shader name.
+    /// Tool id: `audio`, `clock`, `midi`, a camera rig (`orbit`, `static`…), `palette`, a generator shader or an effect shader name.
     let name: String
     let label: String
     let cardinality: ToolCardinality
@@ -36,7 +36,7 @@ enum Tools {
         case (.modulation, "lfo"): return "LFO"
         case (.input, "midi"): return "MIDI Input"
         case (.input, "webcam"): return "Webcam"
-        case (.camera, "orbit"): return "Orbit Camera"
+        case (.camera, _): return CameraRig(rawValue: name)?.label ?? humanize(name)
         case (.palette, _): return "Palette"
         case (.generator, "lowpoly"): return "Low Poly"
         case (.effect, "kaleido"): return "Kaleidoscope"
@@ -69,7 +69,8 @@ enum Tools {
             }
             return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name), presets: presets)
         }
-        return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"), tool(.modulation, "lfo"), tool(.camera, "orbit"), tool(.palette, "palette")]
+        return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"), tool(.modulation, "lfo")]
+            + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + [tool(.palette, "palette")]
             + store.generatorTypes().map { tool(.generator, $0) }
             + store.availableEffects().map { tool(.effect, $0) }
     }

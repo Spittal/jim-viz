@@ -384,7 +384,8 @@ final class Engine {
 
     private func cameraSlot(_ tool: String, preset id: String?) -> CameraSlot {
         // Every knob gets a value, so nothing carries over from the previous camera.
-        var params = Dictionary(uniqueKeysWithValues: CameraParams.defs.map { ($0.name, $0.defaultValue) })
+        let defs = CameraRig(rawValue: tool)?.defs ?? []
+        var params = Dictionary(uniqueKeysWithValues: defs.map { ($0.name, $0.defaultValue) })
         if let id, let p = store.preset(.camera, tool, id) { for (k, v) in p.params ?? [:] { params[k] = v } }
         return CameraSlot(type: tool, preset: id, params: params)
     }
@@ -945,15 +946,20 @@ final class Engine {
                                                planeWidth: w, planeHeight: h))
         }
 
-        // Camera. Only the orbit rig exists; other types fall back to it.
+        // Camera.
         let camera: ParamBank?
         let cameraMotion: CameraMotion?
         let cameraPreset: String?
         let cameraLabel: String?
         if let camSlot = file.camera {
-            errors["camera"] = camSlot.type == "orbit" ? nil : "unknown camera type \(camSlot.type), using orbit"
-            camera = ParamBank(defs: CameraParams.defs, values: camSlot.params ?? [:], reuse: reuse?.camera)
-            cameraMotion = reuse?.cameraMotion ?? CameraMotion(continuing: current?.cameraMotion)
+            guard let rig = CameraRig(rawValue: camSlot.type) else {
+                errors["camera"] = "unknown camera type \(camSlot.type)"
+                return nil
+            }
+            errors["camera"] = nil
+            let same = reuse?.cameraMotion?.rig == rig
+            camera = ParamBank(defs: rig.defs, values: camSlot.params ?? [:], reuse: same ? reuse?.camera : nil)
+            cameraMotion = same ? reuse?.cameraMotion : CameraMotion(rig, continuing: current?.cameraMotion)
             cameraPreset = camSlot.preset
             cameraLabel = presetName(.camera, camSlot.type, camSlot.preset) ?? Tools.label(.camera, camSlot.type)
         } else {
@@ -1077,7 +1083,7 @@ final class Engine {
             }
         }
         if let cameraMotion {
-            outputs += Outputs.camera(cameraMotion)
+            outputs += cameraMotion.outputs
         }
         outputs += modulators.map(\.output)
 

@@ -1,0 +1,15 @@
+{
+  "name": "Swarm",
+  "params": {
+    "speed": 0.15,
+    "freqA": 3,
+    "freqB": 7,
+    "freqC": 4,
+    "radius": 5,
+    "depth": 3.5,
+    "elevation": 70,
+    "wander": 1.5,
+    "fov": 85,
+    "shake": 0.05
+  }
+}

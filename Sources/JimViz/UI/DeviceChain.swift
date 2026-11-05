@@ -71,7 +71,7 @@ struct DeviceChain: View {
                         .contextMenu {
                             Button("Remove", role: .destructive) { engine.removeCamera() }
                         }
-                        .chainFrame("device:camera:camera:orbit")
+                        .chainFrame("device:camera:camera:\(scene.cameraMotion?.rig.rawValue ?? "orbit")")
                     }
                     if let pal = scene.palette {
                         DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette, key: "palette"), select: "palette",
