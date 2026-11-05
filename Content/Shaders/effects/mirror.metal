@@ -1,7 +1,7 @@
 // Mirror: reflects the image across the vertical and/or horizontal center line.
-// @param horizontal 1 0 1 int
-// @param vertical 0 0 1 int
-// @param flip 0 0 1 int
+// @param horizontal 1 0 1 int Off,On
+// @param vertical 0 0 1 int Off,On
+// @param flip 0 0 1 int Off,On
 
 fragment float4 effect(FXOut in [[stage_in]],
                        texture2d<float> src [[texture(0)]],

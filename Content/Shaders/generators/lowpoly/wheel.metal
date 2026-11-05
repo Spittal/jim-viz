@@ -8,9 +8,9 @@
 // @param blades 12 1 48 int mesh
 // @param segments 3 1 12 int mesh
 // @param radius 0.6 0 3
-// @param length 1.4 0.05 4
-// @param width 1.5 0.05 6
-// @param turn 0.4 -6 6
+// @param length 1.4 0 4
+// @param width 1.5 0 6
+// @param turn 0.4 -6 6 rate
 // @param pitch 0 -90 90
 // @param curl 0 -3 3
 // @param flutter 0 0 1
@@ -34,7 +34,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
                          texture2d<float> spec [[texture(1)]]) {
     MeshVertex v = verts[vid];
     float blade = v.shape.x, t = v.shape.y, s = v.shape.z;
-    float a = blade * 2 * M_PI_F + f.time * p.turn;
+    float a = blade * 2 * M_PI_F + p.turnPhase;
     float3 radial = float3(0, cos(a), sin(a)), tang = float3(0, -sin(a), cos(a));
 
     // The paddle's angle at its hinge: pitch, its own band's flap and its own wobble.

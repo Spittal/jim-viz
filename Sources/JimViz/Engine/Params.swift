@@ -18,6 +18,10 @@ struct ParamDef: Hashable {
     /// Set by `mesh` on a generator param: it changes the triangle count (torus sides, wheel
     /// blades), so the mesh is rebuilt when its value changes.
     var rebuildsMesh = false
+    /// Set by `rate` on a shader param: a speed. The engine integrates its live value over time
+    /// and hands the shader `p.<name>Phase` (= ∫ value dt), so turning the knob changes how fast
+    /// things move without jumping, as `time × value` would.
+    var isRate = false
 
     var span: Float { max - min }
 
@@ -26,7 +30,7 @@ struct ParamDef: Hashable {
         return isInt ? c.rounded() : c
     }
 
-    /// Parses `// @param name default min max [int [Label,Label,…]] [mesh]` lines from shader source.
+    /// Parses `// @param name default min max [int [Label,Label,…]] [mesh] [rate]` lines from shader source.
     static func parse(shaderSource: String) -> [ParamDef] {
         var defs: [ParamDef] = []
         var currentGroup: String? = nil
@@ -47,6 +51,8 @@ struct ParamDef: Hashable {
             guard name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil,
                   !defs.contains(where: { $0.name == name }) else { continue }
             var flags = Array(parts.dropFirst(4))
+            let isRate = flags.last == "rate"
+            if isRate { flags.removeLast() }
             let rebuildsMesh = flags.last == "mesh"
             if rebuildsMesh { flags.removeLast() }
             let isInt = flags.first == "int"
@@ -55,7 +61,7 @@ struct ParamDef: Hashable {
             defs.append(ParamDef(name: name, defaultValue: d, min: lo, max: hi, isInt: isInt,
                                  labels: labels.count == Int(hi - lo) + 1 ? labels : [],
                                  group: currentGroup, requiresInput: currentRequiresInput,
-                                 rebuildsMesh: rebuildsMesh))
+                                 rebuildsMesh: rebuildsMesh, isRate: isRate && !isInt))
         }
         return defs
     }
@@ -81,6 +87,8 @@ final class Param: Identifiable {
     @ObservationIgnored var liveBase: Float
     @ObservationIgnored var live: Float
     @ObservationIgnored var modAccum: Float = 0
+    /// Rate params: the live value integrated over time (∫ live dt). Render thread.
+    @ObservationIgnored var phase: Double = 0
 
     init(def: ParamDef, value: Float? = nil) {
         self.def = def
@@ -114,24 +122,37 @@ final class ParamBank {
                 if let v = values[def.name] { old.setBase(v) }
                 return old
             }
-            let carried = reuse?[def.name]?.base
-            return Param(def: def, value: values[def.name] ?? carried)
+            let carried = reuse?[def.name]
+            let p = Param(def: def, value: values[def.name] ?? carried?.base)
+            p.phase = carried?.phase ?? 0
+            return p
         }
         byName = Dictionary(uniqueKeysWithValues: params.map { ($0.def.name, $0) })
-        packBuffer = [Float](repeating: 0, count: max(params.count, 1))
+        rateParams = params.filter(\.def.isRate)
+        packBuffer = [Float](repeating: 0, count: max(params.count + rateParams.count, 1))
     }
 
     subscript(name: String) -> Param? { byName[name] }
 
     func live(_ name: String) -> Float { byName[name]?.live ?? 0 }
 
+    /// Params flagged `rate`, in declaration order; their phases follow the plain fields.
+    let rateParams: [Param]
+
     /// Scratch for `withPacked`, so packing a bank each frame allocates nothing.
     private var packBuffer: [Float]
 
+    /// Render thread, once per frame after `live` is set: advances every rate param's phase.
+    func integrate(dt: Float) {
+        for p in rateParams { p.phase += Double(p.live * dt) }
+    }
+
     /// Live values packed to match the generated Metal `Params` struct (one 0 when there are
-    /// none), as bytes for `setFragmentBytes`. Render thread only.
+    /// none): every param in order, then each rate param's phase. As bytes for
+    /// `setFragmentBytes`. Render thread only.
     func withPacked(_ body: (UnsafeRawPointer, Int) -> Void) {
         for i in params.indices { packBuffer[i] = params[i].live }
+        for i in rateParams.indices { packBuffer[params.count + i] = Float(rateParams[i].phase) }
         packBuffer.withUnsafeBytes { body($0.baseAddress!, $0.count) }
     }
 

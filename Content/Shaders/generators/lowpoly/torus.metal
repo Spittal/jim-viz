@@ -6,11 +6,11 @@
 // @group Shape
 // @param rings 12 3 64 int mesh
 // @param sides 8 3 32 int mesh
-// @param thickness 0.42 0.02 1.5
+// @param thickness 0.42 0 1.5
 // @param twist 0 -8 8
 // @param wave 0 0 1
-// @param lobes 3 1 12 int
-// @param waveSpeed 1 -4 4
+// @param lobes 3 0 12 int
+// @param waveSpeed 1 -4 4 rate
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Ring (round the ring), Tube (round the tube) or Random (per face).
@@ -25,7 +25,7 @@ inline float3 torusPoint(float2 uw, constant Frame& f, constant Params& p, threa
     float u = uw.x * 2 * M_PI_F;
     float w = (uw.y + uw.x * p.twist / max(p.sides, 1.0)) * 2 * M_PI_F;
     n = float3(cos(u) * cos(w), sin(w), sin(u) * cos(w));
-    float y = p.wave * sin(u * p.lobes + f.time * p.waveSpeed);
+    float y = p.wave * sin(u * p.lobes + p.waveSpeedPhase);
     return float3(cos(u), y, sin(u)) + n * p.thickness;
 }
 

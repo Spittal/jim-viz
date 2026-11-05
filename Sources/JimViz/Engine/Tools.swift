@@ -35,15 +35,18 @@ enum Tools {
         switch (kind, name) {
         case (.input, "audio"): return "Audio In"
         case (.input, "clock"): return "Clock"
-        case (.modulation, "lfo"): return "LFO"
+        case (.modulation, _): return ModulatorType(rawValue: name)?.label ?? humanize(name)
         case (.input, "midi"): return "MIDI Input"
         case (.input, "webcam"): return "Webcam"
+        case (.input, "video"): return "Video"
+        case (.input, "picture"): return "Picture"
         case (.camera, _): return CameraRig(rawValue: name)?.label ?? humanize(name)
         case (.palette, _): return "Palette"
         case (.generator, "wheel"): return "Water Wheel"
         case (.effect, "kaleido"): return "Kaleidoscope"
         case (.effect, "palettemap"): return "Palette Map"
         case (.effect, "chroma"): return "Chromatic"
+        case (.effect, "spectraltear"): return "Spectral Tear"
         default: return humanize(name)
         }
     }
@@ -80,7 +83,9 @@ enum Tools {
             return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name),
                         presets: presets, category: category)
         }
-        return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"), tool(.modulation, "lfo")]
+        return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"),
+                tool(.input, "video"), tool(.input, "picture"),
+                tool(.modulation, "lfo"), tool(.modulation, "math")]
             + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + [tool(.palette, "palette")]
             + store.generatorTypes().map { tool(.generator, $0.name, category: $0.category) }
             + store.availableEffects().map { tool(.effect, $0) }

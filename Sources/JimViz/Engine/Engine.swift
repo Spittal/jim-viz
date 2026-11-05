@@ -565,7 +565,7 @@ final class Engine {
     func replaceModulator(id: String, tool: String, preset: String?) {
         let params = preset.flatMap { store.preset(.modulation, tool, $0)?.params }
         let label = presetName(.modulation, tool, preset) ?? Tools.label(.modulation, tool)
-        edit("LFO: \(label)") { file in
+        edit("Modulator: \(label)") { file in
             guard let idx = file.modulators.firstIndex(where: { $0.id == id }) else { return }
             file.modulators[idx] = ModulatorSpec(type: tool, id: id, preset: preset, enabled: file.modulators[idx].enabled, params: params)
         }
@@ -953,13 +953,17 @@ final class Engine {
             cameraLabel = nil
         }
 
-        // Modulation: LFOs.
+        // Modulation: LFOs and Maths.
         var modulators: [ModulatorRuntime] = []
+        errors["modulator"] = nil
         for spec in file.modulators where !modulators.contains(where: { $0.id == spec.id }) {
-            errors["modulator"] = spec.type == "lfo" ? nil : "unknown modulator \(spec.type), using lfo"
-            let old = reuse?.modulators.first { $0.id == spec.id }
-            let bank = ParamBank(defs: LFOParams.defs, values: spec.params ?? [:], reuse: old?.bank)
-            let mod = ModulatorRuntime(id: spec.id, type: "lfo", presetLabel: presetName(.modulation, "lfo", spec.preset),
+            guard let type = ModulatorType(rawValue: spec.type) else {
+                errors["modulator"] = "unknown modulator type \(spec.type)"
+                return nil
+            }
+            let old = reuse?.modulators.first { $0.id == spec.id && $0.type == type }
+            let bank = ParamBank(defs: type.defs, values: spec.params ?? [:], reuse: old?.bank)
+            let mod = ModulatorRuntime(id: spec.id, type: type, presetLabel: presetName(.modulation, spec.type, spec.preset),
                                        enabled: spec.enabled ?? true, bank: bank)
             if let old { mod.continuePhase(from: old) }
             modulators.append(mod)
@@ -1111,7 +1115,7 @@ final class Engine {
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
         if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .audio) }
-        for mod in modulators { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
+        for mod in modulators where mod.type == .lfo { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
         for gen in generators {
             for v in gen.inputs {
                 streamInputs["\(gen.key).\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)

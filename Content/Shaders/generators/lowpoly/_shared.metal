@@ -14,17 +14,17 @@
 // explode pushes every face out along its own normal, shattering the shape.
 // @group Surface
 // @param noiseAmount 0.2 0 2
-// @param noiseScale 1.4 0.1 8
-// @param noiseSpeed 0.25 0 4
+// @param noiseScale 1.4 0 8
+// @param noiseSpeed 0.25 0 4 rate
 // @param spikes 0 0 3
 // @param explode 0 0 4
 
 // Motion: instances copies the geo onto a sphere of radius spread; each copy tumbles on its own
 // axis; spin turns everything around the vertical axis.
 // @group Motion
-// @param scale 1 0.1 4
-// @param spin 0.2 -4 4
-// @param tumble 0.3 0 4
+// @param scale 1 0 4
+// @param spin 0 -4 4 rate
+// @param tumble 0 0 4 rate
 // @param instances 1 1 96 int
 // @param spread 3 0 20
 
@@ -33,7 +33,7 @@
 // @param fill 1 0 1
 // @param bands 6 1 16 int
 // @param colorShift 0 0 1
-// @param colorSpeed 0 -1 1
+// @param colorSpeed 0 -1 1 rate
 // @param light 1.1 0 3
 // @param fog 0.04 0 0.5
 // @param bgGlow 0.5 0 2
@@ -112,7 +112,7 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     float ir = instanceRand(iid);
     float3 pos = g.pos;
 
-    float3 np = pos * p.noiseScale + float3(0, f.time * p.noiseSpeed, ir * 13.0);
+    float3 np = pos * p.noiseScale + float3(0, p.noiseSpeedPhase, ir * 13.0);
     float n = fbm3(np);
     float sp = pow(abs(noise3(np * 2.7 + 5.0)), 6.0) * p.spikes * 4.0;
     float sv = p.spectrum > 0 ? spectrum(spec, g.specU * 0.85) : 0;
@@ -123,7 +123,7 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
 
     // Each instance tumbles on its own random axis.
     float3 axis = normalize(float3(hash11(ir * 3.1) - 0.5, hash11(ir * 5.7) - 0.5, hash11(ir * 7.3) - 0.5) + 1e-3);
-    pos = rotAxis(axis, f.time * p.tumble * (0.5 + ir)) * pos;
+    pos = rotAxis(axis, p.tumblePhase * (0.5 + ir)) * pos;
 
     // Instances sit on a Fibonacci sphere.
     float count = max(p.instances, 1.0);
@@ -135,7 +135,7 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
         pos += float3(cos(phi) * r, y, sin(phi) * r) * p.spread;
     }
 
-    pos.xz = rot2(f.time * p.spin) * pos.xz;
+    pos.xz = rot2(p.spinPhase) * pos.xz;
 
     GenOut o;
     o.world = pos;
@@ -181,7 +181,7 @@ fragment float4 gen_fragment(GenOut in [[stage_in]],
     float shade = saturate(diff * 0.65 + in.faceRand * 0.2 + rim * 0.35);
     float bands = max(p.bands, 1.0);
     shade = floor(shade * bands) / bands;
-    float t = 0.15 + 0.85 * shade + p.colorShift + f.time * p.colorSpeed + in.inst * 0.1;
+    float t = 0.15 + 0.85 * shade + p.colorShift + p.colorSpeedPhase + in.inst * 0.1;
     float3 col = palette(pal, t) * p.fill;
 
     if (hasInput(f, 2) && p.videoTex > 0) {

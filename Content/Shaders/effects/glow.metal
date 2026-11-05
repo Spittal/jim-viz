@@ -1,6 +1,6 @@
 // Cheap bloom: blurs the bright parts and adds them back.
 // @param amount 0.6 0 3
-// @param radius 0.012 0.001 0.05
+// @param radius 0.012 0 0.05
 // @param threshold 0.55 0 1
 
 fragment float4 effect(FXOut in [[stage_in]],

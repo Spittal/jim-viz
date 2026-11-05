@@ -806,6 +806,56 @@ enum SelfCheck {
             knob.live = knob.base
             gen.finishMeshBuild(device: engine.device)
             guard gen.vertexCount == before else { return "\(geo) mesh didn't return when \(knob.def.name) went back" }
+
+            // Dimension and scale params can go to 0 without errors ("zero would be it's not there").
+            if let scale = gen.bank["scale"] {
+                guard scale.def.min == 0 else { return "\(geo) scale min is \(scale.def.min), expected 0" }
+                scale.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                scale.reset()
+            }
+
+            // Motion group defaults to 0 spin and tumble, and resets cleanly.
+            guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
+                return "\(geo) missing spin or tumble"
+            }
+            guard spin.def.defaultValue == 0, tumble.def.defaultValue == 0 else {
+                return "\(geo) motion default should be 0s, got spin \(spin.def.defaultValue), tumble \(tumble.def.defaultValue)"
+            }
+            spin.setBase(2.0); spin.phase = 1.5
+            tumble.setBase(1.5); tumble.phase = 2.0
+            spin.reset(); spin.phase = 0
+            tumble.reset(); tumble.phase = 0
+            guard spin.base == 0, spin.phase == 0, tumble.base == 0, tumble.phase == 0 else {
+                return "\(geo) motion reset did not return to 0s"
+            }
+            if geo == "wheel" {
+                guard let w = gen.bank["width"], w.def.min == 0,
+                      let l = gen.bank["length"], l.def.min == 0 else { return "wheel width/length min should be 0" }
+                w.setBase(0); l.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                w.reset(); l.reset()
+            }
+            if geo == "torus" {
+                guard let t = gen.bank["thickness"], t.def.min == 0 else { return "torus thickness min should be 0" }
+                t.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                t.reset()
+            }
+            if geo == "sphere" {
+                guard let sq = gen.bank["squash"], sq.def.min == 0 else { return "sphere squash min should be 0" }
+                sq.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                sq.reset()
+            }
+            if geo == "plane" {
+                guard let w = gen.bank["width"], w.def.min == 0,
+                      let h = gen.bank["height"], h.def.min == 0 else { return "plane width/height min should be 0" }
+                w.setBase(0); h.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                w.reset(); h.reset()
+            }
+
             _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
             if let err = engine.errorSummary { return "\(geo): \(err)" }
         }
@@ -1204,6 +1254,18 @@ enum SelfCheck {
             print("ok   mappings (outputs, modulation, MIDI inputs, LFOs, paused devices, copy/paste, duplicate)")
         }
 
+        if let problem = checkRates(engine: engine) {
+            print("FAIL rates: \(problem)"); failures += 1
+        } else {
+            print("ok   rates (speed knobs integrate, no time × knob in shaders, generated names can't clash)")
+        }
+
+        if let problem = checkMath(engine: engine) {
+            print("FAIL math: \(problem)"); failures += 1
+        } else {
+            print("ok   math (starts unmapped, no sync input, ops, value in through a mapping, unknown modulator fails)")
+        }
+
         if let problem = checkCameras(engine: engine) {
             print("FAIL cameras: \(problem)"); failures += 1
         } else {
@@ -1272,6 +1334,114 @@ enum SelfCheck {
         }
         print(failures == 0 ? "all checks passed" : "\(failures) failure(s)")
         return failures == 0 ? 0 : 1
+    }
+}
+
+extension SelfCheck {
+    /// Speed knobs flagged `rate` hand the shader their integrated value, so turning one never
+    /// jumps the motion; and no shader multiplies time by a knob, which would.
+    static func checkRates(engine: Engine) -> String? {
+        let defs = ParamDef.parse(shaderSource: "// @param amount 0.5 0 1\n// @param spin 1 -2 2 rate\n// @param steps 2 1 4 int rate")
+        guard defs.map(\.isRate) == [false, true, false] else { return "rate flag not parsed (or allowed on an int)" }
+        let bank = ParamBank(defs: defs)
+        bank.integrate(dt: 0.5)
+        bank["spin"]!.live = 3
+        bank.integrate(dt: 0.5)
+        guard abs(bank["spin"]!.phase - 2) < 1e-6 else { return "rate phase not integrated: \(bank["spin"]!.phase)" }
+        var packed: [Float] = []
+        bank.withPacked { ptr, n in packed = Array(UnsafeBufferPointer(start: ptr.assumingMemoryBound(to: Float.self), count: n / 4)) }
+        guard packed == [0.5, 3, 2, 2] else { return "rate phase not packed after the params: \(packed)" }
+        // Reloading with the same knob keeps the phase going.
+        let reloaded = ParamBank(defs: defs, values: ["spin": 1], reuse: bank)
+        guard reloaded["spin"]?.phase == 2 else { return "rate phase lost on reload" }
+
+        let shaderDir = engine.store.commonShader.deletingLastPathComponent()
+        let files = FileManager.default.enumerator(at: shaderDir, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "metal" } ?? []
+        let timesKnob = try! NSRegularExpression(pattern: #"f\.time\s*\*\s*p\.|p\.\w+\s*\*\s*f\.time"#)
+        for url in files {
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            if timesKnob.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
+                return "\(url.lastPathComponent) multiplies f.time by a knob: flag it `rate` and read p.<name>Phase"
+            }
+        }
+
+        let clashURL = FileManager.default.temporaryDirectory.appendingPathComponent("selfcheck-rate-clash.metal")
+        defer { try? FileManager.default.removeItem(at: clashURL) }
+        try? "// @param spin 1 -2 2 rate\n// @param spinPhase 0 0 1\nfragment float4 effect() { return 0; }\n"
+            .write(to: clashURL, atomically: true, encoding: .utf8)
+        do {
+            _ = try ShaderCompiler(device: engine.device, commonURL: engine.store.commonShader).compile(clashURL)
+            return "a param named like a generated phase compiled"
+        } catch {}
+        return nil
+    }
+
+    /// The Math modulator: added unmapped, its `a` knob takes a value through a mapping like any
+    /// knob, and its output is the chosen op of `a` and `b`, 0...1.
+    static func checkMath(engine: Engine) -> String? {
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-math.json")
+        let file = SceneFile(name: "Self-check Math", inputs: [InputSpec(type: "clock")],
+                             modulators: [ModulatorSpec(type: "lfo", id: "lfo")],
+                             camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+        do { try file.write(to: url) } catch { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        let back = engine.currentURL
+        defer {
+            if let back { engine.load(back, animated: false) }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+        }
+        engine.load(url, animated: false)
+        engine.apply(.modulation, "math")
+        guard let scene = engine.current, let math = scene.modulators.first(where: { $0.id == "math" }),
+              math.type == .math else { return "math not added" }
+        guard !scene.mappings.contains(where: { $0.target.hasPrefix("mod.math.") || $0.source == "mod.math.out" }) else {
+            return "math started mapped"
+        }
+        guard !scene.streamInputs.contains(where: { $0.key == "mod.math.sync" }),
+              scene.streamInputs.contains(where: { $0.key == "mod.lfo.sync" }) else { return "math has a sync input (or the LFO lost its)" }
+        guard let out = scene.outputs.first(where: { $0.key == "mod.math.out" }), !out.isBipolar else { return "no unipolar math output" }
+        guard Tools.label(.modulation, "math") == "Math" else { return "math label" }
+
+        var f = SignalFrame()
+        f.dt = 0
+        func run(_ op: Int, a: Float, b: Float) -> Float {
+            math.bank["op"]!.setBase(Float(op)); math.bank["a"]!.setBase(a); math.bank["b"]!.setBase(b)
+            scene.modulate(f)  // knobs settle
+            scene.modulate(f)  // output reads them
+            return out.value
+        }
+        let cases: [(op: Int, a: Float, b: Float, want: Float)] = [
+            (0, 0.8, 0.5, 0.4), (1, 0.8, 0.5, 1), (2, 0.8, 0.5, 0.3), (3, 0.2, 0.5, 0.3), (4, 0.8, 0.5, 0.5),
+            (5, 0.2, 0.5, 0.5), (6, 0.25, 0.5, 0.25), (7, 0.6, 0.5, 1), (7, 0.4, 0.5, 0), (8, 0.6, 1.0 / 14.0, 0.5), (8, 0.4, 0, 0),
+            (9, 0.75, 1.0 / 7.0, 0.5), (10, 0.75, 1.0 / 7.0, 0.5), (11, 0.2, 0.5, 0.8),
+        ]
+        for c in cases {
+            let v = run(c.op, a: c.a, b: c.b)
+            guard abs(v - c.want) < 1e-3 else { return "\(MathParams.ops[c.op]) of \(c.a), \(c.b) is \(v), want \(c.want)" }
+        }
+        // A value mapped onto `a` reaches the output: a pulse on the downbeat, through A × 1.
+        engine.current?.clock?.manager.seek(beat: 8)
+        engine.addMapping(source: "clock.pulse", target: "mod.math.a")
+        guard let s2 = engine.current, let m2 = s2.modulators.first(where: { $0.id == "math" }),
+              let out2 = s2.outputs.first(where: { $0.key == "mod.math.out" }),
+              s2.mappings.first(where: { $0.target == "mod.math.a" })?.isActive == true else { return "mapping onto math.a inactive" }
+        m2.bank["a"]!.setBase(0); m2.bank["op"]!.setBase(0); m2.bank["b"]!.setBase(1)
+        s2.modulate(f); s2.modulate(f)
+        let a = m2.bank["a"]!.live
+        guard a > 0.1, abs(out2.value - a) < 1e-4 else { return "mapped pulse did not reach math (a \(a), out \(out2.value))" }
+        // Paused, it outputs 0.
+        m2.enabled = false
+        s2.modulate(f)
+        guard out2.value == 0 else { return "paused math still outputs" }
+
+        // An unknown modulator type fails, rather than turning into something else.
+        var bad = file
+        bad.modulators = [ModulatorSpec(type: "wobbler", id: "w")]
+        guard engine.build(bad, reuse: nil) == nil, engine.errors["modulator"] != nil else { return "unknown modulator built" }
+        return nil
     }
 }
 

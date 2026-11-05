@@ -27,7 +27,8 @@ struct CompiledShader {
 ///
 /// Each file is compiled as: common.metal + a generated `Params` struct + the file itself.
 /// The struct comes from `// @param name default min max [int]` comments, so shader
-/// authors write `p.amount` and the UI gets a knob for free.
+/// authors write `p.amount` and the UI gets a knob for free. A param flagged `rate` also gets
+/// a `<name>Phase` field after all the others: its value integrated over time.
 /// A `// @include file.metal` line is replaced by that file (next to the shader), so a family
 /// of shaders can share code and knobs; its `// @param`s count as the shader's own, in place.
 final class ShaderCompiler {
@@ -63,7 +64,12 @@ final class ShaderCompiler {
         if let clash = inputs.first(where: { v in defs.contains { $0.name == v.name } }) {
             throw ShaderError(file: name, message: "\(clash.kind.rawValue) input \(clash.name) has the same name as a param")
         }
-        let fields = defs.isEmpty ? "    float _unused;" : defs.map { "    float \($0.name);" }.joined(separator: "\n")
+        let phases = defs.filter(\.isRate).map { "\($0.name)Phase" }
+        if let clash = phases.first(where: { n in defs.contains { $0.name == n } || inputs.contains { $0.name == n } }) {
+            throw ShaderError(file: name, message: "\(clash) is generated for a rate param and can't be declared too")
+        }
+        let fields = defs.isEmpty ? "    float _unused;"
+            : (defs.map(\.name) + phases).map { "    float \($0);" }.joined(separator: "\n")
         let source = """
         #line 1 "common.metal"
         \(common)

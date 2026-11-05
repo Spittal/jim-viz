@@ -4,9 +4,9 @@
 // project onto it.
 // @mesh plane
 // @group Shape
-// @param width 10 1 50 mesh
-// @param height 10 1 50 mesh
-// @param density 3.2 0.5 12 mesh
+// @param width 10 0 50 mesh
+// @param height 10 0 50 mesh
+// @param density 3.2 0 12 mesh
 // @param jitter 0.7 0 1
 
 // Audio: Spectrum pushes vertices up. spectrumMode picks the frequency each vertex reads:

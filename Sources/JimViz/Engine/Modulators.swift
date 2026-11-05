@@ -35,23 +35,83 @@ enum LFOParams {
     static let defs: [ParamDef] = [
         ParamDef(name: "shape", defaultValue: 0, min: 0, max: Float(shapes.count - 1), isInt: true, labels: shapes),
         ParamDef(name: "rate", defaultValue: 14, min: 0, max: Float(rates.count - 1), isInt: true, labels: rates.map(\.label)),
-        ParamDef(name: "hz", defaultValue: 0.5, min: 0.01, max: 20, isInt: false),
+        ParamDef(name: "hz", defaultValue: 0.5, min: 0, max: 20, isInt: false),
         ParamDef(name: "phase", defaultValue: 0, min: 0, max: 1, isInt: false),
         ParamDef(name: "depth", defaultValue: 1, min: 0, max: 1, isInt: false),
     ]
 }
 
-/// A modulator device in the chain (only `lfo` so far). Several can sit side by side.
+/// Knobs of the Math tool: one value in (`a`, map any output onto it), an operation, and an
+/// operand (`b`, a knob too, so a second output mapped there makes it a two-input op).
+enum MathParams {
+    static let ops = ["A × B", "A + B", "A − B", "|A − B|", "Min", "Max", "Power", "Gate", "Steps", "Fold", "Wrap", "1 − A"]
+
+    static let defs: [ParamDef] = [
+        ParamDef(name: "a", defaultValue: 0, min: 0, max: 1, isInt: false),
+        ParamDef(name: "op", defaultValue: 0, min: 0, max: Float(ops.count - 1), isInt: true, labels: ops),
+        ParamDef(name: "b", defaultValue: 0.5, min: 0, max: 1, isInt: false),
+    ]
+
+    /// One operation, 0...1 in and out (before the output clamps). What `b` means per op:
+    /// Power: the curve, 0.5 straight, above that sharper (A^8 at 1), below softer (A^⅛ at 0).
+    /// Gate: the threshold. Steps: 2 to 16 levels. Fold, Wrap: how many times (1 to 8).
+    static func apply(op: Int, _ a: Float, _ b: Float) -> Float {
+        switch op {
+        case 0: return a * b
+        case 1: return a + b
+        case 2: return a - b
+        case 3: return abs(a - b)
+        case 4: return min(a, b)
+        case 5: return max(a, b)
+        case 6: return pow(max(a, 0), exp2((b - 0.5) * 6))
+        case 7: return a > b ? 1 : 0
+        case 8:
+            let n = 2 + (b * 14).rounded()
+            return min(floor(a * n) / (n - 1), 1)
+        case 9:
+            let x = a * (1 + b * 7) * 0.5
+            return 1 - abs((x - floor(x)) * 2 - 1)
+        case 10:
+            let x = a * (1 + b * 7)
+            return x - floor(x)
+        default: return 1 - a
+        }
+    }
+}
+
+/// The modulator tools.
+enum ModulatorType: String {
+    /// A low-frequency oscillator: bipolar, free running or synced to a Clock.
+    case lfo
+    /// Takes one value in through its `a` knob, does some math with `b`, and outputs the result.
+    case math
+
+    var defs: [ParamDef] {
+        switch self {
+        case .lfo: return LFOParams.defs
+        case .math: return MathParams.defs
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .lfo: return "LFO"
+        case .math: return "Math"
+        }
+    }
+}
+
+/// A modulator device in the chain: an LFO or a Math. Several can sit side by side.
 @Observable
 final class ModulatorRuntime: Identifiable {
     let id: String
-    let type: String
+    let type: ModulatorType
     let presetLabel: String?
     var enabled: Bool { didSet { rEnabled = enabled } }
     /// Whether Clock · Sync is mapped into its `mod.<id>.sync` input.
     private(set) var isSynced = false
     let bank: ParamBank
-    /// Its bipolar output (-1...1), `mod.<id>.out`.
+    /// Its output, `mod.<id>.out`: bipolar (-1...1) for an LFO, 0...1 for Math.
     @ObservationIgnored private(set) var output: OutputSignal!
 
     @ObservationIgnored private var rEnabled: Bool
@@ -62,11 +122,16 @@ final class ModulatorRuntime: Identifiable {
     /// Normalized phase (0...1) of the current cycle, read by UI WaveScope.
     @ObservationIgnored var currentPhase: Float = 0
 
-    init(id: String, type: String, presetLabel: String?, enabled: Bool, bank: ParamBank) {
+    init(id: String, type: ModulatorType, presetLabel: String?, enabled: Bool, bank: ParamBank) {
         self.id = id; self.type = type; self.presetLabel = presetLabel
         rEnabled = enabled; self.enabled = enabled
         self.bank = bank
-        output = OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: true) { [unowned self] f in self.value(f) }
+        output = OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: type == .lfo) { [unowned self] f in
+            switch type {
+            case .lfo: return self.lfoValue(f)
+            case .math: return self.mathValue()
+            }
+        }
     }
 
     /// Follows a Clock's beat, or runs free (nil). Called when the scene is built, from its mappings.
@@ -81,8 +146,15 @@ final class ModulatorRuntime: Identifiable {
         currentPhase = old.currentPhase
     }
 
+    /// Render thread. Reads `a` and `b` as of the previous frame, like every modulator, so a
+    /// Math one frame behind its input.
+    private func mathValue() -> Float {
+        guard rEnabled else { return 0 }
+        return MathParams.apply(op: Int(bank.live("op")), bank.live("a"), bank.live("b"))
+    }
+
     /// Render thread. Reads knob values from the previous frame, so LFOs can modulate each other.
-    private func value(_ f: SignalFrame) -> Float {
+    private func lfoValue(_ f: SignalFrame) -> Float {
         guard rEnabled else {
             currentPhase = 0
             return 0

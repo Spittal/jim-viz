@@ -10,6 +10,8 @@ final class ContentStore {
     var scenesDir: URL { root.appendingPathComponent("Scenes") }
     var shadersDir: URL { root.appendingPathComponent("Shaders") }
     var presetsDir: URL { root.appendingPathComponent("Presets") }
+    var videosDir: URL { root.appendingPathComponent("Videos") }
+    var picturesDir: URL { root.appendingPathComponent("Pictures") }
 
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?
@@ -58,6 +60,20 @@ final class ContentStore {
         return urls.filter { $0.pathExtension == "metal" }
             .map { $0.deletingPathExtension().lastPathComponent }
             .sorted()
+    }
+
+    func availableVideos() -> [String] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: videosDir, includingPropertiesForKeys: nil)) ?? []
+        let exts = Set(["mp4", "mov", "m4v", "webm", "avi"])
+        return urls.filter { exts.contains($0.pathExtension.lowercased()) }
+            .map(\.lastPathComponent).sorted()
+    }
+
+    func availablePictures() -> [String] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: picturesDir, includingPropertiesForKeys: nil)) ?? []
+        let exts = Set(["png", "jpg", "jpeg", "tiff", "tif", "heic", "webp", "bmp", "gif"])
+        return urls.filter { exts.contains($0.pathExtension.lowercased()) }
+            .map(\.lastPathComponent).sorted()
     }
 
     /// Generator tools: one per shader in a category folder of Shaders/generators

@@ -3,7 +3,7 @@
 // @param scanlines 0.15 0 1
 // @param lineCount 360 60 1080
 // @param vignette 0.4 0 1.5
-// @param contrast 1.05 0.5 2
+// @param contrast 1.05 0 2
 // @param flash 0 0 1
 
 fragment float4 effect(FXOut in [[stage_in]],

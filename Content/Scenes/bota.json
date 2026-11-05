@@ -1,0 +1,148 @@
+{
+  "camera" : {
+    "params" : {
+      "drift" : 0.9296875,
+      "glide" : 0,
+      "lookX" : 0,
+      "lookY" : 0,
+      "lookZ" : 0,
+      "maxDistance" : 9,
+      "maxFov" : 90,
+      "maxHeight" : 0.20336914,
+      "minDistance" : 0.5,
+      "minFov" : 150,
+      "minHeight" : -3,
+      "rate" : 0,
+      "rollRange" : 63.52295,
+      "shake" : 0,
+      "shakeSpeed" : 1,
+      "threshold" : 0.09841357,
+      "trigger" : 0
+    },
+    "type" : "cutter"
+  },
+  "effects" : [
+    {
+      "effect" : "datamosh",
+      "id" : "datamosh",
+      "params" : {
+        "amount" : 1,
+        "blocks" : 4,
+        "drift" : 0.0050385753,
+        "refresh" : 1.7630858,
+        "threshold" : 0.13828126
+      }
+    }
+  ],
+  "generator" : {
+    "params" : {
+      "bands" : 6,
+      "bgGlow" : 0.5,
+      "colorShift" : 0,
+      "colorSpeed" : -0.73652345,
+      "explode" : 0,
+      "fill" : 1,
+      "fog" : 0.04,
+      "instances" : 36,
+      "light" : 1.1,
+      "lobes" : 3,
+      "noiseAmount" : 0.2,
+      "noiseScale" : 1.4,
+      "noiseSpeed" : 0.25,
+      "rings" : 3,
+      "scale" : 1,
+      "sides" : 9,
+      "spectrum" : 0.24487305,
+      "spectrumMode" : 1,
+      "spikes" : 0,
+      "spin" : -0.6210937,
+      "spread" : 8.675293,
+      "thickness" : 0.20196536,
+      "tumble" : 0.39677736,
+      "twist" : 0,
+      "videoMap" : 0,
+      "videoScale" : 1,
+      "videoScatter" : 0,
+      "videoTex" : 0.8,
+      "videoTint" : 0,
+      "wave" : 0,
+      "waveSpeed" : 1,
+      "wire" : 0.21606445
+    },
+    "type" : "torus"
+  },
+  "inputs" : [
+    {
+      "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
+      "type" : "audio"
+    },
+    {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
+      "type" : "clock"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.kick",
+      "target" : "webcam.webcam.contrast"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "webcam.webcam.motion",
+      "target" : "camera.distance"
+    },
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
+    },
+    {
+      "source" : "audio.spectrum",
+      "target" : "generator.spec"
+    },
+    {
+      "source" : "audio.out",
+      "target" : "clock.audio"
+    },
+    {
+      "amount" : 0.10064602,
+      "source" : "clock.bar",
+      "target" : "camera.trigger"
+    }
+  ],
+  "modulators" : [
+
+  ],
+  "name" : "BOTA",
+  "palette" : {
+    "colors" : [
+      "#050505",
+      "#1A1A2E",
+      "#E94560",
+      "#F5F5F5"
+    ],
+    "params" : {
+      "blue" : 1,
+      "brightness" : 1.107666,
+      "green" : 1,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 1.1094726
+    },
+    "preset" : "noir"
+  }
+}

@@ -3,7 +3,7 @@
 // @param amount 0.3 0 1
 // @param blocks 12 2 64
 // @param shift 0.08 0 0.5
-// @param rate 1 0.25 8
+// @param rate 1 0 8 rate
 // @param rgbSplit 0.01 0 0.08
 
 fragment float4 effect(FXOut in [[stage_in]],
@@ -11,7 +11,7 @@ fragment float4 effect(FXOut in [[stage_in]],
                        texture2d<float> prev [[texture(1)]],
                        constant Frame& f [[buffer(0)]],
                        constant Params& p [[buffer(1)]]) {
-    float tick = floor(f.time * p.rate * 2);
+    float tick = floor(p.ratePhase * 2);
     float2 cell = floor(in.uv * float2(p.blocks * 0.5, p.blocks));
     float h = hash21(cell + tick * 7.13);
     float row = hash21(float2(cell.y, tick));

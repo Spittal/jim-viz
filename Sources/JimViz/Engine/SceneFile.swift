@@ -24,7 +24,7 @@ struct SceneFile: Codable, Equatable {
     /// Signal sources, in chain order: at most one `audio` and one `clock`, any number of `midi`s.
     /// Without Audio In, audio signals read 0; without Clock, clock outputs aren't available.
     var inputs: [InputSpec]
-    /// LFOs. Any number.
+    /// LFOs and Maths. Any number.
     var modulators: [ModulatorSpec]
     var camera: CameraSlot?
     var palette: PaletteSlot?
@@ -75,7 +75,7 @@ extension SceneFile {
 }
 
 struct ModulatorSpec: Codable, Equatable {
-    /// Modulator tool. Only `lfo` exists so far.
+    /// Modulator tool: `lfo` or `math`.
     var type: String
     /// Unique id within the scene: `mod.<id>.out` as a source, `mod.<id>.<param>` as a target.
     var id: String
@@ -85,14 +85,16 @@ struct ModulatorSpec: Codable, Equatable {
 }
 
 struct InputSpec: Codable, Equatable {
-    /// Input tool: `audio`, `clock`, `midi` or `webcam`.
+    /// Input tool: `audio`, `clock`, `midi`, `webcam`, `video` or `picture`.
     var type: String
-    /// MIDI inputs and webcams: unique id within the scene. `midi.<id>` and `webcam.<id>` in
-    /// mapping keys (`midi.<id>.cc-31-7`, `webcam.<id>.motion`, `webcam.<id>.<param>`).
+    /// MIDI inputs, webcams, videos, pictures: unique id within the scene. `midi.<id>`,
+    /// `webcam.<id>`, `video.<id>`, `picture.<id>` in mapping keys.
     var id: String?
     /// Audio In: the source, required: `rekordbox`, `system` or `input:<device uid>`.
     /// MIDI and webcam: the device by name. Leave out for every MIDI device, or the default camera.
     var device: String?
+    /// Video and picture: path or filename of the media file.
+    var file: String?
     /// Audio In: which stereo pair of the source to listen to, 0 (channels 1–2) when left out.
     var channelPair: Int?
     /// MIDI: learned controls, which are its outputs (`cc-31-7`, `note-11-1`, `pb-0-1`).
@@ -103,8 +105,10 @@ struct InputSpec: Codable, Equatable {
 
     var isMIDI: Bool { type == "midi" }
     var isWebcam: Bool { type == "webcam" }
-    /// Chain key: `audio`, `clock`, `midi.<id>` or `webcam.<id>`.
-    var deviceKey: String { isMIDI || isWebcam ? "\(type).\(id ?? type)" : type }
+    var isVideo: Bool { type == "video" }
+    var isPicture: Bool { type == "picture" }
+    /// Chain key: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
+    var deviceKey: String { isMIDI || isWebcam || isVideo || isPicture ? "\(type).\(id ?? type)" : type }
 }
 
 struct CameraSlot: Codable, Equatable {

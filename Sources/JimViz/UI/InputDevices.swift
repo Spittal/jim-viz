@@ -35,6 +35,83 @@ struct LFODevice: View {
     }
 }
 
+/// A modulator in the Modulation section: an LFO or a Math.
+struct ModulatorDevice: View {
+    let mod: ModulatorRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        switch mod.type {
+        case .lfo: LFODevice(mod: mod, accent: accent)
+        case .math: MathDevice(mod: mod, accent: accent)
+        }
+    }
+}
+
+/// A Math, in the Modulation section. Map an output onto its `a` knob; its Out (in the
+/// inspector) is `op(a, b)`. `b` is a knob too, so mapping a second output there combines two.
+struct MathDevice: View {
+    @Environment(Engine.self) private var engine
+    @Bindable var mod: ModulatorRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        DevicePanel(title: mod.id, subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
+                    select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
+            HStack(alignment: .top, spacing: 6) {
+                MathScope(mod: mod).frame(width: 58, height: 58)
+                KnobGrid(params: mod.bank.params, prefix: "mod.\(mod.id)")
+            }
+        }
+    }
+}
+
+/// The Math's transfer curve (out against a, at the current b and op), with a dot at the live
+/// input and output.
+private struct MathScope: View {
+    let mod: ModulatorRuntime
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            Canvas { ctx, size in
+                let w = size.width, h = size.height, inset: CGFloat = 4
+                func pt(_ x: Float, _ y: Float) -> CGPoint {
+                    CGPoint(x: inset + CGFloat(x) * (w - inset * 2), y: h - inset - CGFloat(min(max(y, 0), 1)) * (h - inset * 2))
+                }
+                ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.1)))
+                var diag = Path()
+                diag.move(to: pt(0, 0)); diag.addLine(to: pt(1, 1))
+                ctx.stroke(diag, with: .color(Color.white.opacity(0.12)), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+
+                let op = Int((mod.bank["op"]?.display ?? 0).rounded())
+                let b = mod.bank["b"]?.display ?? 0.5
+                let a = mod.bank["a"]?.display ?? 0
+                let n = 96
+                var curve = Path()
+                for i in 0...n {
+                    let x = Float(i) / Float(n)
+                    let p = pt(x, MathParams.apply(op: op, x, b))
+                    if i == 0 { curve.move(to: p) } else { curve.addLine(to: p) }
+                }
+                ctx.stroke(curve, with: .color(Theme.modulation.opacity(0.75)), lineWidth: 1.2)
+
+                let dot = pt(a, mod.output.value)
+                ctx.fill(Path(ellipseIn: CGRect(x: dot.x - 4, y: dot.y - 4, width: 8, height: 8)), with: .color(Theme.accent.opacity(0.35)))
+                ctx.fill(Path(ellipseIn: CGRect(x: dot.x - 2.5, y: dot.y - 2.5, width: 5, height: 5)), with: .color(Theme.accent))
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Text(String(format: "%.2f", mod.output.value))
+                    .font(.system(size: 8, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.textDim)
+                    .padding(3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .opacity(mod.enabled ? 1 : 0.4)
+    }
+}
+
 /// The LFO's current shape and live output, animated in real time.
 private struct WaveScope: View {
     let mod: ModulatorRuntime

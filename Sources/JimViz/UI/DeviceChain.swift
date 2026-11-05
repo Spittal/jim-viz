@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The scene's device chain, processed left to right in three sections:
-/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs) | GENERATION (camera, palette,
+/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, palette,
 /// one generator) | EFFECTS.
 /// Devices come from the browser by drag or double-click; effects reorder by dragging their header.
 /// Click a device to select it: the inspector then shows its outputs and mappings.
@@ -47,7 +47,7 @@ struct DeviceChain: View {
                     // Modulation
                     if !scene.modulators.isEmpty {
                         ForEach(Array(scene.modulators.enumerated()), id: \.element.id) { index, mod in
-                            LFODevice(mod: mod, accent: isReplacing(key: mod.id, kind: .modulation))
+                            ModulatorDevice(mod: mod, accent: isReplacing(key: mod.id, kind: .modulation))
                                 .contextMenu {
                                     Button("Move Left") { engine.moveModulator(id: mod.id, by: -1) }.disabled(index == 0)
                                     Button("Move Right") { engine.moveModulator(id: mod.id, by: 1) }
@@ -55,7 +55,7 @@ struct DeviceChain: View {
                                     Divider()
                                     Button("Remove", role: .destructive) { engine.removeModulator(id: mod.id) }
                                 }
-                                .chainFrame("device:modulation:\(mod.id):\(mod.type)")
+                                .chainFrame("device:modulation:\(mod.id):\(mod.type.rawValue)")
                         }
                         Color.clear.frame(width: 4).frame(maxHeight: .infinity)
                             .chainFrame("modulators.end")
@@ -253,10 +253,17 @@ struct KnobGrid: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     if let title = group.title {
-                        Text(title.uppercased())
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 2)
+                        HStack(spacing: 3) {
+                            Text(title.uppercased())
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 2)
+                            if isMotionGroup(title) {
+                                ResetMotionButton {
+                                    resetMotion(group.params)
+                                }
+                            }
+                        }
                     }
                     HStack(alignment: .top, spacing: 2) {
                         let count = (group.params.count + rows - 1) / rows
@@ -305,6 +312,43 @@ struct KnobGrid: View {
             groups.append(ParamGroup(title: currentTitle, params: currentParams))
         }
         return groups
+    }
+
+    private func isMotionGroup(_ title: String) -> Bool {
+        (prefix.isEmpty || prefix.hasPrefix("generator")) && title.caseInsensitiveCompare("Motion") == .orderedSame
+    }
+
+    private func resetMotion(_ params: [Param]) {
+        let snapshot = engine.currentSnapshot()
+        for p in params {
+            p.reset()
+            if p.def.isRate || p.def.name == "spin" || p.def.name == "tumble" {
+                p.setBase(0)
+                p.phase = 0
+            }
+        }
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Reset Motion", before: snapshot)
+            engine.scheduleAutoSave()
+        }
+    }
+}
+
+private struct ResetMotionButton: View {
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(hovered ? Theme.text : Theme.textDim)
+                .frame(width: 12, height: 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Reset motion to defaults")
     }
 }
 

@@ -1,25 +1,25 @@
 {
   "camera" : {
     "params" : {
-      "angle" : -13.877929,
-      "bob" : 0.4321289,
+      "angle" : 0,
+      "bob" : 0,
       "bobSpeed" : 0.5,
-      "distance" : 9.682837,
+      "distance" : 6.061719,
       "fov" : 55,
-      "height" : 8.811572,
-      "lookX" : 0,
-      "lookY" : -0.5,
+      "height" : 6.9765625,
+      "lookX" : 1.2758789,
+      "lookY" : 0,
       "lookZ" : 0,
-      "orbitSpeed" : 0.25,
-      "roll" : 18.46582,
-      "rollSpeed" : 0.054492187,
+      "orbitSpeed" : 0.15,
+      "roll" : 0,
+      "rollSpeed" : 0,
       "shake" : 0,
-      "shakeSpeed" : 0.63183594,
+      "shakeSpeed" : 1,
       "snap" : 0,
-      "sway" : 0.14189452,
-      "swaySpeed" : 1.2535156,
-      "swing" : 28,
-      "tilt" : -52.620117
+      "sway" : 0.2,
+      "swaySpeed" : 1,
+      "swing" : 0,
+      "tilt" : 81.67236
     },
     "type" : "orbit"
   },
@@ -32,17 +32,6 @@
         "count" : 24,
         "jitter" : 1,
         "speed" : 0.5
-      }
-    },
-    {
-      "effect" : "glitch",
-      "id" : "glitch",
-      "params" : {
-        "amount" : 0.33459473,
-        "blocks" : 2,
-        "rate" : 0.3951233,
-        "rgbSplit" : 0.045062494,
-        "shift" : 0.5
       }
     },
     {
@@ -93,15 +82,15 @@
       "bgGlow" : 0.5,
       "colorShift" : 0,
       "colorSpeed" : 0,
-      "density" : 3.2,
-      "depth" : 2.9000487,
-      "depthCut" : 1,
-      "explode" : 1.0880859,
+      "density" : 7.5040045,
+      "depth" : 2.0933592,
+      "depthCut" : 0.6816406,
+      "explode" : 1.9063476,
       "fill" : 0.9,
       "fog" : 0.03,
-      "height" : 12.5146,
+      "height" : 12.376709,
       "instances" : 1,
-      "jitter" : 0.7,
+      "jitter" : 0,
       "light" : 1.2,
       "noiseAmount" : 0.04,
       "noiseScale" : 2.8272533,
@@ -118,7 +107,7 @@
       "videoScatter" : 0,
       "videoTex" : 0.7,
       "videoTint" : 0.6,
-      "width" : 20.02251,
+      "width" : 12.376709,
       "wire" : 0.6
     },
     "type" : "plane"
@@ -195,16 +184,6 @@
       "target" : "post.chroma.amount"
     },
     {
-      "amount" : -0.14665812,
-      "source" : "clock.phrase",
-      "target" : "camera.height"
-    },
-    {
-      "amount" : -0.22431344,
-      "source" : "clock.phrase",
-      "target" : "camera.distance"
-    },
-    {
       "source" : "audio.out",
       "target" : "clock.audio"
     },
@@ -226,10 +205,9 @@
   "palette" : {
     "colors" : [
       "#020A0D",
-      "#0E4D5C",
-      "#2EC4B6",
-      "#FF9F1C",
-      "#FFE8C2"
+      "#B600FF",
+      "#E4D985",
+      "#FFFFFF"
     ],
     "params" : {
       "blue" : 1,
@@ -238,7 +216,6 @@
       "hue" : 0,
       "red" : 1,
       "saturation" : 1
-    },
-    "preset" : "sonar"
+    }
   }
 }

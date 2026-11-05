@@ -158,7 +158,7 @@ struct DeviceBrowser: View {
             case "webcam": return "video"
             default: return "waveform"
             }
-        case .modulation: return "waveform.path"
+        case .modulation: return tool.name == "math" ? "function" : "waveform.path"
         case .camera: return CameraRig(rawValue: tool.name)?.icon ?? "camera.viewfinder"
         case .palette: return "paintpalette"
         case .generator:
@@ -222,7 +222,7 @@ private struct ToolRow: View {
             .disabled(tool.presets.isEmpty)
             Image(systemName: DeviceBrowser.icon(tool))
                 .font(.system(size: 11))
-                .foregroundStyle(tool.name == "lfo" ? Theme.modulation : tool.name == "midi" ? Theme.midi : DeviceBrowser.color(tool.kind))
+                .foregroundStyle(tool.kind == .modulation ? Theme.modulation : tool.name == "midi" ? Theme.midi : DeviceBrowser.color(tool.kind))
                 .frame(width: 16)
             Text(tool.label).font(.system(size: 11, weight: .medium)).lineLimit(1)
             if !tool.presets.isEmpty {

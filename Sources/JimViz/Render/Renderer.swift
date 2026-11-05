@@ -265,8 +265,10 @@ final class RenderScene {
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
+        let syncInputs: [StreamInput] = modulators.filter { $0.type == .lfo }
+            .map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
         streamInputs = (clock != nil ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
-            + modulators.map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
+            + syncInputs
             + generators.flatMap { gen in gen.inputs.map { StreamInput(key: "\(gen.key).\($0.name)", label: $0.label, kind: $0.kind) } }
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
         generatorSources = Dictionary(generators.map { gen in (gen.key, gen.inputs.map { streamBindings["\(gen.key).\($0.name)"] }) },
@@ -309,6 +311,7 @@ final class RenderScene {
         for m in mappings { m.modulate(f.dt) }
         for bank in banks {
             for p in bank.params { p.live = p.def.clamp(p.liveBase + p.modAccum) }
+            bank.integrate(dt: f.dt)
         }
     }
 }

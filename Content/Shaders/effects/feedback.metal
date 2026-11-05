@@ -7,8 +7,9 @@
 // @param rotate 0 -0.1 0.1
 // @param driftX 0 -0.02 0.02
 // @param driftY 0 -0.02 0.02
-// @param mode 0 0 2 int
-// mode 0 = trails behind geometry, 1 = brightest wins, 2 = additive
+// @param mode 0 0 2 int Trails,Brightest,Add
+// Trails: history shows only where nothing is drawn. Brightest: the brighter of the two wins.
+// Add: history adds on top.
 
 fragment float4 effect(FXOut in [[stage_in]],
                        texture2d<float> src [[texture(0)]],

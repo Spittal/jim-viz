@@ -4,7 +4,7 @@
 // @mesh sphere
 // @group Shape
 // @param detail 2 0 5 int mesh
-// @param squash 1 0.2 4
+// @param squash 1 0 4
 // @param twist 0 -6 6
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:

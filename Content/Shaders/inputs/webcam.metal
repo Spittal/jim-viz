@@ -15,8 +15,8 @@
 
 // @group Warp
 // @param warp 0 0 1
-// @param warpScale 3 0.5 12
-// @param warpSpeed 0.5 0 4
+// @param warpScale 3 0 12
+// @param warpSpeed 0.5 0 4 rate
 
 // @group Color
 // @param exposure 0 -2 2
@@ -30,7 +30,7 @@
 
 // @group Depth
 // @param depthSmooth 0.7 0 0.97
-// @param depthContrast 1.3 0.25 4
+// @param depthContrast 1.3 0 4
 // @param depthFloor 0.1 0 0.9
 
 // Where an output pixel samples the camera image: mirror, zoom, rotate, pan, warp, then
@@ -50,7 +50,7 @@ inline float2 framedUV(float2 uv, constant Frame& f, constant Params& p, float c
 
     // Warp: a slow, swirling displacement field.
     if (p.warp > 0) {
-        float t = f.time * p.warpSpeed;
+        float t = p.warpSpeedPhase;
         float2 q = c * p.warpScale;
         float2 d = float2(fbm3(float3(q, t)), fbm3(float3(q + 7.3, t + 3.1)));
         c += d * p.warp * 0.35;

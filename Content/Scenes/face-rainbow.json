@@ -1,20 +1,4 @@
 {
-  "camera" : {
-    "params" : {
-      "distance" : 5.09447,
-      "fov" : 121.68115,
-      "height" : 1.2,
-      "lookY" : 2.3330078,
-      "orbitSpeed" : 0.7649414,
-      "roll" : 8.630859,
-      "rollSpeed" : 0.6225586,
-      "shake" : 0.09746094,
-      "sway" : 0.2,
-      "swing" : 0
-    },
-    "preset" : "orbit",
-    "type" : "orbit"
-  },
   "effects" : [
     {
       "effect" : "glow",
@@ -59,43 +43,15 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 4,
-      "bgGlow" : 0.5,
-      "colorShift" : 0,
-      "colorSpeed" : 0,
-      "depth" : 2,
-      "depthCut" : 0.5,
-      "explode" : 0,
-      "fill" : 0.25,
-      "fog" : 0.08,
-      "height" : 10,
-      "instances" : 1,
-      "light" : 1.1,
-      "noiseAmount" : 0.6,
-      "noiseScale" : 0.6,
-      "noiseSpeed" : 0.4,
-      "scale" : 1.6,
-      "spectrum" : 1.4,
-      "spectrumMode" : 0,
-      "spikes" : 0.3,
-      "spin" : 0,
-      "spread" : 3,
-      "tumble" : 0,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0,
-      "videoTex" : 0.8,
-      "videoTint" : 0,
-      "width" : 10,
-      "wire" : 1
-    },
-    "type" : "plane"
-  },
   "inputs" : [
     {
       "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
       "type" : "audio"
     },
     {

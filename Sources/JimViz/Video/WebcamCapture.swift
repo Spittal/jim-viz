@@ -95,7 +95,7 @@ final class WebcamManager {
 /// One camera's frames as Metal textures, plus cheap brightness and motion readings.
 /// Frames arrive on a capture queue; the render thread takes the latest.
 @Observable
-final class WebcamFeed {
+final class WebcamFeed: VideoSourceFeed {
     enum Status: Equatable { case off, starting, running, notFound, denied, failed(String) }
 
     /// Camera name it asked for; nil is the default camera.
@@ -109,7 +109,7 @@ final class WebcamFeed {
     @ObservationIgnored private let queue = DispatchQueue(label: "jimviz.webcam", qos: .userInteractive)
     @ObservationIgnored private var cache: CVMetalTextureCache?
     @ObservationIgnored private let lock = NSLock()
-    @ObservationIgnored private var frame: Frame?
+    @ObservationIgnored private var frame: VideoFrame?
     @ObservationIgnored private var delegate: Delegate?
     @ObservationIgnored private(set) var wanted = false
     @ObservationIgnored private var previous: [Float] = []
@@ -125,11 +125,7 @@ final class WebcamFeed {
         didSet { if !depthWanted { depth.reset() } }
     }
 
-    /// A captured frame. `owner` keeps the pixel buffer alive while the GPU reads it.
-    struct Frame {
-        let texture: MTLTexture
-        let owner: AnyObject?
-    }
+    typealias Frame = VideoFrame
 
     init(name: String?, metal: MTLDevice) {
         self.name = name
@@ -139,7 +135,7 @@ final class WebcamFeed {
     }
 
     /// Latest frame, or nil before the first one.
-    func latest() -> Frame? {
+    func latest() -> VideoFrame? {
         lock.lock(); defer { lock.unlock() }
         return frame
     }
@@ -191,7 +187,7 @@ final class WebcamFeed {
 
     /// Self-check: a frame from a texture instead of a camera.
     func inject(_ texture: MTLTexture) {
-        lock.lock(); frame = Frame(texture: texture, owner: nil); lock.unlock()
+        lock.lock(); frame = VideoFrame(texture: texture, owner: nil); lock.unlock()
         status = .running
     }
 
@@ -203,7 +199,7 @@ final class WebcamFeed {
         guard let cvTex, let tex = CVMetalTextureGetTexture(cvTex) else { return }
         analyze(buffer, w, h)
         if depthWanted { depth.submit(buffer) }
-        lock.lock(); frame = Frame(texture: tex, owner: cvTex); lock.unlock()
+        lock.lock(); frame = VideoFrame(texture: tex, owner: cvTex); lock.unlock()
         if status != .running { setStatus(.running) }
     }
 
@@ -249,12 +245,13 @@ final class WebcamFeed {
 /// process the feed into `processed`, which is its video output; it also has value outputs,
 /// motion and brightness. Its second video output, Depth, is estimated from the image: grey,
 /// white = near.
-final class WebcamRuntime: Identifiable {
+final class WebcamRuntime: VideoSourceRuntime {
     let id: String
     /// Camera name asked for; nil is the default camera.
     let device: String?
     let bank: ParamBank
     let feed: WebcamFeed
+    var sourceFeed: any VideoSourceFeed { feed }
     let pipeline: MTLRenderPipelineState?
     /// The processed video, written by the renderer each frame.
     let processed: MTLTexture

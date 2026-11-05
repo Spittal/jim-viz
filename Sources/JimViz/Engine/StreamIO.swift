@@ -71,7 +71,7 @@ final class StreamOutput: Identifiable {
         if key == paletteKey { return .palette }
         if key == audioKey { return .audio }
         if key == clockSyncKey { return .clock }
-        if key.hasSuffix(".video") || (key.hasPrefix("webcam.") && key.hasSuffix(".depth")) { return .video }
+        if key.hasSuffix(".video") || key.hasSuffix(".depth") { return .video }
         return nil
     }
 }

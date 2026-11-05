@@ -3,8 +3,8 @@
 // @param mix 1 0 1
 // @param bands 0 0 16 int
 // @param offset 0 0 1
-// @param cycle 0 -1 1
-// @param contrast 1 0.2 3
+// @param cycle 0 -1 1 rate
+// @param contrast 1 0 3
 
 fragment float4 effect(FXOut in [[stage_in]],
                        texture2d<float> src [[texture(0)]],
@@ -15,6 +15,6 @@ fragment float4 effect(FXOut in [[stage_in]],
     float4 s = src.sample(linearClamp, in.uv);
     float l = saturate((luma(s.rgb) - 0.5) * p.contrast + 0.5);
     if (p.bands >= 1) l = floor(l * p.bands) / p.bands;
-    float3 c = palette(pal, l * 0.98 + p.offset + f.time * p.cycle);
+    float3 c = palette(pal, l * 0.98 + p.offset + p.cyclePhase);
     return float4(mix(s.rgb, c, p.mix), s.a);
 }

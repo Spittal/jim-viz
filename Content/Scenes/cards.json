@@ -1,0 +1,197 @@
+{
+  "camera" : {
+    "params" : {
+      "fov" : 10,
+      "lookX" : 0,
+      "lookY" : 0,
+      "lookZ" : 0,
+      "roll" : -69.09961,
+      "x" : 6,
+      "y" : 1,
+      "z" : 0
+    },
+    "type" : "static"
+  },
+  "effects" : [
+    {
+      "effect" : "feedback",
+      "id" : "feedback",
+      "params" : {
+        "amount" : 0.8713904,
+        "driftX" : 0.00841211,
+        "driftY" : 0.005474609,
+        "mode" : 1,
+        "rotate" : 0.029096682,
+        "zoom" : 1.0579247
+      }
+    },
+    {
+      "effect" : "glow",
+      "id" : "glow",
+      "params" : {
+        "amount" : 0.74758303,
+        "radius" : 0.021669604,
+        "threshold" : 0.66083986
+      }
+    },
+    {
+      "effect" : "film",
+      "id" : "film",
+      "params" : {
+        "contrast" : 0.5,
+        "flash" : 0,
+        "grain" : 0.045632325,
+        "lineCount" : 371.90332,
+        "scanlines" : 0.15,
+        "vignette" : 1.5
+      }
+    }
+  ],
+  "generator" : {
+    "params" : {
+      "bands" : 9,
+      "bgGlow" : 0.87890625,
+      "blades" : 4,
+      "colorShift" : 0,
+      "colorSpeed" : -1,
+      "curl" : -1.0110352,
+      "explode" : 0,
+      "fill" : 1,
+      "flap" : 30,
+      "flutter" : 0.75161135,
+      "fog" : 0.16387695,
+      "instances" : 1,
+      "length" : 2.3341725,
+      "light" : 2.15,
+      "noiseAmount" : 0.59467775,
+      "noiseScale" : 0.1,
+      "noiseSpeed" : 0.25,
+      "pitch" : -35.033203,
+      "radius" : 0.91640615,
+      "scale" : 0.92896974,
+      "segments" : 1,
+      "spectrum" : 0,
+      "spectrumMode" : 0,
+      "spikes" : 0,
+      "spin" : 0.66640633,
+      "spread" : 9.679199,
+      "tumble" : 0,
+      "turn" : 0.6255863,
+      "videoMap" : 0,
+      "videoScale" : 1,
+      "videoScatter" : 0.14116211,
+      "videoTex" : 0.28740233,
+      "videoTint" : 0.36796874,
+      "width" : 0,
+      "wire" : 0
+    },
+    "type" : "wheel"
+  },
+  "inputs" : [
+    {
+      "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
+      "type" : "audio"
+    },
+    {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
+      "type" : "clock"
+    },
+    {
+      "device" : "Opal C1",
+      "id" : "webcam",
+      "params" : {
+        "bg" : 0,
+        "contrast" : 1,
+        "depthContrast" : 1.3,
+        "depthFloor" : 0.1,
+        "depthSmooth" : 0.7,
+        "edges" : 0,
+        "exposure" : 0,
+        "mirror" : 1,
+        "panX" : 0,
+        "panY" : 0,
+        "posterize" : 0,
+        "rotate" : 117.71192,
+        "saturation" : 0.115234375,
+        "warp" : 0,
+        "warpScale" : 3,
+        "warpSpeed" : 0.5,
+        "zoom" : 1
+      },
+      "type" : "webcam"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
+    },
+    {
+      "source" : "audio.out",
+      "target" : "clock.audio"
+    },
+    {
+      "amount" : 0.6448369,
+      "source" : "clock.beat",
+      "target" : "generator.spin"
+    },
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
+    },
+    {
+      "amount" : 0.48378313,
+      "source" : "audio.intensity",
+      "target" : "palette.saturation"
+    },
+    {
+      "amount" : 0.3381847,
+      "source" : "clock.pulse",
+      "target" : "generator.width"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "clock.phrase",
+      "target" : "generator.turn"
+    }
+  ],
+  "modulators" : [
+    {
+      "id" : "lfo",
+      "params" : {
+        "depth" : 0.83427733,
+        "hz" : 0.09297705,
+        "phase" : 0.034570314,
+        "rate" : 14,
+        "shape" : 0
+      },
+      "type" : "lfo"
+    }
+  ],
+  "name" : "Cards",
+  "palette" : {
+    "colors" : [
+      "#FEF2DD",
+      "#BFBFBF",
+      "#C21E56"
+    ],
+    "params" : {
+      "blue" : 1,
+      "brightness" : 1,
+      "green" : 1,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 0
+    }
+  }
+}

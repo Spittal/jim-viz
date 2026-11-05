@@ -1,0 +1,227 @@
+{
+  "camera" : {
+    "params" : {
+      "angle" : -17.87695,
+      "bob" : 1.3835449,
+      "bobSpeed" : 0.028027356,
+      "distance" : 23.522337,
+      "fov" : 55,
+      "height" : 11.583252,
+      "lookX" : 0,
+      "lookY" : 0,
+      "lookZ" : 0,
+      "orbitSpeed" : 0.073535144,
+      "roll" : 0,
+      "rollSpeed" : 0,
+      "shake" : 0,
+      "shakeSpeed" : 0,
+      "snap" : 0,
+      "sway" : 0.16035157,
+      "swaySpeed" : 0.5751953,
+      "swing" : 19.595215,
+      "tilt" : 25.501465
+    },
+    "type" : "orbit"
+  },
+  "effects" : [
+    {
+      "effect" : "chroma",
+      "id" : "chroma",
+      "params" : {
+        "amount" : 0.009197754,
+        "angle" : 0,
+        "radial" : 1
+      }
+    },
+    {
+      "effect" : "glow",
+      "id" : "glow",
+      "params" : {
+        "amount" : 2.1035888,
+        "radius" : 0.012,
+        "threshold" : 0.26796874
+      }
+    },
+    {
+      "effect" : "film",
+      "id" : "film",
+      "params" : {
+        "contrast" : 1.0744995,
+        "flash" : 0,
+        "grain" : 0.21628661,
+        "lineCount" : 300.15674,
+        "scanlines" : 0.43623048,
+        "vignette" : 0.4
+      }
+    },
+    {
+      "effect" : "feedback",
+      "id" : "feedback",
+      "params" : {
+        "amount" : 0.85,
+        "driftX" : 0,
+        "driftY" : 0,
+        "mode" : 0,
+        "rotate" : 0,
+        "zoom" : 1.015
+      }
+    }
+  ],
+  "generator" : {
+    "params" : {
+      "bands" : 5,
+      "bgGlow" : 0.5,
+      "colorShift" : 0,
+      "colorSpeed" : 0,
+      "density" : 0.4248042,
+      "depth" : 0.5256829,
+      "depthCut" : 0.15756834,
+      "explode" : 0,
+      "fill" : 0.9,
+      "fog" : 0.03,
+      "height" : 12.376709,
+      "instances" : 1,
+      "jitter" : 0.26210937,
+      "light" : 1.2,
+      "noiseAmount" : 0,
+      "noiseScale" : 2.8272533,
+      "noiseSpeed" : 1.3928711,
+      "scale" : 3.2218747,
+      "spectrum" : 0.9729004,
+      "spectrumMode" : 0,
+      "spikes" : 0,
+      "spin" : 0.06347656,
+      "spread" : 3.21875,
+      "tumble" : 0,
+      "videoMap" : 0,
+      "videoScale" : 1,
+      "videoScatter" : 0.18354492,
+      "videoTex" : 0.3680664,
+      "videoTint" : 0.30214846,
+      "width" : 12.376709,
+      "wire" : 0.3068115
+    },
+    "type" : "plane"
+  },
+  "inputs" : [
+    {
+      "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
+      "type" : "audio"
+    },
+    {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
+      "type" : "clock"
+    },
+    {
+      "id" : "webcam",
+      "params" : {
+        "bg" : 0,
+        "contrast" : 1,
+        "depthContrast" : 2.6316345,
+        "depthFloor" : 0.21658692,
+        "depthSmooth" : 0.4525088,
+        "edges" : 0.45024413,
+        "exposure" : -0.19257812,
+        "mirror" : 1,
+        "panX" : 0,
+        "panY" : 0,
+        "posterize" : 0,
+        "rotate" : 0,
+        "saturation" : 0.08623046,
+        "warp" : 0,
+        "warpScale" : 3,
+        "warpSpeed" : 0.5,
+        "zoom" : 1
+      },
+      "type" : "webcam"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "webcam.webcam.depth",
+      "target" : "generator.depthVideo"
+    },
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
+    },
+    {
+      "amount" : 0.15,
+      "curve" : 3,
+      "source" : "audio.kick",
+      "target" : "generator.depth"
+    },
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
+    },
+    {
+      "source" : "audio.spectrum",
+      "target" : "generator.spec"
+    },
+    {
+      "amount" : 0.62843275,
+      "source" : "clock.phrase",
+      "target" : "post.chroma.amount"
+    },
+    {
+      "source" : "audio.out",
+      "target" : "clock.audio"
+    },
+    {
+      "amount" : -0.8381274,
+      "source" : "clock.beat",
+      "target" : "post.glow.amount"
+    },
+    {
+      "amount" : 0.047881126,
+      "source" : "clock.beat",
+      "target" : "post.slices.amount"
+    },
+    {
+      "amount" : 0.6391705,
+      "source" : "mod.lfo.out",
+      "target" : "generator.jitter"
+    }
+  ],
+  "modulators" : [
+    {
+      "id" : "lfo",
+      "params" : {
+        "depth" : 1,
+        "hz" : 0.01953125,
+        "phase" : 0,
+        "rate" : 14,
+        "shape" : 0
+      },
+      "type" : "lfo"
+    }
+  ],
+  "name" : "Somersault",
+  "palette" : {
+    "colors" : [
+      "#020A0D",
+      "#B600FF",
+      "#E4D985",
+      "#FFFFFF"
+    ],
+    "params" : {
+      "blue" : 1,
+      "brightness" : 1,
+      "green" : 0.98100585,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 1
+    }
+  }
+}

@@ -195,7 +195,11 @@ private struct DeviceInspector: View {
         case "audio", "clock": return "Input"
         case _ where key.hasPrefix("webcam."): return "Input · Video"
         case "camera", "palette", "generator": return "Generation"
-        default: return key.hasPrefix("mod.") ? "Modulation · LFO" : key.hasPrefix("midi.") ? "Input · MIDI" : "Effect"
+        default:
+            if key.hasPrefix("mod.") {
+                return "Modulation · " + (engine.current?.modulators.first { "mod.\($0.id)" == key }?.type.label ?? "")
+            }
+            return key.hasPrefix("midi.") ? "Input · MIDI" : "Effect"
         }
     }
 }

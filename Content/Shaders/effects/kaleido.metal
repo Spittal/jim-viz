@@ -1,7 +1,7 @@
 // Kaleidoscope: folds the image into mirrored wedges around the center.
 // @param segments 6 2 24 int
 // @param rotate 0 -3.15 3.15
-// @param spin 0.1 -2 2
+// @param spin 0.1 -2 2 rate
 // @param zoom 1 0.2 4
 // @param mix 1 0 1
 
@@ -14,7 +14,7 @@ fragment float4 effect(FXOut in [[stage_in]],
     float2 c = in.uv - 0.5;
     c.x *= aspect;
     float r = length(c) / p.zoom;
-    float a = atan2(c.y, c.x) + p.rotate + f.time * p.spin;
+    float a = atan2(c.y, c.x) + p.rotate + p.spinPhase;
     float wedge = 2 * M_PI_F / max(p.segments, 2.0);
     a = fmod(a, wedge);
     if (a < 0) a += wedge;
