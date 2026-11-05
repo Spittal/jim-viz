@@ -86,10 +86,10 @@ struct DeviceBrowser: View {
         }
     }
 
-    /// Audio In, MIDI Input and Webcam list their sources and connected devices where other
+    /// Audio In, MIDI Input, Webcam, Video and Picture list their sources and files where other
     /// tools list presets.
     private func withDevices(_ tool: Tool) -> Tool {
-        guard tool.kind == .input, ["audio", "midi", "webcam"].contains(tool.name) else { return tool }
+        guard tool.kind == .input, ["audio", "midi", "webcam", "video", "picture"].contains(tool.name) else { return tool }
         let devices: [PresetInfo]
         switch tool.name {
         case "audio":
@@ -97,7 +97,10 @@ struct DeviceBrowser: View {
             let sources = [AudioCapture.Source.rekordbox, .systemAudio] + captures.inputDevices.map { .input(uid: $0.id) }
             devices = sources.map { PresetInfo(id: $0.key, name: captures.label($0), colors: []) }
         case "midi": devices = engine.midi.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
-        default: devices = engine.webcams.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
+        case "webcam": devices = engine.webcams.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
+        case "video": devices = engine.store.availableVideos().map { PresetInfo(id: $0, name: $0, colors: []) }
+        case "picture": devices = engine.store.availablePictures().map { PresetInfo(id: $0, name: $0, colors: []) }
+        default: devices = []
         }
         return Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: devices, category: tool.category)
     }
@@ -143,7 +146,10 @@ struct DeviceBrowser: View {
             switch tool.name {
             case "audio": return scene.audioIn?.capture.source.key == preset.id
             case "midi": return scene.midiInputs.contains { $0.device == preset.id }
-            default: return scene.webcams.contains { $0.device == preset.id }
+            case "webcam": return scene.webcams.contains { $0.device == preset.id }
+            case "video": return scene.videos.contains { $0.file == preset.id }
+            case "picture": return scene.pictures.contains { $0.file == preset.id }
+            default: return false
             }
         default: return false
         }
@@ -156,6 +162,8 @@ struct DeviceBrowser: View {
             case "clock": return "metronome"
             case "midi": return "pianokeys"
             case "webcam": return "video"
+            case "video": return "play.rectangle"
+            case "picture": return "photo"
             default: return "waveform"
             }
         case .modulation: return tool.name == "math" ? "function" : "waveform.path"
@@ -246,7 +254,7 @@ private struct PresetRow: View {
             Color.clear.frame(width: 18)
             let colors = preset.colors.compactMap(parseHexColor)
             if colors.isEmpty {
-                Image(systemName: tool.name == "midi" ? "cable.connector" : tool.name == "webcam" ? "web.camera" : "doc.text")
+                Image(systemName: tool.name == "midi" ? "cable.connector" : tool.name == "webcam" ? "web.camera" : tool.name == "video" ? "play.rectangle" : tool.name == "picture" ? "photo" : "doc.text")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
@@ -259,7 +267,9 @@ private struct PresetRow: View {
         }
         .help(tool.name == "midi" ? "Add a MIDI Input listening to \(preset.name)"
               : tool.name == "webcam" ? "Add a Webcam using \(preset.name)"
-                                  : "\(tool.label) preset. Drag onto the chain, or double-click to add")
+              : tool.name == "video" ? "Add a Video looping \(preset.name)"
+              : tool.name == "picture" ? "Add a Picture using \(preset.name)"
+              : "\(tool.label) preset. Drag onto the chain, or double-click to add")
     }
 }
 

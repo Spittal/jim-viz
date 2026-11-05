@@ -359,7 +359,7 @@ struct WebcamDevice: View {
                     .controlSize(.small)
                     .frame(width: 160)
                     .help("Which camera to use")
-                    DepthPreview(webcam: webcam)
+                    DepthPreview(source: webcam)
                 }
                 .frame(width: 160)
                 KnobGrid(params: webcam.bank.params, prefix: webcam.key)
@@ -386,18 +386,18 @@ struct WebcamDevice: View {
     }
 }
 
-/// While a webcam's Depth output is mapped, a live preview with the depth model's state
+/// While a video source's Depth output is mapped, a live preview with the depth model's state
 /// (loading, missing, rate). Its routes show in the inspector.
 private struct DepthPreview: View {
     @Environment(Engine.self) private var engine
-    let webcam: WebcamRuntime
+    let source: any VideoSourceRuntime
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if webcam.depthMapped {
+            if source.depthMapped {
                 TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                    let depth = webcam.feed.depth
-                    VideoPreviewView(texture: webcam.depth)
+                    let depth = source.sourceFeed.depth
+                    VideoPreviewView(texture: source.depth)
                         .frame(width: 160, height: 90)
                         .overlay {
                             if let text = statusText(depth.status) {
@@ -423,12 +423,165 @@ private struct DepthPreview: View {
     }
 
     private func statusText(_ s: DepthEstimator.Status) -> String? {
-        if webcam.feed.status != .running { return nil }
         switch s {
         case .idle, .loading: return "Loading depth model…"
         case .running: return nil
         case .missingModel: return "Depth model not installed. Run scripts/fetch-depth-model.sh"
         case .failed(let why): return why
+        }
+    }
+}
+
+struct VideoDevice: View {
+    @Environment(Engine.self) private var engine
+    let video: VideoRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        let feed = video.feed
+        DevicePanel(title: "Video", subtitle: video.displayName, statusColor: color(feed.status),
+                    accent: accent,
+                    select: video.key, onClose: { engine.removeInput(video.key) }) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    VideoPreviewView(texture: video.processed)
+                        .frame(width: 160, height: 90)
+                        .overlay {
+                            if feed.status != .playing {
+                                Text(statusText(feed.status))
+                                    .font(Theme.labelFont)
+                                    .foregroundStyle(Theme.textDim)
+                                    .multilineTextAlignment(.center)
+                                    .padding(6)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                    Menu {
+                        let files = engine.store.availableVideos()
+                        if !files.isEmpty {
+                            ForEach(files, id: \.self) { f in
+                                Button(f) { engine.setVideoFile(video.key, f) }
+                            }
+                            Divider()
+                        }
+                        Button("Choose File…") { chooseFile() }
+                    } label: {
+                        Text(video.displayName).font(.system(size: 11)).lineLimit(1)
+                    }
+                    .controlSize(.small)
+                    .frame(width: 160)
+                    .help("Which video file to loop")
+                    DepthPreview(source: video)
+                }
+                .frame(width: 160)
+                KnobGrid(params: video.bank.params, prefix: video.key)
+            }
+        }
+    }
+
+    private func chooseFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
+        if panel.runModal() == .OK, let url = panel.url {
+            engine.setVideoFile(video.key, url.path)
+        }
+    }
+
+    private func statusText(_ s: VideoFeed.Status) -> String {
+        switch s {
+        case .off: return "Video stopped"
+        case .loading: return "Loading video…"
+        case .playing: return ""
+        case .notFound: return "No video file selected"
+        case .failed(let why): return why
+        }
+    }
+
+    private func color(_ s: VideoFeed.Status) -> Color {
+        switch s {
+        case .playing: return Theme.beatOn
+        case .loading, .off: return Theme.accent
+        case .notFound, .failed: return Theme.error
+        }
+    }
+}
+
+struct PictureDevice: View {
+    @Environment(Engine.self) private var engine
+    let picture: PictureRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        let feed = picture.feed
+        DevicePanel(title: "Picture", subtitle: picture.displayName, statusColor: color(feed.status),
+                    accent: accent,
+                    select: picture.key, onClose: { engine.removeInput(picture.key) }) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    VideoPreviewView(texture: picture.processed)
+                        .frame(width: 160, height: 90)
+                        .overlay {
+                            if feed.status != .running {
+                                Text(statusText(feed.status))
+                                    .font(Theme.labelFont)
+                                    .foregroundStyle(Theme.textDim)
+                                    .multilineTextAlignment(.center)
+                                    .padding(6)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                    Menu {
+                        let files = engine.store.availablePictures()
+                        if !files.isEmpty {
+                            ForEach(files, id: \.self) { f in
+                                Button(f) { engine.setPictureFile(picture.key, f) }
+                            }
+                            Divider()
+                        }
+                        Button("Choose File…") { chooseFile() }
+                    } label: {
+                        Text(picture.displayName).font(.system(size: 11)).lineLimit(1)
+                    }
+                    .controlSize(.small)
+                    .frame(width: 160)
+                    .help("Which image file to display")
+                    DepthPreview(source: picture)
+                }
+                .frame(width: 160)
+                KnobGrid(params: picture.bank.params, prefix: picture.key)
+            }
+        }
+    }
+
+    private func chooseFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        if panel.runModal() == .OK, let url = panel.url {
+            engine.setPictureFile(picture.key, url.path)
+        }
+    }
+
+    private func statusText(_ s: PictureFeed.Status) -> String {
+        switch s {
+        case .off: return "Picture off"
+        case .loading: return "Loading image…"
+        case .running: return ""
+        case .notFound: return "No image file selected"
+        case .failed(let why): return why
+        }
+    }
+
+    private func color(_ s: PictureFeed.Status) -> Color {
+        switch s {
+        case .running: return Theme.beatOn
+        case .loading, .off: return Theme.accent
+        case .notFound, .failed: return Theme.error
         }
     }
 }

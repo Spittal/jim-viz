@@ -18,6 +18,10 @@ final class Engine {
     let midi = MIDIEngine()
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
+    /// Looping video files in use.
+    let videos: VideoManager
+    /// Picture files in use.
+    let pictures: PictureManager
     @ObservationIgnored private let compiler: ShaderCompiler
     @ObservationIgnored let output: OutputController
     /// False until launch finishes, and always in the headless self-check.
@@ -66,6 +70,8 @@ final class Engine {
         compiler = ShaderCompiler(device: device, commonURL: store.commonShader)
         webcams = WebcamManager(device: device)
         webcams.captureEnabled = !headless
+        videos = VideoManager(device: device)
+        pictures = PictureManager(device: device)
         output = OutputController(device: device, loop: loop)
         loop.sceneProvider = { [unowned self] in
             self.sceneLock.lock(); defer { self.sceneLock.unlock() }
@@ -414,15 +420,17 @@ final class Engine {
             current?.learnMIDI(key)
             selectDevice(key)
             showInspector = true
-        case .input where tool == "webcam":
+        case .input where tool == "webcam" || tool == "video" || tool == "picture":
             var key = ""
-            edit("Added Webcam\(preset.map { " (\($0))" } ?? "")") { file in
+            let toolLabel = Tools.label(kind, tool)
+            edit("Added \(toolLabel)\(preset.map { " (\($0))" } ?? "")") { file in
                 let id = Self.uniqueID(tool, taken: Set(file.inputs.compactMap(\.id)))
                 let i = file.inputs.lastIndex { !$0.isMIDI }.map { $0 + 1 } ?? 0
-                file.inputs.insert(InputSpec(type: tool, id: id, device: preset), at: i)
-                key = "webcam.\(id)"
+                file.inputs.insert(InputSpec(type: tool, id: id, device: preset, file: preset), at: i)
+                key = "\(tool).\(id)"
             }
             selectDevice(key)
+            showInspector = true
         case .input:
             if cardinality == .one, sceneFile?.inputs.contains(where: { $0.type == tool }) == true {
                 // A source picked for the Audio In already there switches it.
@@ -621,7 +629,7 @@ final class Engine {
             removeCamera()
         } else if key == "palette" {
             removePalette()
-        } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") {
+        } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
             removeInput(key)
         } else if key.hasPrefix("mod.") {
             let id = String(key.dropFirst(4))
@@ -828,6 +836,17 @@ final class Engine {
         let depthFeeds = Set(runtimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
         for f in webcams.allFeeds { f.depthWanted = depthFeeds.contains(ObjectIdentifier(f)) }
         webcams.activate(runtimes.map(\.feed))
+
+        let vidRuntimes = scenes.flatMap(\.videos)
+        let vidDepthFeeds = Set(vidRuntimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
+        for f in videos.allFeeds { f.depthWanted = vidDepthFeeds.contains(ObjectIdentifier(f)) }
+        videos.activate(vidRuntimes.map(\.feed))
+
+        let picRuntimes = scenes.flatMap(\.pictures)
+        let picDepthFeeds = Set(picRuntimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
+        for f in pictures.allFeeds { f.depthWanted = picDepthFeeds.contains(ObjectIdentifier(f)) }
+        pictures.activate(picRuntimes.map(\.feed))
+
         guard hardwareReady else { return }
         audioCaptures.activate(scenes.compactMap { $0.audioIn?.capture })
         midi.setActive(scenes.contains { !$0.midiInputs.isEmpty })
@@ -858,6 +877,26 @@ final class Engine {
         edit("Webcam: \(device ?? "Default camera")") { file in
             guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
             file.inputs[i].device = device
+        }
+    }
+
+    /// Points a Video input at a video file.
+    func setVideoFile(_ key: String, _ path: String?) {
+        let name = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None"
+        edit("Video: \(name)") { file in
+            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
+            file.inputs[i].file = path
+            file.inputs[i].device = path
+        }
+    }
+
+    /// Points a Picture input at an image file.
+    func setPictureFile(_ key: String, _ path: String?) {
+        let name = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None"
+        edit("Picture: \(name)") { file in
+            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
+            file.inputs[i].file = path
+            file.inputs[i].device = path
         }
     }
 
@@ -897,6 +936,10 @@ final class Engine {
             return current?.generators.first { $0.key == key }?.label ?? "Generator"
         case _ where key.hasPrefix("webcam."):
             return current?.webcams.first { $0.key == key }.map { "Webcam · \($0.device ?? "Default camera")" } ?? "Webcam"
+        case _ where key.hasPrefix("video."):
+            return current?.videos.first { $0.key == key }.map { "Video · \($0.displayName)" } ?? "Video"
+        case _ where key.hasPrefix("picture."):
+            return current?.pictures.first { $0.key == key }.map { "Picture · \($0.displayName)" } ?? "Picture"
         case _ where key.hasPrefix("midi."):
             return current?.midiInputs.first { $0.key == key }.map { "MIDI Input · \($0.title)" } ?? "MIDI Input"
         default: return key.split(separator: ".").dropFirst().joined(separator: ".")
@@ -1063,6 +1106,46 @@ final class Engine {
                                       depth: old?.depth ?? renderer.makeDepthTexture(),
                                       depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
                 inputs.append(.webcam(w)); outputs += w.outputs
+            case "video":
+                let id = spec.id ?? "video"
+                guard !inputs.contains(where: { $0.id == "video.\(id)" }) else { continue }
+                var defs: [ParamDef] = []
+                var pipeline: MTLRenderPipelineState?
+                var depthPipeline: MTLRenderPipelineState?
+                if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
+                let old = reuse?.videos.first { $0.id == id }
+                if pipeline == nil, let old {
+                    defs = old.bank.params.map(\.def); pipeline = old.pipeline; depthPipeline = old.depthPipeline
+                }
+                let bank = ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank)
+                let filePath = spec.file ?? spec.device
+                let feed = videos.feed(for: filePath, store: store)
+                let v = VideoRuntime(id: id, file: filePath, bank: bank, feed: feed,
+                                     pipeline: pipeline, processed: old?.processed ?? renderer.makeVideoTexture(),
+                                     depthPipeline: depthPipeline,
+                                     depth: old?.depth ?? renderer.makeDepthTexture(),
+                                     depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
+                inputs.append(.video(v)); outputs += v.outputs
+            case "picture":
+                let id = spec.id ?? "picture"
+                guard !inputs.contains(where: { $0.id == "picture.\(id)" }) else { continue }
+                var defs: [ParamDef] = []
+                var pipeline: MTLRenderPipelineState?
+                var depthPipeline: MTLRenderPipelineState?
+                if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
+                let old = reuse?.pictures.first { $0.id == id }
+                if pipeline == nil, let old {
+                    defs = old.bank.params.map(\.def); pipeline = old.pipeline; depthPipeline = old.depthPipeline
+                }
+                let bank = ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank)
+                let filePath = spec.file ?? spec.device
+                let feed = pictures.feed(for: filePath, store: store)
+                let p = PictureRuntime(id: id, file: filePath, bank: bank, feed: feed,
+                                       pipeline: pipeline, processed: old?.processed ?? renderer.makeVideoTexture(),
+                                       depthPipeline: depthPipeline,
+                                       depth: old?.depth ?? renderer.makeDepthTexture(),
+                                       depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
+                inputs.append(.picture(p)); outputs += p.outputs
             case "audio", "clock":
                 continue
             default:
@@ -1082,6 +1165,8 @@ final class Engine {
             case .audio(let a): banks["audio"] = a.bank
             case .clock(let c): banks["clock"] = c.bank
             case .webcam(let w): banks[w.key] = w.bank
+            case .video(let v): banks[v.key] = v.bank
+            case .picture(let p): banks[p.key] = p.bank
             case .midi: break
             }
         }
@@ -1105,6 +1190,8 @@ final class Engine {
             case .audio(let a): streamOutputs += a.streamOutputs
             case .clock(let c): streamOutputs.append(c.syncOutput)
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
+            case .video(let v): streamOutputs += [v.video, v.depthVideo]
+            case .picture(let p): streamOutputs += [p.video, p.depthVideo]
             case .midi: break
             }
         }
@@ -1136,6 +1223,8 @@ final class Engine {
             if source.hasPrefix("palette.") { return "Needs Palette in the chain" }
             if source.hasPrefix("mod.") { return "\(device.dropFirst(4)) isn't in this scene" }
             if source.hasPrefix("webcam.") { return "Needs its Webcam in the chain" }
+            if source.hasPrefix("video.") { return "Needs its Video in the chain" }
+            if source.hasPrefix("picture.") { return "Needs its Picture in the chain" }
             if source.hasPrefix("midi.") {
                 return inputs.contains { $0.id == device } ? "The MIDI input hasn't learned this control"
                                                            : "Needs its MIDI Input in the chain"
@@ -1292,6 +1381,16 @@ final class Engine {
                 guard let w = scene.webcams.first(where: { $0.id == id }) else { continue }
                 file.inputs[i].id = id
                 file.inputs[i].params = w.bank.baseValues
+            case "video":
+                let id = file.inputs[i].id ?? "video"
+                guard let v = scene.videos.first(where: { $0.id == id }) else { continue }
+                file.inputs[i].id = id
+                file.inputs[i].params = v.bank.baseValues
+            case "picture":
+                let id = file.inputs[i].id ?? "picture"
+                guard let p = scene.pictures.first(where: { $0.id == id }) else { continue }
+                file.inputs[i].id = id
+                file.inputs[i].params = p.bank.baseValues
             default: break
             }
         }

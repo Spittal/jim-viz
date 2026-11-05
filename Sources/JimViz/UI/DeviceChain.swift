@@ -36,7 +36,22 @@ struct DeviceChain: View {
                                 .chainFrame("device:input:\(input.id):midi")
                         case .webcam(let w):
                             WebcamDevice(webcam: w, accent: isReplacing(key: w.id, kind: .input))
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) { engine.removeInput(w.key) }
+                                }
                                 .chainFrame("device:input:\(w.id):webcam")
+                        case .video(let v):
+                            VideoDevice(video: v, accent: isReplacing(key: v.id, kind: .input))
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) { engine.removeInput(v.key) }
+                                }
+                                .chainFrame("device:input:\(v.id):video")
+                        case .picture(let p):
+                            PictureDevice(picture: p, accent: isReplacing(key: p.id, kind: .input))
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) { engine.removeInput(p.key) }
+                                }
+                                .chainFrame("device:input:\(p.id):picture")
                         }
                     }
                     Color.clear.frame(width: 4).frame(maxHeight: .infinity)

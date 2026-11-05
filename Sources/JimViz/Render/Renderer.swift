@@ -289,7 +289,8 @@ final class RenderScene {
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + allVideoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
+        let allSources: [any VideoSourceRuntime] = (webcams as [any VideoSourceRuntime]) + (videos as [any VideoSourceRuntime]) + (pictures as [any VideoSourceRuntime])
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + allSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
     }
 
     convenience init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
