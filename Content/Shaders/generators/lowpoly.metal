@@ -8,6 +8,8 @@
 
 // @group Shape
 // @param scale 1.2 0.1 4
+// @param width 10 1 50
+// @param height 10 1 50
 // @param noiseAmount 0.35 0 2
 // @param noiseScale 1.4 0.1 8
 // @param noiseSpeed 0.25 0 4
@@ -46,7 +48,7 @@
 // video), Shards (every face shows its own patch of the screen view), Sphere (wrapped around
 // the object), Normal (by face direction, kaleidoscopic) or Front (projected flat from the
 // front, the way Depth is, so a webcam's video sits on its own depth relief; best with
-// the field and plane shapes). videoScatter turns and shifts each face's copy by a random amount in Faces
+// the plane shape). videoScatter turns and shifts each face's copy by a random amount in Faces
 // mode, so the facets don't all match.
 // videoTint recolours the video through the palette by brightness.
 // @video texVideo Texture
@@ -58,28 +60,14 @@
 // @param videoTint 0 0 1
 
 // Depth: map a Webcam's Depth output into Depth to raise the mesh where things are near the
-// camera, along each vertex's normal. It's projected flat from the front: the field shape
-// (a 16:9 sheet) lines up with it exactly. depth is how far near things rise; depthCut hides
+// camera, along each vertex's normal. It's projected flat across the mesh: the plane shape
+// covers it edge-to-edge. depth is how far near things rise; depthCut hides
 // faces stretched across a depth edge, so a person stands free of the wall behind instead
 // of being joined to it by a skirt.
 // @video depthVideo Depth
 // @group Depth depthVideo
 // @param depth 2 0 6
 // @param depthCut 0.5 0 1
-
-// The field shape's size; matches MeshShape.fieldSize.
-constant float FIELD_W = 6.4;
-constant float FIELD_H = 3.6;
-constant float PLANE_SIZE = 10.0;
-
-// Where a mesh point lands in a front-projected video: the field shape (16:9) and plane
-// shape (terrain) cover it edge-to-edge.
-inline float2 frontUV(float3 pos, float3 norm) {
-    if (norm.y > 0.9 && abs(pos.y) < 0.01) {
-        return float2(0.5 - pos.z / PLANE_SIZE, 0.5 + pos.x / PLANE_SIZE);
-    }
-    return float2(0.5 - pos.z / FIELD_W, 0.5 - pos.y / FIELD_H);
-}
 
 struct MeshVertex {
     float4 position;     // w = per-face random
@@ -124,7 +112,15 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
     float ir = hash11(float(iid) * 17.13 + 1.7);
     float t = f.time * p.noiseSpeed;
     float3 pos = v.position.xyz;
-    float2 fuv = frontUV(pos, v.smoothNormal.xyz);
+
+    float2 fuv;
+    if (v.smoothNormal.y > 0.9 && abs(pos.y) < 0.01) {
+        fuv = float2(0.5 - pos.z, 0.5 + pos.x);
+        pos.z *= p.width;
+        pos.x *= p.height;
+    } else {
+        fuv = float2(0.5 - pos.z / max(p.width, 0.1), 0.5 - pos.y / max(p.height, 0.1));
+    }
 
     // Depth: near things (white) rise toward the camera.
     if (hasInput(f, 3) && p.depth > 0) {
@@ -141,7 +137,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
     if (p.spectrumMode < 0.5)      u = saturate(v.position.y * 0.5 + 0.5);
     else if (p.spectrumMode < 1.5) u = v.position.w;
     else if (p.spectrumMode < 2.5) u = abs(atan2(v.position.z, v.position.x)) / M_PI_F;
-    else                           u = saturate(length(v.position.xz) / 5.0);
+    else                           u = saturate(length(v.position.xz) * 2.0);
     float sv = p.spectrum > 0 ? spectrum(spec, u * 0.85) : 0;
     pos += v.smoothNormal.xyz * (n * p.noiseAmount + sp + sv * p.spectrum);
 

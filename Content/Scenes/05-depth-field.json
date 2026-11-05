@@ -1,10 +1,11 @@
 {
   "camera": {
     "params": {
-      "distance": 6.5,
+      "distance": 7,
       "fov": 55,
-      "height": 0.4,
-      "orbitSpeed": 0.35,
+      "height": 2.2,
+      "lookY": -0.5,
+      "orbitSpeed": 0.25,
       "sway": 0.15,
       "swing": 28
     },
@@ -56,10 +57,12 @@
       "videoMap": 5,
       "videoTex": 0.7,
       "videoTint": 0.6,
+      "width": 10,
+      "height": 10,
       "wire": 0.6
     },
-    "preset": "depth-field",
-    "shape": "field",
+    "preset": "plane",
+    "shape": "plane",
     "type": "lowpoly"
   },
   "inputs": [

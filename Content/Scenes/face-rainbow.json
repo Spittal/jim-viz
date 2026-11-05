@@ -90,9 +90,11 @@
       "videoScatter" : 0,
       "videoTex" : 0.8,
       "videoTint" : 0,
+      "width" : 10,
+      "height" : 10,
       "wire" : 1
     },
-    "preset" : "terrain-scan",
+    "preset" : "plane",
     "shape" : "plane",
     "type" : "lowpoly"
   },

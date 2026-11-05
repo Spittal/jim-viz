@@ -122,11 +122,18 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
 
 ## Working rules
 
+- **Beta software: clean code outranks resilience.**
+  - The app is in beta: no backward compatibility, no migration shims, no legacy fallbacks,
+    no versioned tools or resilient schemas.
+  - The JSON format does not need to be resilient or forgiving. If a scene or preset is
+    missing expected fields, has an invalid enum/shape, or fails to parse, fail fast with an
+    error (e.g. "JSON invalid" or "invalid shape") rather than silently falling back to a default.
+  - Work lost is fine; prioritize clean, simple, unencumbered Swift and Metal code over
+    defensive parsing or edge-case handling.
+  - When a format or tool changes, update the files in `Content/Scenes` and `Content/Presets`
+    directly without adding compatibility shims.
 - **Never commit or push unless asked.** The remote is `git@github.com:Spittal/jim-viz.git`,
   branch `main`.
-- **No backward compatibility. Yet** The app is in beta: no scene versioning and no migration
-  code. When a format changes, update the files in `Content/Scenes` and `Content/Presets`
-  directly.
 - **Don't add behaviour that wasn't asked for.** If you think something extra is needed,
   propose it. If you did add something, say so clearly in your report.
 - **Respect the user's scene edits.** The user edits and deletes scenes themselves. If files

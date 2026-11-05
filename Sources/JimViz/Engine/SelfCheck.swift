@@ -181,7 +181,7 @@ enum SelfCheck {
     /// Outputs, modulation and MIDI mappings, LFOs, copy/paste and duplicate. Nothing is saved
     /// except the duplicate, which is deleted again.
     private static func checkMappings(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else {
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else {
             return "test scene missing"
         }
         // Its own empty scene (camera, no generator) to paste into, so the check never
@@ -396,7 +396,7 @@ enum SelfCheck {
     /// Nothing reaches a shader except through a mapping: the palette and spectrum are typed
     /// outputs, and unmapped means grey and still.
     private static func checkStreams(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else { return "test scene missing" }
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
@@ -449,7 +449,7 @@ enum SelfCheck {
     /// The crossfade's timing, and that it really blends the outgoing scene into the incoming
     /// one: at the start the picture is the outgoing scene, at the end the incoming one.
     private static func checkTransitions(engine: Engine) -> String? {
-        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }),
+        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }),
               let urlB = engine.sceneURLs.first(where: { $0.lastPathComponent == "sammy-style.json" }),
               let fileA = try? SceneFile.load(urlA), let fileB = try? SceneFile.load(urlB),
               let sceneA = engine.build(fileA, reuse: nil), let sceneB = engine.build(fileB, reuse: nil) else {
@@ -501,7 +501,7 @@ enum SelfCheck {
 
     /// The Clock follows audio only through a mapping: Audio In · Audio Out into Clock · Audio.
     private static func checkClockAudio(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else { return "test scene missing" }
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let scene = engine.current, scene.hasClock, scene.hasAudioInput else { return "test scene needs Audio In and Clock" }
@@ -556,8 +556,8 @@ enum SelfCheck {
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
               decoded.generator == nil, decoded.effects.isEmpty else { return "minimal scene JSON did not decode" }
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else {
-            return "01-ico-shatter.json missing"
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else {
+            return "kaleido.json missing"
         }
         let presetURL = engine.store.presetsDir(.generator, "lowpoly").appendingPathComponent("ico-shatter.json")
         let presetBefore = try? Data(contentsOf: presetURL)
@@ -579,9 +579,9 @@ enum SelfCheck {
 
         // Multiple generators: adding a second generator, moving it, and removing it.
         engine.selectDevice("camera")
-        engine.apply(.generator, "lowpoly", preset: "depth-field")
+        engine.apply(.generator, "lowpoly", preset: "plane")
         guard engine.current?.generators.count == 2 else { return "second generator not added" }
-        guard let secondGen = engine.current?.generators[1], secondGen.preset == "depth-field" else { return "second generator preset mismatch" }
+        guard let secondGen = engine.current?.generators[1], secondGen.preset == "plane" else { return "second generator preset mismatch" }
         engine.moveGenerator(key: secondGen.key, by: -1)
         guard engine.current?.generators.first?.key == secondGen.key else { return "generator not moved left" }
         engine.removeGenerator(key: secondGen.key)
@@ -651,7 +651,7 @@ enum SelfCheck {
     /// A red test frame stands in for the camera: it should come out of the webcam's
     /// processing and show up behind the mesh when the generator's video bg is up.
     private static func checkWebcam(engine: Engine, snapshotDir: URL?) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else { return "test scene missing" }
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         engine.apply(.input, "webcam")
@@ -743,9 +743,9 @@ enum SelfCheck {
         guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "05-depth-field.json" }) else { return "depth scene missing" }
         engine.load(url, animated: false)
         guard let scene = engine.current, let cam = scene.webcams.first, let gen = scene.generator else { return "depth scene didn't build" }
-        guard gen.shape == .field, scene.streamBindings["generator.depthVideo"] === cam.depthVideo,
+        guard gen.shape == .plane, scene.streamBindings["generator.depthVideo"] === cam.depthVideo,
               cam.depthMapped, cam.feed.depthWanted, cam.depthPipeline != nil else {
-            return "depth not mapped into the field, or not running: \(engine.errors)"
+            return "depth not mapped into the plane, or not running: \(engine.errors)"
         }
         let w = 48, h = 27
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: w, height: h, mipmapped: false)
@@ -762,12 +762,12 @@ enum SelfCheck {
         let avg = engine.averageColor(cam.depth).x
         guard avg > 0.35, avg < 0.65 else { return "depth output should be half near, half far: \(avg)" }
 
-        // Depth off: the field goes flat, so the picture changes.
+        // Depth off: the plane goes flat, so the picture changes.
         let with = engine.averageColor(engine.renderer.history)
         gen.bank["depth"]?.setBase(0)
-        _ = engine.renderOffscreen(scene, frames: 3, snapshot: snapshotDir?.appendingPathComponent("depth-field-flat.png"))
+        _ = engine.renderOffscreen(scene, frames: 3, snapshot: snapshotDir?.appendingPathComponent("depth-plane-flat.png"))
         let without = engine.averageColor(engine.renderer.history)
-        guard simd_length(with - without) > 0.005 else { return "depth didn't move the field: \(with) vs \(without)" }
+        guard simd_length(with - without) > 0.005 else { return "depth didn't move the plane: \(with) vs \(without)" }
 
         // With a snapshot folder, a person-shaped blob (head and shoulders) in front of a far
         // wall, under a test pattern video, the way a real camera would look.

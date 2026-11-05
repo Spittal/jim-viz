@@ -56,12 +56,10 @@ final class StreamOutput: Identifiable {
     static let spectrumKey = "audio.spectrum"
     static let paletteKey = "palette.colors"
     static let audioKey = "audio.out"
-    static let onsetsKey = audioKey
     static let clockSyncKey = "clock.sync"
 
     static func spectrum() -> StreamOutput { StreamOutput(spectrumKey, "Spectrum", device: "Audio In", kind: .spectrum) }
     static func audio() -> StreamOutput { StreamOutput(audioKey, "Audio Out", device: "Audio In", kind: .audio) }
-    static func onsets() -> StreamOutput { audio() }
     static func palette() -> StreamOutput { StreamOutput(paletteKey, "Colours", device: "Palette", kind: .palette) }
     static func clockSync() -> StreamOutput { StreamOutput(clockSyncKey, "Sync", device: "Clock", kind: .clock) }
 
@@ -69,7 +67,7 @@ final class StreamOutput: Identifiable {
     static func kind(ofKey key: String) -> IOKind? {
         if key == spectrumKey { return .spectrum }
         if key == paletteKey { return .palette }
-        if key == audioKey || key == "audio.onsets" { return .audio }
+        if key == audioKey { return .audio }
         if key == clockSyncKey { return .clock }
         if key.hasSuffix(".video") || (key.hasPrefix("webcam.") && key.hasSuffix(".depth")) { return .video }
         return nil

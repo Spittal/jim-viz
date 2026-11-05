@@ -725,8 +725,11 @@ final class Engine {
             guard case let .generator(shader, meshPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
                 return nil
             }
-            let shape = MeshShape(rawValue: slot.shape ?? "icosphere") ?? .icosphere
-            if let s = slot.shape, MeshShape(rawValue: s) == nil { errors["generator"] = "unknown shape \(s), using icosphere" }
+            let shape = slot.shape.flatMap(MeshShape.init) ?? .icosphere
+            if let s = slot.shape, MeshShape(rawValue: s) == nil {
+                errors["generator"] = "invalid shape: \(s)"
+                return nil
+            }
             let detail = slot.detail ?? 2
             let (buffer, count): (MTLBuffer, Int)
             if let old = reuse?.generators.first(where: { $0.key == slotKey }), old.shape == shape, old.detail == detail {

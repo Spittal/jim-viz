@@ -15,12 +15,7 @@ struct MeshVertex {
 }
 
 enum MeshShape: String, CaseIterable {
-    case icosphere, torus, plane, cube, shards, field
-
-    /// The `field` grid: a 16:9 sheet standing on the x = 0 plane, facing +x (where the camera
-    /// starts its orbit). Image u runs along -z and v down y, so a video or depth map drawn on
-    /// it reads the right way round from the camera. Must match FIELD_W / FIELD_H in lowpoly.metal.
-    static let fieldSize = SIMD2<Float>(6.4, 3.6)
+    case icosphere, torus, plane, cube, shards
 }
 
 struct MeshBuilder {
@@ -49,7 +44,6 @@ struct MeshBuilder {
         case .plane: b.plane(d)
         case .cube: b.cube(d)
         case .shards: b.shards(d)
-        case .field: b.field(d)
         }
         return b.vertices
     }
@@ -105,7 +99,7 @@ struct MeshBuilder {
 
     private mutating func plane(_ detail: Int) {
         let n = min(4 << detail, 160)
-        let size: Float = 10
+        let size: Float = 1
         var grid = [SIMD3<Float>](repeating: .zero, count: (n + 1) * (n + 1))
         var jitter = SplitMix(seed: 42)
         for j in 0...n {
@@ -126,37 +120,6 @@ struct MeshBuilder {
                     tri(a, b, c, up, up, up); tri(a, c, d, up, up, up)
                 } else {
                     tri(a, b, d, up, up, up); tri(b, c, d, up, up, up)
-                }
-            }
-        }
-    }
-
-    private mutating func field(_ detail: Int) {
-        let cols = [16, 32, 48, 64, 96, 128, 160][detail], rows = cols * 9 / 16
-        let size = MeshShape.fieldSize
-        let cell = size.x / Float(cols)
-        var grid = [SIMD3<Float>](repeating: .zero, count: (cols + 1) * (rows + 1))
-        var jitter = SplitMix(seed: 99)
-        for j in 0...rows {
-            for i in 0...cols {
-                // Jitter inner points a little, so the facets aren't a perfect grid.
-                let edge = i == 0 || j == 0 || i == cols || j == rows
-                let ju = edge ? 0 : (jitter.nextFloat() - 0.5) * cell * 0.6
-                let jv = edge ? 0 : (jitter.nextFloat() - 0.5) * cell * 0.6
-                let z = (0.5 - Float(i) / Float(cols)) * size.x + ju
-                let y = (0.5 - Float(j) / Float(rows)) * size.y + jv
-                grid[j * (cols + 1) + i] = [0, y, z]
-            }
-        }
-        let out = SIMD3<Float>(1, 0, 0)
-        for j in 0..<rows {
-            for i in 0..<cols {
-                let a = grid[j * (cols + 1) + i], b = grid[j * (cols + 1) + i + 1]
-                let c = grid[(j + 1) * (cols + 1) + i + 1], d = grid[(j + 1) * (cols + 1) + i]
-                if (i + j) % 2 == 0 {
-                    tri(a, b, c, out, out, out); tri(a, c, d, out, out, out)
-                } else {
-                    tri(a, b, d, out, out, out); tri(b, c, d, out, out, out)
                 }
             }
         }
