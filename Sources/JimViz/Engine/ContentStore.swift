@@ -37,8 +37,10 @@ final class ContentStore {
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
+    /// A generator tool's shader, in its category folder (`generators/lowpoly/torus.metal`).
     func generatorShader(_ type: String) -> URL {
-        shadersDir.appendingPathComponent("generators/\(type).metal")
+        let category = generatorTypes().first { $0.name == type }?.category ?? "unknown"
+        return shadersDir.appendingPathComponent("generators/\(category)/\(type).metal")
     }
 
     func effectShader(_ name: String) -> URL {
@@ -58,11 +60,19 @@ final class ContentStore {
             .sorted()
     }
 
-    /// Generator tools: one per shader in Shaders/generators.
-    func generatorTypes() -> [String] {
+    /// Generator tools: one per shader in a category folder of Shaders/generators
+    /// (`lowpoly/torus.metal`), sorted by category then name. Files starting with _ are shared code.
+    func generatorTypes() -> [(category: String, name: String)] {
+        let fm = FileManager.default
         let dir = shadersDir.appendingPathComponent("generators")
-        let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        return urls.filter { $0.pathExtension == "metal" }.map { $0.deletingPathExtension().lastPathComponent }.sorted()
+        let categories = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.hasDirectoryPath }.map(\.lastPathComponent).sorted()
+        return categories.flatMap { category in
+            ((try? fm.contentsOfDirectory(at: dir.appendingPathComponent(category), includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "metal" && !$0.lastPathComponent.hasPrefix("_") }
+                .map { (category, $0.deletingPathExtension().lastPathComponent) }
+                .sorted { $0.1 < $1.1 }
+        }
     }
 
     func presetsDir(_ kind: DeviceKind, _ tool: String) -> URL {

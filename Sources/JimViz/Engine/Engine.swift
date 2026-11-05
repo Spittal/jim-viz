@@ -453,15 +453,13 @@ final class Engine {
             edit("Generator: \(label)") { file in
                 var list = file.allGenerators
                 if list.isEmpty {
-                    let slot = GeneratorSlot(id: nil, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
+                    let slot = GeneratorSlot(id: nil, type: tool, preset: preset, params: p?.params)
                     list.append(slot)
                     key = "generator"
                 } else if cardinality == .one {
                     var slot = list[0]
                     slot.type = tool
                     slot.preset = preset
-                    slot.shape = p?.shape
-                    slot.detail = p?.detail
                     slot.params = p?.params
                     list[0] = slot
                     key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
@@ -470,15 +468,13 @@ final class Engine {
                     var slot = list[idx]
                     slot.type = tool
                     slot.preset = preset
-                    slot.shape = p?.shape
-                    slot.detail = p?.detail
                     slot.params = p?.params
                     list[idx] = slot
                     key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
                 } else {
                     let taken = Set(list.compactMap(\.id) + ["generator"])
                     let id = Self.uniqueID(tool, taken: taken)
-                    let slot = GeneratorSlot(id: id, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
+                    let slot = GeneratorSlot(id: id, type: tool, preset: preset, params: p?.params)
                     let i = min(max(index ?? list.count, 0), list.count)
                     list.insert(slot, at: i)
                     key = "generator.\(id)"
@@ -548,8 +544,6 @@ final class Engine {
             var slot = list[idx]
             slot.type = tool
             slot.preset = preset
-            slot.shape = p?.shape
-            slot.detail = p?.detail
             slot.params = p?.params
             list[idx] = slot
             file.allGenerators = list
@@ -920,29 +914,18 @@ final class Engine {
             guard case let .generator(shader, meshPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
                 return nil
             }
-            let shape = slot.shape.flatMap(MeshShape.init) ?? .icosphere
-            if let s = slot.shape, MeshShape(rawValue: s) == nil {
-                errors["generator"] = "invalid shape: \(s)"
+            guard let mesh = shader.mesh else {
+                errors["generator"] = "\(slot.type).metal has no // @mesh line"
                 return nil
             }
-            let detail = slot.detail ?? 2
-            let same = reuse?.generators.first(where: { $0.key == slotKey })?.type == slot.type && reuse?.generators.first(where: { $0.key == slotKey })?.preset == slot.preset
-            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? reuse?.generators.first(where: { $0.key == slotKey })?.bank : nil)
-            let w = bank["width"]?.liveBase ?? 10
-            let h = bank["height"]?.liveBase ?? 10
-            let (buffer, count): (MTLBuffer, Int)
-            if let old = reuse?.generators.first(where: { $0.key == slotKey }), old.shape == shape, old.detail == detail,
-               (shape != .plane || (old.planeWidth == w && old.planeHeight == h)) {
-                (buffer, count) = (old.vertexBuffer, old.vertexCount)
-            } else {
-                (buffer, count) = renderer.makeMesh(shape, detail: detail, width: w, height: h)
-            }
+            let old = reuse?.generators.first { $0.key == slotKey }
+            let same = old?.type == slot.type && old?.preset == slot.preset
+            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil)
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
-                                               shape: shape, detail: detail, bank: bank,
-                                               meshPipeline: meshPipe, backgroundPipeline: bgPipe,
-                                               vertexBuffer: buffer, vertexCount: count, inputs: shader.inputs,
-                                               planeWidth: w, planeHeight: h))
+                                               mesh: mesh, bank: bank, meshPipeline: meshPipe, backgroundPipeline: bgPipe,
+                                               inputs: shader.inputs, device: renderer.device,
+                                               reusing: old?.type == slot.type ? old : nil))
         }
 
         // Camera. Only the orbit rig exists; other types fall back to it.
@@ -1340,7 +1323,10 @@ final class Engine {
         for url in urls {
             if url.pathExtension == "metal" {
                 rebuild = true
-                if url.lastPathComponent == "common.metal" { cache.removeAll() }
+                // Shared code (common.metal, `_` include files) recompiles everything.
+                if url.lastPathComponent == "common.metal" || url.lastPathComponent.hasPrefix("_") { cache.removeAll() }
+                // A new or removed generator changes the browser.
+                if url.path.contains("/Shaders/generators/") { refreshTools() }
                 cache[url.standardizedFileURL] = nil
             } else if url.pathExtension == "json" {
                 if url.standardizedFileURL == currentURL?.standardizedFileURL { sceneChanged = true }

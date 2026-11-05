@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Ableton-style device browser. Tools are grouped by section (Inputs, Generation, Effects);
+/// Ableton-style device browser. Tools are grouped by section (Inputs, Modulation, Generation,
+/// one per generator category such as Low Poly, Effects);
 /// each tool expands to show its presets. Drag a tool or a preset onto the chain, double-click
 /// it, or hover and click +. A tool on its own loads with default settings.
 struct DeviceBrowser: View {
@@ -8,7 +9,7 @@ struct DeviceBrowser: View {
     @State private var search = ""
     @State private var filter: Filter = .all
     /// Expanded tool ids, comma-separated, kept between launches.
-    @AppStorage("browser.expanded") private var expandedRaw = "camera:orbit,palette:palette,generator:lowpoly"
+    @AppStorage("browser.expanded") private var expandedRaw = "camera:orbit,palette:palette"
 
     enum Filter: String, CaseIterable {
         case all = "All", inputs = "Inputs", modulation = "Modulation", generation = "Generation", effects = "Effects"
@@ -41,7 +42,12 @@ struct DeviceBrowser: View {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     if show(.inputs) { section("Inputs", [.input]) }
                     if show(.modulation) { section("Modulation", [.modulation]) }
-                    if show(.generation) { section("Generation", [.camera, .palette, .generator]) }
+                    if show(.generation) {
+                        section("Generation", [.camera, .palette])
+                        ForEach(generatorCategories, id: \.self) { category in
+                            section(Tools.categoryLabel(category), [.generator], category: category)
+                        }
+                    }
                     if show(.effects) { section("Effects", [.effect]) }
                 }
                 .padding(.horizontal, 6)
@@ -52,9 +58,14 @@ struct DeviceBrowser: View {
 
     private func show(_ f: Filter) -> Bool { filter == .all || filter == f }
 
+    /// Generator category folders (`lowpoly`), in browser order.
+    private var generatorCategories: [String] {
+        engine.tools.compactMap(\.category).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+
     @ViewBuilder
-    private func section(_ title: String, _ kinds: [DeviceKind]) -> some View {
-        let tools = engine.tools.filter { kinds.contains($0.kind) }.map(withDevices).compactMap(filtered)
+    private func section(_ title: String, _ kinds: [DeviceKind], category: String? = nil) -> some View {
+        let tools = engine.tools.filter { kinds.contains($0.kind) && $0.category == category }.map(withDevices).compactMap(filtered)
         if !tools.isEmpty {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .semibold))
@@ -85,7 +96,7 @@ struct DeviceBrowser: View {
         case "midi": devices = engine.midi.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
         default: devices = engine.webcams.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
         }
-        return Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: devices)
+        return Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: devices, category: tool.category)
     }
 
     /// While searching, keeps a tool if its name matches (with all presets) or only its matching presets.
@@ -93,7 +104,7 @@ struct DeviceBrowser: View {
         guard !search.isEmpty else { return tool }
         if tool.label.localizedCaseInsensitiveContains(search) { return tool }
         let presets = tool.presets.filter { $0.name.localizedCaseInsensitiveContains(search) }
-        return presets.isEmpty ? nil : Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: presets)
+        return presets.isEmpty ? nil : Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: presets, category: tool.category)
     }
 
     private var expanded: Set<String> { Set(expandedRaw.split(separator: ",").map(String.init)) }
@@ -147,7 +158,16 @@ struct DeviceBrowser: View {
         case .modulation: return "waveform.path"
         case .camera: return "camera.viewfinder"
         case .palette: return "paintpalette"
-        case .generator: return "cube.transparent"
+        case .generator:
+            switch tool.name {
+            case "sphere": return "circle.circle"
+            case "torus": return "circle.dotted.circle"
+            case "plane": return "square.grid.3x3"
+            case "cube": return "cube"
+            case "shards": return "sparkle"
+            case "wheel": return "fanblades"
+            default: return "cube.transparent"
+            }
         case .effect:
             switch tool.name {
             case "feedback": return "arrow.triangle.2.circlepath"

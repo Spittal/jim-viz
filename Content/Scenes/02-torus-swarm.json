@@ -45,7 +45,6 @@
     }
   ],
   "generator": {
-    "detail": 1,
     "params": {
       "bands": 3,
       "fog": 0.06,
@@ -56,14 +55,12 @@
       "spread": 4,
       "tumble": 1.2
     },
-    "preset": "torus-swarm",
-    "shape": "torus",
-    "type": "lowpoly"
+    "type": "torus"
   },
   "inputs": [
     {
-      "type": "audio",
-      "device": "system"
+      "device": "system",
+      "type": "audio"
     },
     {
       "type": "clock"

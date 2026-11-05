@@ -15,6 +15,9 @@ struct ParamDef: Hashable {
     var group: String? = nil
     /// Stream input key required for this param to be relevant (e.g. `texVideo`, `spec`).
     var requiresInput: String? = nil
+    /// Set by `mesh` on a generator param: it changes the triangle count (torus sides, wheel
+    /// blades), so the mesh is rebuilt when its value changes.
+    var rebuildsMesh = false
 
     var span: Float { max - min }
 
@@ -23,7 +26,7 @@ struct ParamDef: Hashable {
         return isInt ? c.rounded() : c
     }
 
-    /// Parses `// @param name default min max [int [Label,Label,…]]` lines from shader source.
+    /// Parses `// @param name default min max [int [Label,Label,…]] [mesh]` lines from shader source.
     static func parse(shaderSource: String) -> [ParamDef] {
         var defs: [ParamDef] = []
         var currentGroup: String? = nil
@@ -43,12 +46,16 @@ struct ParamDef: Hashable {
             let name = parts[0]
             guard name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil,
                   !defs.contains(where: { $0.name == name }) else { continue }
-            let isInt = parts.count > 4 && parts[4] == "int"
+            var flags = Array(parts.dropFirst(4))
+            let rebuildsMesh = flags.last == "mesh"
+            if rebuildsMesh { flags.removeLast() }
+            let isInt = flags.first == "int"
             // Optional step names after `int`: `// @param mode 0 0 2 int Screen,Faces,Sphere`.
-            let labels = isInt && parts.count > 5 ? parts[5].split(separator: ",").map { $0.replacingOccurrences(of: "_", with: " ") } : []
+            let labels = isInt && flags.count > 1 ? flags[1].split(separator: ",").map { $0.replacingOccurrences(of: "_", with: " ") } : []
             defs.append(ParamDef(name: name, defaultValue: d, min: lo, max: hi, isInt: isInt,
                                  labels: labels.count == Int(hi - lo) + 1 ? labels : [],
-                                 group: currentGroup, requiresInput: currentRequiresInput))
+                                 group: currentGroup, requiresInput: currentRequiresInput,
+                                 rebuildsMesh: rebuildsMesh))
         }
         return defs
     }

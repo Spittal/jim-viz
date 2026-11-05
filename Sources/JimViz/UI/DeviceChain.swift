@@ -87,7 +87,7 @@ struct DeviceChain: View {
                         .chainFrame("device:palette:palette:palette")
                     }
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
-                        DevicePanel(title: "Generator", subtitle: "\(gen.label ?? gen.type) · \(gen.shape.rawValue) \(gen.detail)",
+                        DevicePanel(title: "Generator", subtitle: gen.label ?? gen.type,
                                     accent: slotColor(.generator, key: gen.key), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 // Stream sockets only show while a stream of their kind is waiting to be mapped.

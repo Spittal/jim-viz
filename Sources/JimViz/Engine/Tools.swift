@@ -16,6 +16,8 @@ struct Tool: Identifiable, Hashable {
     let label: String
     let cardinality: ToolCardinality
     let presets: [PresetInfo]
+    /// Generators: the category folder they live in (`lowpoly`), a browser section of its own.
+    var category: String? = nil
 
     var allowsMultiple: Bool { cardinality == .many }
 }
@@ -38,11 +40,19 @@ enum Tools {
         case (.input, "webcam"): return "Webcam"
         case (.camera, "orbit"): return "Orbit Camera"
         case (.palette, _): return "Palette"
-        case (.generator, "lowpoly"): return "Low Poly"
+        case (.generator, "wheel"): return "Water Wheel"
         case (.effect, "kaleido"): return "Kaleidoscope"
         case (.effect, "palettemap"): return "Palette Map"
         case (.effect, "chroma"): return "Chromatic"
         default: return humanize(name)
+        }
+    }
+
+    /// Display name of a generator category folder.
+    static func categoryLabel(_ category: String) -> String {
+        switch category {
+        case "lowpoly": return "Low Poly"
+        default: return humanize(category)
         }
     }
 
@@ -62,15 +72,16 @@ enum Tools {
 
     /// Every tool, in chain order: inputs, modulation, cameras, palettes, generators, effects.
     static func all(_ store: ContentStore) -> [Tool] {
-        func tool(_ kind: DeviceKind, _ name: String) -> Tool {
+        func tool(_ kind: DeviceKind, _ name: String, category: String? = nil) -> Tool {
             let presets = store.presetIDs(kind, name).map { id -> PresetInfo in
                 let p = store.preset(kind, name, id)
                 return PresetInfo(id: id, name: p?.name ?? humanize(id), colors: p?.colors ?? [])
             }
-            return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name), presets: presets)
+            return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name),
+                        presets: presets, category: category)
         }
         return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"), tool(.modulation, "lfo"), tool(.camera, "orbit"), tool(.palette, "palette")]
-            + store.generatorTypes().map { tool(.generator, $0) }
+            + store.generatorTypes().map { tool(.generator, $0.name, category: $0.category) }
             + store.availableEffects().map { tool(.effect, $0) }
     }
 

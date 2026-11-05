@@ -108,14 +108,12 @@
   },
   "generators" : [
     {
-      "detail" : 2,
       "params" : {
         "bands" : 5,
         "bgGlow" : 0.5,
         "colorShift" : 0,
         "colorSpeed" : 0,
-        "depth" : 2,
-        "depthCut" : 0.5,
+        "detail" : 2,
         "explode" : 0.1,
         "fill" : 1,
         "fog" : 0.04,
@@ -130,7 +128,7 @@
         "spikes" : 0,
         "spin" : 0.15,
         "spread" : 3,
-        "stretch" : 1,
+        "squash" : 1,
         "tumble" : 0.3,
         "twist" : 0,
         "videoMap" : 0,
@@ -140,20 +138,15 @@
         "videoTint" : 0,
         "wire" : 0.6
       },
-      "preset" : "ico-shatter",
-      "shape" : "icosphere",
-      "type" : "lowpoly"
+      "type" : "sphere"
     },
     {
-      "detail" : 2,
-      "id" : "lowpoly",
+      "id" : "shards",
       "params" : {
         "bands" : 8,
         "bgGlow" : 0.5,
         "colorShift" : 0,
         "colorSpeed" : 0,
-        "depth" : 2,
-        "depthCut" : 0.5,
         "explode" : 0.3,
         "fill" : 1,
         "fog" : 0.04,
@@ -168,9 +161,7 @@
         "spikes" : 0,
         "spin" : 0.3,
         "spread" : 3,
-        "stretch" : 1,
         "tumble" : 0.2,
-        "twist" : 0,
         "videoMap" : 0,
         "videoScale" : 1,
         "videoScatter" : 0,
@@ -178,9 +169,7 @@
         "videoTint" : 0,
         "wire" : 0.4
       },
-      "preset" : "shard-field",
-      "shape" : "shards",
-      "type" : "lowpoly"
+      "type" : "shards"
     }
   ],
   "inputs" : [

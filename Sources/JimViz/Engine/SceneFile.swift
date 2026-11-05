@@ -4,14 +4,11 @@ import simd
 // MARK: - Presets
 
 /// Saved settings for one tool, in `Content/Presets/<kind>/<tool>/<id>.json`.
-/// Fields that don't apply to a tool are left out (only palettes have colors,
-/// only generators have shape and detail).
+/// Fields that don't apply to a tool are left out (only palettes have colors).
 struct Preset: Codable {
     var name: String
     var params: [String: Float]?
     var colors: [String]?
-    var shape: String?
-    var detail: Int?
 }
 
 // MARK: - Scene
@@ -128,14 +125,11 @@ struct PaletteSlot: Codable, Equatable {
 struct GeneratorSlot: Codable, Identifiable, Equatable {
     /// Unique id within the scene, used in mapping targets when multiple are present.
     var id: String?
-    /// Generator tool: a shader in Shaders/generators, without extension.
+    /// Generator tool: a shader in a Shaders/generators category folder, without extension
+    /// (`torus`, `wheel`). Its mesh and mesh knobs come from the shader.
     var type: String
     /// Preset it was loaded from, for display.
     var preset: String?
-    /// Mesh shape: icosphere, torus, plane, cube, shards, field (a 16:9 sheet for depth and video).
-    var shape: String?
-    /// Mesh subdivision level, 0...6.
-    var detail: Int?
     /// Knob values; unlisted knobs use the shader's defaults.
     var params: [String: Float]?
 }

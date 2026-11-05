@@ -79,12 +79,12 @@
     }
   ],
   "generator" : {
-    "detail" : 3,
     "params" : {
       "bands" : 5,
       "bgGlow" : 0.5,
       "colorShift" : 0,
       "colorSpeed" : 0,
+      "density" : 3.2,
       "depth" : 2.9000487,
       "depthCut" : 1,
       "explode" : 1.0880859,
@@ -92,19 +92,18 @@
       "fog" : 0.03,
       "height" : 12.5146,
       "instances" : 1,
+      "jitter" : 0.7,
       "light" : 1.2,
       "noiseAmount" : 0.04,
       "noiseScale" : 2.8272533,
       "noiseSpeed" : 0.3,
       "scale" : 1,
       "spectrum" : 0.22919922,
-      "spectrumMode" : 1,
+      "spectrumMode" : 3,
       "spikes" : 0,
       "spin" : 0,
       "spread" : 3,
-      "stretch" : 1,
       "tumble" : 0,
-      "twist" : 0,
       "videoMap" : 0,
       "videoScale" : 1,
       "videoScatter" : 0,
@@ -113,16 +112,25 @@
       "width" : 20.02251,
       "wire" : 0.6
     },
-    "preset" : "plane",
-    "shape" : "plane",
-    "type" : "lowpoly"
+    "type" : "plane"
   },
   "inputs" : [
     {
       "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
       "type" : "audio"
     },
     {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
       "type" : "clock"
     },
     {

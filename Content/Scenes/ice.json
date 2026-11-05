@@ -69,12 +69,12 @@
     }
   ],
   "generator": {
-    "detail": 2,
     "params": {
       "bands": 5,
       "bgGlow": 0.5,
       "colorShift": 0.47495118,
       "colorSpeed": 0,
+      "detail": 2,
       "explode": 0,
       "fill": 1,
       "fog": 0.04,
@@ -89,7 +89,7 @@
       "spikes": 0.46325684,
       "spin": 0.05,
       "spread": 3,
-      "stretch": 0.73977053,
+      "squash": 0.73977053,
       "tumble": 0.8911133,
       "twist": 0,
       "videoMap": 0,
@@ -99,14 +99,12 @@
       "videoTint": 0,
       "wire": 1
     },
-    "preset": "ico-shatter",
-    "shape": "icosphere",
-    "type": "lowpoly"
+    "type": "sphere"
   },
   "inputs": [
     {
-      "type": "audio",
-      "device": "system"
+      "device": "system",
+      "type": "audio"
     },
     {
       "type": "clock"

@@ -51,7 +51,6 @@
     }
   ],
   "generator": {
-    "detail": 2,
     "params": {
       "bands": 8,
       "explode": 0.3,
@@ -64,14 +63,12 @@
       "tumble": 0.2,
       "wire": 0.4
     },
-    "preset": "shard-field",
-    "shape": "shards",
-    "type": "lowpoly"
+    "type": "shards"
   },
   "inputs": [
     {
-      "type": "audio",
-      "device": "system"
+      "device": "system",
+      "type": "audio"
     },
     {
       "type": "clock"
@@ -101,7 +98,6 @@
       "source": "audio.kick",
       "target": "camera.fov"
     },
-
     {
       "source": "palette.colors",
       "target": "generator.pal"

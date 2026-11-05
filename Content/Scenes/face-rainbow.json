@@ -60,7 +60,6 @@
     }
   ],
   "generator" : {
-    "detail" : 3,
     "params" : {
       "bands" : 4,
       "bgGlow" : 0.5,
@@ -71,6 +70,7 @@
       "explode" : 0,
       "fill" : 0.25,
       "fog" : 0.08,
+      "height" : 10,
       "instances" : 1,
       "light" : 1.1,
       "noiseAmount" : 0.6,
@@ -78,25 +78,20 @@
       "noiseSpeed" : 0.4,
       "scale" : 1.6,
       "spectrum" : 1.4,
-      "spectrumMode" : 3,
+      "spectrumMode" : 0,
       "spikes" : 0.3,
       "spin" : 0,
       "spread" : 3,
-      "stretch" : 1,
       "tumble" : 0,
-      "twist" : 0,
       "videoMap" : 0,
       "videoScale" : 1,
       "videoScatter" : 0,
       "videoTex" : 0.8,
       "videoTint" : 0,
       "width" : 10,
-      "height" : 10,
       "wire" : 1
     },
-    "preset" : "plane",
-    "shape" : "plane",
-    "type" : "lowpoly"
+    "type" : "plane"
   },
   "inputs" : [
     {

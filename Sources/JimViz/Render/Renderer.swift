@@ -12,59 +12,73 @@ final class GeneratorRuntime: Identifiable {
     let type: String
     let preset: String?
     let label: String?
-    let shape: MeshShape
-    let detail: Int
+    /// From the shader's `// @mesh` line.
+    let mesh: MeshShape
     let bank: ParamBank
     let meshPipeline: MTLRenderPipelineState
     let backgroundPipeline: MTLRenderPipelineState
-    var vertexBuffer: MTLBuffer
-    var vertexCount: Int
     /// Declared with `// @video`, `// @spectrum`, `// @palette`; bound from texture(0) up.
     let inputs: [StreamInputDef]
 
-    var planeWidth: Float
-    var planeHeight: Float
-    var planeCols: Int
-    var planeRows: Int
+    /// Render thread only. Swapped for a rebuilt mesh by `updateMesh`.
+    private(set) var vertexBuffer: MTLBuffer
+    private(set) var vertexCount: Int
+    /// What the current buffer was built from (`MeshBuilder.topology`).
+    private(set) var topology: [Int]
 
-    init(id: String = "generator", key: String = "generator", type: String, preset: String? = nil, label: String? = nil,
-         shape: MeshShape, detail: Int, bank: ParamBank,
+    private let lock = NSLock()
+    private var building = false
+    private var built: (buffer: MTLBuffer, count: Int, topology: [Int])?
+    private static let buildQueue = DispatchQueue(label: "jim-viz.mesh", qos: .userInitiated)
+
+    /// Builds the mesh for the bank's current mesh knobs, or carries on `old`'s when it draws the same mesh.
+    init(id: String, key: String, type: String, preset: String?, label: String?, mesh: MeshShape, bank: ParamBank,
          meshPipeline: MTLRenderPipelineState, backgroundPipeline: MTLRenderPipelineState,
-         vertexBuffer: MTLBuffer, vertexCount: Int, inputs: [StreamInputDef],
-         planeWidth: Float = 10, planeHeight: Float = 10) {
+         inputs: [StreamInputDef], device: MTLDevice, reusing old: GeneratorRuntime?) {
         self.id = id; self.key = key; self.type = type; self.preset = preset; self.label = label
-        self.shape = shape; self.detail = detail; self.bank = bank
-        self.inputs = inputs
+        self.mesh = mesh; self.bank = bank; self.inputs = inputs
         self.meshPipeline = meshPipeline; self.backgroundPipeline = backgroundPipeline
-        self.vertexBuffer = vertexBuffer; self.vertexCount = vertexCount
-        self.planeWidth = planeWidth
-        self.planeHeight = planeHeight
-        let (cols, rows) = MeshBuilder.planeDivisions(detail: detail, width: planeWidth, height: planeHeight)
-        self.planeCols = cols
-        self.planeRows = rows
+        if let old, old.mesh == mesh {
+            (vertexBuffer, vertexCount, topology) = (old.vertexBuffer, old.vertexCount, old.topology)
+        } else {
+            topology = MeshBuilder.topology(mesh) { bank.live($0) }
+            (vertexBuffer, vertexCount) = Self.makeBuffer(device, mesh, topology)
+        }
     }
 
-    func updatePlaneMeshIfNeeded(renderer: Renderer) {
-        guard shape == .plane else { return }
-        let w = bank["width"]?.liveBase ?? 10
-        let h = bank["height"]?.liveBase ?? 10
-        let (cols, rows) = MeshBuilder.planeDivisions(detail: detail, width: w, height: h)
-        if cols == planeCols && rows == planeRows { return }
-        planeCols = cols
-        planeRows = rows
-        planeWidth = w
-        planeHeight = h
-        let verts = MeshBuilder.build(.plane, detail: detail, width: w, height: h)
-        let byteCount = MemoryLayout<MeshVertex>.stride * verts.count
-        if vertexBuffer.length >= byteCount {
-            vertexBuffer.contents().copyMemory(from: verts, byteCount: byteCount)
-        } else {
-            let capacity = max(Int(Double(byteCount) * 1.25), 65536)
-            guard let newBuf = renderer.device.makeBuffer(length: capacity, options: .storageModeShared) else { return }
-            newBuf.contents().copyMemory(from: verts, byteCount: byteCount)
-            vertexBuffer = newBuf
+    static func makeBuffer(_ device: MTLDevice, _ mesh: MeshShape, _ topology: [Int]) -> (MTLBuffer, Int) {
+        let verts = MeshBuilder.build(mesh, topology: topology)
+        let buf = device.makeBuffer(bytes: verts, length: max(MemoryLayout<MeshVertex>.stride * verts.count, 16),
+                                    options: .storageModeShared)!
+        return (buf, verts.count)
+    }
+
+    /// Render thread, each frame: swaps in a finished rebuild, and starts one in the background
+    /// when the mesh knobs' live values (modulated too) ask for different triangles. The old
+    /// mesh keeps drawing meanwhile; command buffers retain the buffer they were encoded with.
+    func updateMesh(device: MTLDevice) {
+        let want = MeshBuilder.topology(mesh) { bank.live($0) }
+        lock.lock()
+        if let b = built { (vertexBuffer, vertexCount, topology) = b; built = nil }
+        let start = !building && want != topology
+        if start { building = true }
+        lock.unlock()
+        guard start else { return }
+        let mesh = mesh
+        Self.buildQueue.async { [self] in
+            let (buffer, count) = Self.makeBuffer(device, mesh, want)
+            lock.lock()
+            built = (buffer, count, want)
+            building = false
+            lock.unlock()
         }
-        vertexCount = verts.count
+    }
+
+    /// Waits for a background rebuild and swaps it in. For the self-check.
+    func finishMeshBuild(device: MTLDevice) {
+        updateMesh(device: device)
+        Self.buildQueue.sync {}
+        updateMesh(device: device)
     }
 }
 
@@ -693,15 +707,6 @@ final class Renderer {
         return Float(mask)
     }
 
-    func makeMesh(_ shape: MeshShape, detail: Int, width: Float = 10, height: Float = 10) -> (MTLBuffer, Int) {
-        let verts = MeshBuilder.build(shape, detail: detail, width: width, height: height)
-        let byteCount = MemoryLayout<MeshVertex>.stride * verts.count
-        let capacity = shape == .plane ? max(Int(Double(byteCount) * 1.25), 65536) : byteCount
-        let buf = device.makeBuffer(length: capacity, options: .storageModeShared)!
-        buf.contents().copyMemory(from: verts, byteCount: byteCount)
-        return (buf, verts.count)
-    }
-
     // MARK: Frame encoding
 
     func encode(_ cmd: MTLCommandBuffer, scene: RenderScene, frame f: inout FrameUniforms) {
@@ -761,9 +766,7 @@ final class Renderer {
 
             // 3. Render generator meshes in chain order on the same stage.
             for gen in scene.generators {
-                if gen.shape == .plane {
-                    gen.updatePlaneMeshIfNeeded(renderer: self)
-                }
+                gen.updateMesh(device: device)
                 let sources = scene.generatorSources[gen.key] ?? []
                 f.inputs = bindInputs(enc, gen.inputs, sources: sources, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)

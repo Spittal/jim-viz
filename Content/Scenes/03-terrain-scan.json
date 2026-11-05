@@ -53,32 +53,29 @@
     }
   ],
   "generator": {
-    "detail": 3,
     "params": {
       "bands": 4,
       "fill": 0.25,
       "fog": 0.08,
+      "height": 10,
       "noiseAmount": 0.6,
       "noiseScale": 0.6,
       "noiseSpeed": 0.4,
       "scale": 1.6,
       "spectrum": 1.4,
-      "spectrumMode": 3,
+      "spectrumMode": 0,
       "spikes": 0.3,
       "spin": 0.0,
       "tumble": 0.0,
       "width": 10,
-      "height": 10,
       "wire": 1.0
     },
-    "preset": "plane",
-    "shape": "plane",
-    "type": "lowpoly"
+    "type": "plane"
   },
   "inputs": [
     {
-      "type": "audio",
-      "device": "system"
+      "device": "system",
+      "type": "audio"
     },
     {
       "type": "clock"

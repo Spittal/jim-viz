@@ -464,7 +464,7 @@ enum SelfCheck {
         engine.removeGenerator()
         engine.removeMappings(target: "generator.pal")
         engine.removeMappings(target: "generator.spec")
-        engine.apply(.generator, "lowpoly")
+        engine.apply(.generator, "torus")
         guard engine.current?.streamBindings.filter({ $0.key.hasPrefix("generator.") }).isEmpty == true else { return "new generator connected itself" }
         return nil
     }
@@ -689,6 +689,50 @@ enum SelfCheck {
         return nil
     }
 
+    /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
+    /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
+    private static func checkLowPoly(engine: Engine) -> String? {
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel"]
+        let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
+        guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
+        guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "kaleido.json missing" }
+        engine.load(url, animated: false)
+        defer { engine.load(url, animated: false) }
+        for target in Set(engine.current?.mappings.map(\.target) ?? []) where target.hasPrefix("generator") {
+            engine.removeMappings(target: target)
+        }
+        // Knobs that belong to one geo only.
+        let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
+                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch"]
+        for geo in geos {
+            while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
+            engine.apply(.generator, geo)
+            guard let gen = engine.current?.generator, gen.type == geo, gen.mesh.rawValue == geo else {
+                return "\(geo) didn't load: \(engine.errorSummary ?? "")"
+            }
+            guard gen.vertexCount > 0 else { return "\(geo) built an empty mesh" }
+            for (other, knob) in own { if (gen.bank[knob] != nil) != (other == geo) { return "\(geo) has the wrong knobs (\(knob))" } }
+            guard (gen.bank["depth"] != nil) == (geo == "plane") else { return "depth should be on the plane only" }
+            guard engine.current?.streamBindings.keys.contains(where: { $0.hasPrefix(gen.key + ".") }) == false else {
+                return "\(geo) connected itself"
+            }
+            let meshKnobs = gen.bank.params.filter(\.def.rebuildsMesh)
+            guard meshKnobs.map(\.def.name).sorted() == gen.mesh.meshParams.sorted() else { return "\(geo) mesh knobs mismatch" }
+            // A modulated mesh knob (live above its base) rebuilds in the background.
+            let knob = meshKnobs[0], before = gen.vertexCount
+            knob.live = knob.def.clamp(knob.base + knob.def.span * 0.25)
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount != before else { return "\(geo) mesh didn't rebuild when \(knob.def.name) changed" }
+            knob.live = knob.base
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount == before else { return "\(geo) mesh didn't return when \(knob.def.name) went back" }
+            _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
+            if let err = engine.errorSummary { return "\(geo): \(err)" }
+        }
+        return nil
+    }
+
     /// Edits a scene's chain in memory and checks the result. Nothing is saved.
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
@@ -696,11 +740,8 @@ enum SelfCheck {
         guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else {
             return "kaleido.json missing"
         }
-        let presetURL = engine.store.presetsDir(.generator, "lowpoly").appendingPathComponent("ico-shatter.json")
+        let presetURL = engine.store.presetsDir(.effect, "glow").appendingPathComponent("bloom.json")
         let presetBefore = try? Data(contentsOf: presetURL)
-        guard engine.tools.contains(where: { $0.name == "lowpoly" && $0.presets.contains { $0.id == "torus-swarm" } }) else {
-            return "browser tools missing the lowpoly presets"
-        }
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let start = engine.current else { return "scene did not load" }
@@ -708,33 +749,30 @@ enum SelfCheck {
 
         while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
         guard engine.current?.generator == nil else { return "generator not removed" }
-        engine.apply(.generator, "lowpoly")
-        guard engine.current?.generator?.shape == .icosphere, engine.current?.generatorPreset == nil else { return "bare generator tool not loaded" }
-        engine.apply(.generator, "lowpoly", preset: "torus-swarm")
-        guard engine.current?.generatorPreset == "torus-swarm", engine.current?.generator?.shape == .torus,
-              engine.current?.generator?.bank["instances"]?.base == 36 else { return "generator preset not loaded" }
+        engine.apply(.generator, "sphere")
+        guard engine.current?.generator?.mesh == .sphere, engine.current?.generatorPreset == nil else { return "bare generator tool not loaded" }
 
         // Multiple generators: adding a second generator, moving it, and removing it.
         engine.selectDevice("camera")
-        engine.apply(.generator, "lowpoly", preset: "plane")
+        engine.apply(.generator, "plane")
         guard engine.current?.generators.count == 2 else { return "second generator not added" }
-        guard let secondGen = engine.current?.generators[1], secondGen.preset == "plane" else { return "second generator preset mismatch" }
+        guard let secondGen = engine.current?.generators[1], secondGen.type == "plane" else { return "second generator type mismatch" }
 
         // Plane width and height add polygons in the direction modified.
         let initialVerts = secondGen.vertexCount
         secondGen.bank["width"]?.setBase(20)
-        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        secondGen.finishMeshBuild(device: engine.device)
         guard secondGen.vertexCount == initialVerts * 2 else {
             return "plane width didn't double polygons: \(secondGen.vertexCount) vs \(initialVerts * 2)"
         }
         secondGen.bank["height"]?.setBase(20)
-        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        secondGen.finishMeshBuild(device: engine.device)
         guard secondGen.vertexCount == initialVerts * 4 else {
             return "plane height didn't double polygons again: \(secondGen.vertexCount) vs \(initialVerts * 4)"
         }
         secondGen.bank["width"]?.setBase(10)
         secondGen.bank["height"]?.setBase(10)
-        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        secondGen.finishMeshBuild(device: engine.device)
         guard secondGen.vertexCount == initialVerts else {
             return "plane did not restore original polygon count: \(secondGen.vertexCount) vs \(initialVerts)"
         }
@@ -768,7 +806,7 @@ enum SelfCheck {
               Tools.cardinality(.input, "clock") == .one,
               Tools.cardinality(.camera, "orbit") == .one,
               Tools.cardinality(.palette, "palette") == .one,
-              Tools.cardinality(.generator, "lowpoly") == .many else { return "tool cardinality incorrect" }
+              Tools.cardinality(.generator, "torus") == .many else { return "tool cardinality incorrect" }
 
         // Optional camera and palette removal and rendering without them.
         engine.removeCamera()
@@ -790,32 +828,32 @@ enum SelfCheck {
 
         // Multiple generators render on the same stage.
         let initialGenCount = engine.current?.generators.count ?? 0
-        let firstGenPreset = engine.current?.generators.first?.preset
+        let firstGenType = engine.current?.generators.first?.type
         engine.selectDevice("generator")
-        engine.drop(.device(.generator, tool: "lowpoly", preset: "torus-swarm"), at: .append(.generator))
+        engine.drop(.device(.generator, tool: "torus", preset: nil), at: .append(.generator))
         guard engine.current?.generators.count == initialGenCount + 1 else { return "generator drop didn't append" }
-        guard engine.current?.generators.first?.preset == firstGenPreset else { return "generator drop replaced selected generator" }
+        guard engine.current?.generators.first?.type == firstGenType else { return "generator drop replaced selected generator" }
         _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
 
         // Drop right on top of same tool replaces instead of appending.
         let genCountBefore = engine.current?.generators.count ?? 0
-        engine.drop(.device(.generator, tool: "lowpoly", preset: "plane"), at: .replaceDevice(key: "generator", kind: .generator, tool: "lowpoly"))
-        guard engine.current?.generators.count == genCountBefore else { return "drop on same tool changed generator count" }
-        guard engine.current?.generators.first?.preset == "plane" else { return "drop on same tool didn't replace" }
+        engine.drop(.device(.generator, tool: "plane", preset: nil), at: .replaceDevice(key: "generator", kind: .generator, tool: "sphere"))
+        guard engine.current?.generators.count == genCountBefore else { return "drop on a generator changed generator count" }
+        guard engine.current?.generators.first?.type == "plane" else { return "drop on a generator didn't replace it" }
 
         if let secondKey = engine.current?.generators.last?.key { engine.removeGenerator(key: secondKey) }
         guard engine.current?.generators.count == initialGenCount else { return "second generator not removed" }
 
         // Native Undo / Redo support.
         engine.undoManager = UndoManager()
-        let presetBeforeUndo = engine.current?.generators.first?.preset
-        engine.apply(.generator, "lowpoly", preset: "torus-swarm")
+        let typesBeforeUndo = engine.current?.generators.map(\.type)
+        engine.apply(.generator, "wheel")
         guard engine.canUndo else { return "cannot undo after apply" }
         engine.undo()
-        guard engine.current?.generators.first?.preset == presetBeforeUndo else { return "undo failed to restore preset" }
+        guard engine.current?.generators.map(\.type) == typesBeforeUndo else { return "undo failed to remove the added generator" }
         guard engine.canRedo else { return "cannot redo after undo" }
         engine.redo()
-        guard engine.current?.generators.first?.preset == "torus-swarm" else { return "redo failed to restore preset" }
+        guard engine.current?.generators.last?.type == "wheel" else { return "redo failed to add the generator again" }
 
         // Scene deletion.
         let delURL = engine.store.scenesDir.appendingPathComponent("selfcheck-test-delete.json")
@@ -867,7 +905,8 @@ enum SelfCheck {
         guard let scene = engine.current, let cam = scene.webcams.first,
               scene.streamBindings["generator.texVideo"] === cam.video,
               scene.streamInputs.contains(where: { $0.label == "Texture" }),
-              scene.streamInputs.contains(where: { $0.label == "Depth" }) else { return "stream inputs missing Texture or Depth" }
+              // Kaleido's sphere and shards: Depth belongs to the Plane only.
+              !scene.streamInputs.contains(where: { $0.label == "Depth" }) else { return "stream inputs: Texture missing, or Depth off the Plane" }
         guard cam.pipeline != nil, cam.bank["zoom"] != nil, cam.bank["bg"] != nil, cam.bank["mirror"]?.def.labels == ["Off", "Flip", "Fold", "Quad"] else {
             return "webcam shader not compiled or its knobs missing: \(engine.errors)"
         }
@@ -948,7 +987,7 @@ enum SelfCheck {
                 modulators: [],
                 camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
                 palette: PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
-                generator: GeneratorSlot(type: "lowpoly", preset: "plane", shape: "plane", detail: 3, params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6]),
+                generator: GeneratorSlot(type: "plane", params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6]),
                 effects: [EffectSpec(effect: "glitch", id: "glitch"), EffectSpec(effect: "glow", id: "glow"), EffectSpec(effect: "film", id: "film")],
                 mappings: [
                     MappingSpec(source: "webcam.webcam.depth", target: "generator.depthVideo"),
@@ -973,7 +1012,7 @@ enum SelfCheck {
         }
         engine.load(url, animated: false)
         guard let scene = engine.current, let cam = scene.webcams.first, let gen = scene.generator else { return "depth scene didn't build" }
-        guard gen.shape == .plane, scene.streamBindings["generator.depthVideo"] === cam.depthVideo,
+        guard gen.mesh == .plane, scene.streamBindings["generator.depthVideo"] === cam.depthVideo,
               cam.depthMapped, cam.feed.depthWanted, cam.depthPipeline != nil else {
             return "depth not mapped into the plane, or not running: \(engine.errors)"
         }
@@ -1124,6 +1163,11 @@ enum SelfCheck {
             print("ok   encapsulation (scenes own their Audio In and Clock, beat continues across a switch, no broadcast, hardware idle)")
         }
 
+        if let problem = checkLowPoly(engine: engine) {
+            print("FAIL low poly: \(problem)"); failures += 1
+        } else {
+            print("ok   low poly geos")
+        }
         if let problem = checkComposition(engine: engine) {
             print("FAIL composition: \(problem)"); failures += 1
         } else {

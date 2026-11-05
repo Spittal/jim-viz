@@ -2,7 +2,7 @@ import simd
 
 /// Non-indexed vertex. Every triangle owns its three vertices, so each face can be
 /// shattered, flat-shaded and wireframed independently.
-/// Layout must match `MeshVertex` in Shaders/generators/*.metal.
+/// Layout must match `MeshVertex` in Shaders/generators/lowpoly/_shared.metal.
 struct MeshVertex {
     /// xyz position, w = per-face random 0...1.
     var position: SIMD4<Float>
@@ -12,10 +12,27 @@ struct MeshVertex {
     var smoothNormal: SIMD4<Float>
     /// Barycentric coordinate, for wireframes.
     var bary: SIMD4<Float>
+    /// Shape coordinates the geo's vertex shader rebuilds the position from, so its shape
+    /// knobs (torus thickness, wheel pitch…) move live. Meaning depends on the mesh; see each builder.
+    var shape: SIMD4<Float>
 }
 
+/// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
+/// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case icosphere, torus, plane, cube, shards
+    case sphere, torus, plane, cube, shards, wheel
+
+    /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
+    var meshParams: [String] {
+        switch self {
+        case .sphere: return ["detail"]
+        case .torus: return ["rings", "sides"]
+        case .plane: return ["width", "height", "density"]
+        case .cube: return ["divisions"]
+        case .shards: return ["count"]
+        case .wheel: return ["blades", "segments"]
+        }
+    }
 }
 
 struct MeshBuilder {
@@ -23,40 +40,51 @@ struct MeshBuilder {
     private var rng = SplitMix(seed: 0x5EED)
 
     mutating func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>,
-                      _ na: SIMD3<Float>, _ nb: SIMD3<Float>, _ nc: SIMD3<Float>) {
+                      _ na: SIMD3<Float>, _ nb: SIMD3<Float>, _ nc: SIMD3<Float>,
+                      shape: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero)) {
         var fn = simd_normalize(simd_cross(b - a, c - a))
         if !fn.x.isFinite { fn = simd_normalize(na + nb + nc) }
         if simd_dot(fn, na + nb + nc) < 0 { fn = -fn }
         let r = rng.nextFloat()
         let bary: [SIMD3<Float>] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-        for (i, (p, n)) in [(a, na), (b, nb), (c, nc)].enumerated() {
+        for (i, (p, n, s)) in [(a, na, shape.0), (b, nb, shape.1), (c, nc, shape.2)].enumerated() {
             vertices.append(MeshVertex(position: SIMD4(p, r), faceNormal: SIMD4(fn, 0),
-                                       smoothNormal: SIMD4(n, 0), bary: SIMD4(bary[i], 0)))
+                                       smoothNormal: SIMD4(n, 0), bary: SIMD4(bary[i], 0), shape: s))
         }
     }
 
-    static func planeDivisions(detail: Int, width: Float, height: Float) -> (cols: Int, rows: Int) {
-        let d = min(max(detail, 0), 6)
-        let n = min(4 << d, 160)
-        let cols = min(max(2, Int(round(Float(n) * (max(width, 0.1) / 10.0)))), 320)
-        let rows = min(max(2, Int(round(Float(n) * (max(height, 0.1) / 10.0)))), 320)
-        return (cols, rows)
+    /// What decides the mesh's triangles: it is rebuilt only when this changes. Plane width and
+    /// height stretch the mesh live in the shader and only change it through the cell count.
+    static func topology(_ shape: MeshShape, _ value: (String) -> Float) -> [Int] {
+        func i(_ name: String) -> Int { Int(value(name).rounded()) }
+        switch shape {
+        case .sphere: return [min(max(i("detail"), 0), 5)]
+        case .torus: return [min(max(i("rings"), 3), 128), min(max(i("sides"), 3), 64)]
+        case .plane:
+            let d = value("density")
+            func cells(_ size: Float) -> Int { min(max(Int((size * d).rounded()), 2), 320) }
+            return [cells(value("width")), cells(value("height"))]
+        case .cube: return [min(max(i("divisions"), 1), 32)]
+        case .shards: return [min(max(i("count"), 1), 4000)]
+        case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
+        }
     }
 
-    static func build(_ shape: MeshShape, detail: Int, width: Float = 10, height: Float = 10) -> [MeshVertex] {
+    static func build(_ shape: MeshShape, topology t: [Int]) -> [MeshVertex] {
         var b = MeshBuilder()
-        let d = min(max(detail, 0), 6)
         switch shape {
-        case .icosphere: b.icosphere(d)
-        case .torus: b.torus(d)
-        case .plane: b.plane(d, width: width, height: height)
-        case .cube: b.cube(d)
-        case .shards: b.shards(d)
+        case .sphere: b.sphere(t[0])
+        case .torus: b.torus(rings: t[0], sides: t[1])
+        case .plane: b.plane(cols: t[0], rows: t[1])
+        case .cube: b.cube(t[0])
+        case .shards: b.shards(t[0])
+        case .wheel: b.wheel(blades: t[0], segments: t[1])
         }
         return b.vertices
     }
 
-    private mutating func icosphere(_ detail: Int) {
+    /// Icosphere of radius 1. shape is unused.
+    private mutating func sphere(_ detail: Int) {
         let t: Float = (1 + Float(5).squareRoot()) / 2
         var v: [SIMD3<Float>] = [
             [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
@@ -69,7 +97,7 @@ struct MeshBuilder {
             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
             (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1),
         ]
-        for _ in 0..<min(detail, 5) {
+        for _ in 0..<detail {
             var cache: [Int: Int] = [:]
             func mid(_ a: Int, _ b: Int) -> Int {
                 let key = min(a, b) << 20 | max(a, b)
@@ -86,81 +114,88 @@ struct MeshBuilder {
         for (a, b, c) in f { tri(v[a], v[b], v[c], v[a], v[b], v[c]) }
     }
 
-    private mutating func torus(_ detail: Int) {
-        let nu = 6 * (detail + 1), nv = 3 * (detail + 1) + 2
+    /// Torus, ring radius 1, tube radius 0.42.
+    /// shape: x = position around the ring 0...1, y = around the tube 0...1, zw = the same at the face's centre.
+    private mutating func torus(rings nu: Int, sides nv: Int) {
         let R: Float = 1, r: Float = 0.42
-        func p(_ i: Int, _ j: Int) -> (SIMD3<Float>, SIMD3<Float>) {
-            let u = Float(i % nu) / Float(nu) * 2 * .pi
-            let w = Float(j % nv) / Float(nv) * 2 * .pi
-            let center = SIMD3<Float>(cos(u) * R, 0, sin(u) * R)
-            let n = SIMD3<Float>(cos(u) * cos(w), sin(w), sin(u) * cos(w))
-            return (center + n * r, n)
+        func p(_ u: Float, _ w: Float) -> (SIMD3<Float>, SIMD3<Float>) {
+            let a = u * 2 * .pi, b = w * 2 * .pi
+            let n = SIMD3<Float>(cos(a) * cos(b), sin(b), sin(a) * cos(b))
+            return (SIMD3(cos(a) * R, 0, sin(a) * R) + n * r, n)
         }
         for i in 0..<nu {
             for j in 0..<nv {
-                let (a, na) = p(i, j), (b, nb) = p(i + 1, j), (c, nc) = p(i + 1, j + 1), (d, nd) = p(i, j + 1)
-                tri(a, b, c, na, nb, nc)
-                tri(a, c, d, na, nc, nd)
+                let u0 = Float(i) / Float(nu), u1 = Float(i + 1) / Float(nu)
+                let w0 = Float(j) / Float(nv), w1 = Float(j + 1) / Float(nv)
+                let (a, na) = p(u0, w0), (b, nb) = p(u1, w0), (c, nc) = p(u1, w1), (d, nd) = p(u0, w1)
+                func s(_ u: Float, _ w: Float, _ cu: Float, _ cw: Float) -> SIMD4<Float> { [u, w, cu, cw] }
+                let c1 = ((u0 + u1 + u1) / 3, (w0 + w0 + w1) / 3), c2 = ((u0 + u1 + u0) / 3, (w0 + w1 + w1) / 3)
+                tri(a, b, c, na, nb, nc, shape: (s(u0, w0, c1.0, c1.1), s(u1, w0, c1.0, c1.1), s(u1, w1, c1.0, c1.1)))
+                tri(a, c, d, na, nc, nd, shape: (s(u0, w0, c2.0, c2.1), s(u1, w1, c2.0, c2.1), s(u0, w1, c2.0, c2.1)))
             }
         }
     }
 
-    private mutating func plane(_ detail: Int, width: Float = 10, height: Float = 10) {
-        let (cols, rows) = Self.planeDivisions(detail: detail, width: width, height: height)
-        var grid = [SIMD3<Float>](repeating: .zero, count: (cols + 1) * (rows + 1))
+    /// Flat sheet, -0.5...0.5 on x and z (the shader stretches it to width × height), facing up.
+    /// shape: xy = position on the sheet before jitter, zw = this vertex's jitter offset at full jitter.
+    /// Edge vertices don't jitter, so the sheet keeps straight edges.
+    private mutating func plane(cols: Int, rows: Int) {
         var jitter = SplitMix(seed: 42)
-        let cellX: Float = 1.0 / Float(rows)
-        let cellZ: Float = 1.0 / Float(cols)
+        let cellX: Float = 1 / Float(rows), cellZ: Float = 1 / Float(cols)
+        var grid = [SIMD4<Float>](repeating: .zero, count: (cols + 1) * (rows + 1))
         for j in 0...cols {
             for i in 0...rows {
                 let edge = i == 0 || j == 0 || i == rows || j == cols
-                let jx = edge ? 0 : (jitter.nextFloat() - 0.5) * cellX * 0.7
-                let jz = edge ? 0 : (jitter.nextFloat() - 0.5) * cellZ * 0.7
-                grid[j * (rows + 1) + i] = [Float(i) * cellX - 0.5 + jx, 0, Float(j) * cellZ - 0.5 + jz]
+                let jx = edge ? 0 : (jitter.nextFloat() - 0.5) * cellX
+                let jz = edge ? 0 : (jitter.nextFloat() - 0.5) * cellZ
+                grid[j * (rows + 1) + i] = [Float(i) * cellX - 0.5, Float(j) * cellZ - 0.5, jx, jz]
             }
         }
         let up = SIMD3<Float>(0, 1, 0)
+        func pos(_ s: SIMD4<Float>) -> SIMD3<Float> { [s.x + s.z * 0.7, 0, s.y + s.w * 0.7] }
+        func t(_ a: SIMD4<Float>, _ b: SIMD4<Float>, _ c: SIMD4<Float>) {
+            tri(pos(a), pos(b), pos(c), up, up, up, shape: (a, b, c))
+        }
         for j in 0..<cols {
             for i in 0..<rows {
                 let a = grid[j * (rows + 1) + i], b = grid[j * (rows + 1) + i + 1]
                 let c = grid[(j + 1) * (rows + 1) + i + 1], d = grid[(j + 1) * (rows + 1) + i]
-                if (i + j) % 2 == 0 {
-                    tri(a, b, c, up, up, up); tri(a, c, d, up, up, up)
-                } else {
-                    tri(a, b, d, up, up, up); tri(b, c, d, up, up, up)
-                }
+                if (i + j) % 2 == 0 { t(a, b, c); t(a, c, d) } else { t(a, b, d); t(b, c, d) }
             }
         }
     }
 
-    private mutating func cube(_ detail: Int) {
-        let n = max(1, 1 << min(detail, 5))
+    /// Cube, half-size 0.8, each face a `divisions` × `divisions` grid of two-triangle cells.
+    /// shape: xyz = the face's outward axis, w = which face 0...5.
+    private mutating func cube(_ n: Int) {
         let axes: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = [
             ([1, 0, 0], [0, 1, 0], [0, 0, 1]), ([-1, 0, 0], [0, 1, 0], [0, 0, -1]),
             ([0, 1, 0], [0, 0, 1], [1, 0, 0]), ([0, -1, 0], [0, 0, -1], [1, 0, 0]),
             ([0, 0, 1], [1, 0, 0], [0, 1, 0]), ([0, 0, -1], [-1, 0, 0], [0, 1, 0]),
         ]
-        for (normal, u, w) in axes {
+        for (k, (normal, u, w)) in axes.enumerated() {
+            let s = SIMD4<Float>(normal, Float(k))
             func p(_ i: Int, _ j: Int) -> SIMD3<Float> {
                 normal * 0.8 + u * (Float(i) / Float(n) * 1.6 - 0.8) + w * (Float(j) / Float(n) * 1.6 - 0.8)
             }
             for i in 0..<n {
                 for j in 0..<n {
                     let a = p(i, j), b = p(i + 1, j), c = p(i + 1, j + 1), d = p(i, j + 1)
-                    tri(a, b, c, simd_normalize(a), simd_normalize(b), simd_normalize(c))
-                    tri(a, c, d, simd_normalize(a), simd_normalize(c), simd_normalize(d))
+                    tri(a, b, c, simd_normalize(a), simd_normalize(b), simd_normalize(c), shape: (s, s, s))
+                    tri(a, c, d, simd_normalize(a), simd_normalize(c), simd_normalize(d), shape: (s, s, s))
                 }
             }
         }
     }
 
-    private mutating func shards(_ detail: Int) {
+    /// A cloud of four-faced crystals around the origin, each pointing outward.
+    /// shape: xyz = the shard's centre, w = how far this vertex reaches out at length 1
+    /// (the tip's own size; 0 for the base corners).
+    private mutating func shards(_ count: Int) {
         var r = SplitMix(seed: 7)
-        let count = 24 * (detail + 1) * (detail + 1)
         for _ in 0..<count {
             // Random point in a sphere, biased outward.
-            var dir = SIMD3<Float>(r.nextFloat() - 0.5, r.nextFloat() - 0.5, r.nextFloat() - 0.5)
-            dir = simd_normalize(dir)
+            let dir = simd_normalize(SIMD3<Float>(r.nextFloat() - 0.5, r.nextFloat() - 0.5, r.nextFloat() - 0.5))
             let center = dir * (0.4 + 1.4 * r.nextFloat().squareRoot())
             let size = 0.08 + 0.35 * r.nextFloat() * r.nextFloat()
             var pts: [SIMD3<Float>] = []
@@ -168,13 +203,38 @@ struct MeshBuilder {
                 let o = simd_normalize(SIMD3<Float>(r.nextFloat() - 0.5, r.nextFloat() - 0.5, r.nextFloat() - 0.5))
                 pts.append(center + o * size * (0.5 + r.nextFloat()))
             }
-            // Stretch along the outward direction for a crystal look.
-            pts[0] += dir * size * 2.5
+            let base = SIMD4<Float>(center, 0), tip = SIMD4<Float>(center, size)
             let n = dir
-            tri(pts[0], pts[1], pts[2], n, n, n)
-            tri(pts[0], pts[2], pts[3], n, n, n)
-            tri(pts[0], pts[3], pts[1], n, n, n)
-            tri(pts[1], pts[3], pts[2], n, n, n)
+            tri(pts[0], pts[1], pts[2], n, n, n, shape: (tip, base, base))
+            tri(pts[0], pts[2], pts[3], n, n, n, shape: (tip, base, base))
+            tri(pts[0], pts[3], pts[1], n, n, n, shape: (tip, base, base))
+            tri(pts[1], pts[3], pts[2], n, n, n, shape: (base, base, base))
+        }
+    }
+
+    /// Water wheel: flat paddles hinged along one edge to an invisible axle on x, each a
+    /// `segments` × `segments` grid. The shader places them (radius, length, pitch, flap…).
+    /// shape: x = which blade 0...1 around the axle, y = along the blade from the hinge 0...1,
+    /// z = across the blade -0.5...0.5, w = y at the face's centre.
+    private mutating func wheel(blades: Int, segments n: Int) {
+        for k in 0..<blades {
+            let blade = Float(k) / Float(blades)
+            let a = blade * 2 * .pi
+            let radial = SIMD3<Float>(0, cos(a), sin(a))
+            let normal = SIMD3<Float>(0, -sin(a), cos(a))
+            func p(_ t: Float, _ s: Float) -> SIMD3<Float> { SIMD3(s * 1.5, 0, 0) + radial * (0.6 + t * 1.4) }
+            for i in 0..<n {
+                for j in 0..<n {
+                    let t0 = Float(i) / Float(n), t1 = Float(i + 1) / Float(n)
+                    let s0 = Float(j) / Float(n) - 0.5, s1 = Float(j + 1) / Float(n) - 0.5
+                    let c1 = (t0 + t1 + t1) / 3, c2 = (t0 + t1 + t0) / 3
+                    func s(_ t: Float, _ w: Float, _ c: Float) -> SIMD4<Float> { [blade, t, w, c] }
+                    tri(p(t0, s0), p(t1, s0), p(t1, s1), normal, normal, normal,
+                        shape: (s(t0, s0, c1), s(t1, s0, c1), s(t1, s1, c1)))
+                    tri(p(t0, s0), p(t1, s1), p(t0, s1), normal, normal, normal,
+                        shape: (s(t0, s0, c2), s(t1, s1, c2), s(t0, s1, c2)))
+                }
+            }
         }
     }
 }

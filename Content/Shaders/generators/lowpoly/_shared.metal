@@ -1,28 +1,32 @@
-// Low-poly generator: flat-shaded procedural meshes with displacement, twist,
-// shattering, instancing and wireframes. Mesh shape and detail are set in the scene JSON.
+// Shared by every Low Poly geo: flat shading, wireframes, surface noise, explode, instancing,
+// spin and video texturing. A geo shader declares `// @mesh <shape>`, its Shape knobs and an
+// Audio group with `spectrum` and `spectrumMode`, then includes this file, then writes
+// gen_vertex: it builds each vertex's local point from the mesh (a GeoPoint) and hands it to
+// lowpolyVertex. Files starting with _ are shared code, not geos.
 
 // Inputs. Palette colours the faces, wires, fog and background (map a Palette's Colours into
-// it); Spectrum pushes vertices out (map Audio In's Spectrum into it).
+// it); Spectrum pushes vertices out (map Audio In's Spectrum into it). The palette is texture(0),
+// the spectrum texture(1) and the video texture(2).
 // @palette pal Palette
 // @spectrum spec Spectrum
 
-// @group Shape
-// @param scale 1.2 0.1 4
-// @param width 10 1 50
-// @param height 10 1 50
-// @param noiseAmount 0.35 0 2
+// Surface: noise and spikes push vertices along the smooth normal so faces stay joined;
+// explode pushes every face out along its own normal, shattering the shape.
+// @group Surface
+// @param noiseAmount 0.2 0 2
 // @param noiseScale 1.4 0.1 8
 // @param noiseSpeed 0.25 0 4
 // @param spikes 0 0 3
-// @param twist 0 -6 6
 // @param explode 0 0 4
-// @param stretch 1 0.2 4
 
-// @group Instances
-// @param instances 1 1 96 int
-// @param spread 3 0 20
+// Motion: instances copies the geo onto a sphere of radius spread; each copy tumbles on its own
+// axis; spin turns everything around the vertical axis.
+// @group Motion
+// @param scale 1 0.1 4
 // @param spin 0.2 -4 4
 // @param tumble 0.3 0 4
+// @param instances 1 1 96 int
+// @param spread 3 0 20
 
 // @group Look
 // @param wire 0 0 1
@@ -34,23 +38,15 @@
 // @param fog 0.04 0 0.5
 // @param bgGlow 0.5 0 2
 
-// Audio: push vertices out by the Spectrum input. spectrumMode picks how a vertex maps to a frequency:
-// 0 = height (bass at the bottom), 1 = random per face, 2 = angle around the center,
-// 3 = distance from the center (rings on a plane).
-// @group Audio spec
-// @param spectrum 0 0 2
-// @param spectrumMode 0 0 3 int
-
 // Video inputs: map a video output (a Webcam) into Texture to paint it onto the faces.
 // videoTex is how much shows.
 // videoMap picks how faces pick up the texture: Faces (every polygon shows the whole video,
 // sliced onto it), Screen (as seen from the camera, so the mesh becomes a window onto the
 // video), Shards (every face shows its own patch of the screen view), Sphere (wrapped around
 // the object), Normal (by face direction, kaleidoscopic) or Front (projected flat from the
-// front, the way Depth is, so a webcam's video sits on its own depth relief; best with
-// the plane shape). videoScatter turns and shifts each face's copy by a random amount in Faces
-// mode, so the facets don't all match.
-// videoTint recolours the video through the palette by brightness.
+// front, the way the Plane's Depth is, so a webcam's video sits on its own depth relief).
+// videoScatter turns and shifts each face's copy by a random amount in Faces mode, so the
+// facets don't all match. videoTint recolours the video through the palette by brightness.
 // @video texVideo Texture
 // @group Video texVideo
 // @param videoTex 0.8 0 1
@@ -59,21 +55,13 @@
 // @param videoScatter 0 0 1
 // @param videoTint 0 0 1
 
-// Depth: map a Webcam's Depth output into Depth to raise the mesh where things are near the
-// camera, along each vertex's normal. It's projected flat across the mesh: the plane shape
-// covers it edge-to-edge. depth is how far near things rise; depthCut hides
-// faces stretched across a depth edge, so a person stands free of the wall behind instead
-// of being joined to it by a skirt.
-// @video depthVideo Depth
-// @group Depth depthVideo
-// @param depth 2 0 6
-// @param depthCut 0.5 0 1
-
+// Layout must match MeshVertex in Render/Mesh.swift.
 struct MeshVertex {
     float4 position;     // w = per-face random
     float4 faceNormal;
     float4 smoothNormal;
     float4 bary;
+    float4 shape;        // shape coordinates; meaning depends on the mesh
 };
 
 struct Camera {
@@ -81,10 +69,27 @@ struct Camera {
     float4 position;
 };
 
-// The video input at uv, optionally recoloured through the palette.
-inline float3 videoColor(texture2d<float> vid, texture2d<float> pal, float2 uv, float tint) {
-    float3 v = vid.sample(linearRepeat, uv).rgb;
-    return mix(v, palette(pal, luma(v) * 0.9 + 0.05) * (0.4 + luma(v)), tint);
+// A geo's vertex in local space, before the shared surface displacement and motion.
+struct GeoPoint {
+    float3 pos;
+    float3 normal;     // displacement direction; smooth, so neighbouring faces stay joined
+    float3 faceN;      // the face's normal, for explode
+    float specU;       // where on the spectrum this point reads, 0..1
+    float2 frontUV;    // uv for the Front video mode
+    float3 depthPos;   // the point moved only by the Plane's depth, for depthCut
+    float cut;         // the Plane's depthCut while Depth is mapped; 0 elsewhere
+};
+
+inline GeoPoint geoPoint(float3 pos, float3 normal, float3 faceN, float specU) {
+    GeoPoint g;
+    g.pos = pos;
+    g.normal = normal;
+    g.faceN = faceN;
+    g.specU = specU;
+    g.frontUV = float2(0.5 - pos.z * 0.35, 0.5 - pos.y * 0.35);
+    g.depthPos = pos;
+    g.cut = 0;
+    return g;
 }
 
 struct GenOut {
@@ -93,59 +98,27 @@ struct GenOut {
     float3 bary;
     float faceRand [[flat]];
     float inst [[flat]];
-    // The mesh point moved by depth only, its face's normal and front-projected uv, for
-    // depthCut and the Front video mode.
     float3 depthPos;
     float3 faceN [[flat]];
     float2 frontUV;
+    float cut [[flat]];
 };
 
-vertex GenOut gen_vertex(uint vid [[vertex_id]],
-                         uint iid [[instance_id]],
-                         const device MeshVertex* verts [[buffer(0)]],
-                         constant Frame& f [[buffer(1)]],
-                         constant Params& p [[buffer(2)]],
-                         constant Camera& cam [[buffer(3)]],
-                         texture2d<float> spec [[texture(1)]],
-                         texture2d<float> depthVid [[texture(3)]]) {
-    MeshVertex v = verts[vid];
-    float ir = hash11(float(iid) * 17.13 + 1.7);
-    float t = f.time * p.noiseSpeed;
-    float3 pos = v.position.xyz;
+// The per-instance random a vertex's copy uses, 0..1.
+inline float instanceRand(uint iid) { return hash11(float(iid) * 17.13 + 1.7); }
 
-    float2 fuv;
-    if (v.smoothNormal.y > 0.9 && abs(pos.y) < 0.01) {
-        fuv = float2(0.5 - pos.z, 0.5 + pos.x);
-        pos.z *= p.width;
-        pos.x *= p.height;
-    } else {
-        fuv = float2(0.5 - pos.z / max(p.width, 0.1), 0.5 - pos.y / max(p.height, 0.1));
-    }
+inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& f, constant Params& p,
+                            constant Camera& cam, texture2d<float> spec) {
+    float ir = instanceRand(iid);
+    float3 pos = g.pos;
 
-    // Depth: near things (white) rise toward the camera.
-    if (hasInput(f, 3) && p.depth > 0) {
-        float d = luma(depthVid.sample(linearClamp, fuv, level(0)).rgb);
-        pos += v.smoothNormal.xyz * d * p.depth;
-    }
-    float3 depthPos = pos;
-
-    // Displace along the smooth normal so neighbouring faces stay joined.
-    float3 np = pos * p.noiseScale + float3(0, t, ir * 13.0);
+    float3 np = pos * p.noiseScale + float3(0, f.time * p.noiseSpeed, ir * 13.0);
     float n = fbm3(np);
     float sp = pow(abs(noise3(np * 2.7 + 5.0)), 6.0) * p.spikes * 4.0;
-    float u;
-    if (p.spectrumMode < 0.5)      u = saturate(v.position.y * 0.5 + 0.5);
-    else if (p.spectrumMode < 1.5) u = v.position.w;
-    else if (p.spectrumMode < 2.5) u = abs(atan2(v.position.z, v.position.x)) / M_PI_F;
-    else                           u = saturate(length(v.position.xz) * 2.0);
-    float sv = p.spectrum > 0 ? spectrum(spec, u * 0.85) : 0;
-    pos += v.smoothNormal.xyz * (n * p.noiseAmount + sp + sv * p.spectrum);
+    float sv = p.spectrum > 0 ? spectrum(spec, g.specU * 0.85) : 0;
+    pos += g.normal * (n * p.noiseAmount + sp + sv * p.spectrum);
 
-    pos.y *= p.stretch;
-    pos.xz = rot2(pos.y * p.twist) * pos.xz;
-
-    // Shatter: push each face out along its own normal.
-    pos += v.faceNormal.xyz * p.explode * (0.3 + v.position.w);
+    pos += g.faceN * p.explode * (0.3 + v.position.w);
     pos *= p.scale;
 
     // Each instance tumbles on its own random axis.
@@ -162,7 +135,6 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
         pos += float3(cos(phi) * r, y, sin(phi) * r) * p.spread;
     }
 
-    // Global spin around the vertical axis.
     pos.xz = rot2(f.time * p.spin) * pos.xz;
 
     GenOut o;
@@ -171,10 +143,17 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
     o.bary = v.bary.xyz;
     o.faceRand = v.position.w;
     o.inst = ir;
-    o.depthPos = depthPos;
-    o.faceN = v.faceNormal.xyz;
-    o.frontUV = fuv;
+    o.depthPos = g.depthPos;
+    o.faceN = g.faceN;
+    o.frontUV = g.frontUV;
+    o.cut = g.cut;
     return o;
+}
+
+// The video input at uv, optionally recoloured through the palette.
+inline float3 videoColor(texture2d<float> vid, texture2d<float> pal, float2 uv, float tint) {
+    float3 v = vid.sample(linearRepeat, uv).rgb;
+    return mix(v, palette(pal, luma(v) * 0.9 + 0.05) * (0.4 + luma(v)), tint);
 }
 
 fragment float4 gen_fragment(GenOut in [[stage_in]],
@@ -183,11 +162,11 @@ fragment float4 gen_fragment(GenOut in [[stage_in]],
                              constant Frame& f [[buffer(0)]],
                              constant Params& p [[buffer(1)]],
                              constant Camera& cam [[buffer(2)]]) {
-    // Depth edges: a face the depth stood up on its side spans a jump (a person's outline
-    // against the wall), so drop it. Compares the face as moved by depth with how it was.
-    if (p.depthCut > 0 && hasInput(f, 3)) {
+    // Depth edges (Plane): a face the depth stood up on its side spans a jump (a person's
+    // outline against the wall), so drop it. Compares the face as moved by depth with how it was.
+    if (in.cut > 0) {
         float3 dn = cross(dfdy(in.depthPos), dfdx(in.depthPos));
-        if (abs(dot(normalize(dn), in.faceN)) < p.depthCut * 0.7) discard_fragment();
+        if (abs(dot(normalize(dn), in.faceN)) < in.cut * 0.7) discard_fragment();
     }
 
     // Flat normal from screen-space derivatives: the low-poly look.
