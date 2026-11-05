@@ -123,7 +123,7 @@ struct DeviceBrowser: View {
         guard let scene = engine.current else { return false }
         switch tool.kind {
         case .input: return tool.name == "audio" ? scene.hasAudioInput : tool.name == "clock" ? scene.hasClock : false
-        case .camera: return scene.camera != nil
+        case .camera: return scene.cameraMotion?.rig.rawValue == tool.name
         case .palette: return scene.palette != nil
         case .generator: return scene.generators.contains { $0.type == tool.name }
         default: return false
@@ -133,7 +133,7 @@ struct DeviceBrowser: View {
     private func presetInUse(_ tool: Tool, _ preset: PresetInfo) -> Bool {
         guard let scene = engine.current else { return false }
         switch tool.kind {
-        case .camera: return scene.camera != nil && scene.cameraPreset == preset.id
+        case .camera: return scene.cameraMotion?.rig.rawValue == tool.name && scene.cameraPreset == preset.id
         case .palette: return scene.palette != nil && scene.palettePreset == preset.id
         case .generator: return scene.generators.contains { $0.type == tool.name && $0.preset == preset.id }
         case .input:
@@ -156,7 +156,7 @@ struct DeviceBrowser: View {
             default: return "waveform"
             }
         case .modulation: return "waveform.path"
-        case .camera: return "camera.viewfinder"
+        case .camera: return CameraRig(rawValue: tool.name)?.icon ?? "camera.viewfinder"
         case .palette: return "paintpalette"
         case .generator:
             switch tool.name {

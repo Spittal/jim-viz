@@ -119,21 +119,6 @@ final class HistoryPair {
     func swap() { Swift.swap(&current, &previous) }
 }
 
-/// The camera's integrated motion, so speed changes never jump. Each scene has its own, so
-/// two scenes in a crossfade each move at their own speed. Render thread only, after init.
-final class CameraMotion {
-    var orbit: Float = 0
-    var roll: Float = 0
-    /// Orbit position as 0...1 of a turn, for the camera's output.
-    var orbitPhase: Float { let x = orbit / (2 * .pi); return x - floor(x) }
-
-    /// Picks up where another scene's camera is, so switching scenes doesn't jump the orbit.
-    init(continuing old: CameraMotion? = nil) {
-        orbit = old?.orbit ?? 0
-        roll = old?.roll ?? 0
-    }
-}
-
 /// A palette's gradient on the GPU: a few 256×1 textures rotated on change, so the CPU never
 /// rewrites one the GPU may still be reading. Render thread only, after init.
 final class PaletteTextures {
@@ -877,23 +862,14 @@ final class Renderer {
         guard let c, let motion else {
             return CameraUniforms(viewProj: matrix_identity_float4x4, position: SIMD4(0, 0, 0, 1))
         }
-        let t = f.time
-        motion.orbit += c.live("orbitSpeed") * f.dt
-        motion.roll += c.live("rollSpeed") * 90 * f.dt
-        let orbit = motion.orbit
-        let dist = c.live("distance"), sway = c.live("sway"), shake = c.live("shake")
-        let swing = c.live("swing")
-        let angle = swing > 0 ? sin(orbit) * swing * .pi / 180 : orbit
-        var eye = SIMD3<Float>(cos(angle) * dist, c.live("height"), sin(angle) * dist)
-        eye += SIMD3(sin(t * 0.37), cos(t * 0.23) * 0.5, sin(t * 0.29 + 1)) * sway
-        eye += SIMD3(sin(t * 31.7), sin(t * 23.3 + 2), sin(t * 27.1 + 4)) * shake * 0.25
-        let target = SIMD3<Float>(0, c.live("lookY"), 0)
-        let rollRad = (c.live("roll") + motion.roll) * .pi / 180
-        let up = SIMD3<Float>(sin(rollRad), cos(rollRad), 0)
-        let view = simd_float4x4.lookAt(eye: eye, target: target, up: simd_normalize(up))
-        let proj = simd_float4x4.perspective(fovY: c.live("fov") * .pi / 180,
+        let pose = motion.advance(c, frame: f)
+        // Roll turns the view about its own axis, so it reads the same from every direction.
+        let forward = simd_normalize(pose.target - pose.eye)
+        let up: SIMD3<Float> = abs(forward.y) > 0.999 ? SIMD3(0, 0, -1) : SIMD3(0, 1, 0)
+        let view = simd_float4x4.rotationZ(pose.roll * .pi / 180) * simd_float4x4.lookAt(eye: pose.eye, target: pose.target, up: up)
+        let proj = simd_float4x4.perspective(fovY: pose.fov * .pi / 180,
                                              aspect: f.resolution.x / f.resolution.y, near: 0.05, far: 300)
-        return CameraUniforms(viewProj: proj * view, position: SIMD4(eye, 1))
+        return CameraUniforms(viewProj: proj * view, position: SIMD4(pose.eye, 1))
     }
 
     /// Writes the 256-step gradient, with the palette's inputs applied, into the palette's next

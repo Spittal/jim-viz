@@ -1,0 +1,10 @@
+{
+  "name": "Vertigo",
+  "params": {
+    "fov": 50,
+    "sweep": 35,
+    "sweepSpeed": 0.15,
+    "frame": 4,
+    "elevation": 10
+  }
+}

@@ -416,6 +416,85 @@ enum SelfCheck {
         return nil
     }
 
+    /// Every camera rig: its presets name only its own knobs, it moves sensibly from its
+    /// defaults, Static stays put, Orbit's snap lands on whole steps, Cutter cuts on a rising
+    /// trigger, and a scene with an unknown camera type fails to load.
+    private static func checkCameras(engine: Engine) -> String? {
+        var f = FrameUniforms()
+        f.resolution = SIMD2(1920, 1080)
+        f.dt = 1 / 60
+        func bank(_ rig: CameraRig, _ values: [String: Float] = [:]) -> ParamBank {
+            ParamBank(defs: rig.defs, values: values)
+        }
+        for rig in CameraRig.allCases {
+            let names = Set(rig.defs.map(\.name))
+            guard names.count == rig.defs.count else { return "\(rig.rawValue) has duplicate knobs" }
+            for id in engine.store.presetIDs(.camera, rig.rawValue) {
+                guard let preset = engine.store.preset(.camera, rig.rawValue, id) else { return "camera preset \(rig.rawValue)/\(id): JSON invalid" }
+                let unknown = Set(preset.params?.keys.map { $0 } ?? []).subtracting(names)
+                guard unknown.isEmpty else { return "camera preset \(rig.rawValue)/\(id) has unknown knobs \(unknown.sorted())" }
+            }
+            let motion = CameraMotion(rig), b = bank(rig)
+            for _ in 0..<240 {
+                let pose = motion.advance(b, frame: f)
+                guard simd_reduce_add(pose.eye + pose.target).isFinite, simd_distance(pose.eye, pose.target) > 0.01,
+                      pose.fov >= 5, pose.fov <= 160, pose.roll.isFinite else {
+                    return "\(rig.rawValue) camera pose invalid: \(pose)"
+                }
+            }
+            for o in motion.outputs { o.update(SignalFrame()) }
+        }
+
+        let still = CameraMotion(.still), stillBank = bank(.still)
+        let first = still.advance(stillBank, frame: f)
+        for _ in 0..<60 { _ = still.advance(stillBank, frame: f) }
+        guard still.advance(stillBank, frame: f).eye == first.eye else { return "static camera moved" }
+
+        let orbit = CameraMotion(.orbit), orbitBank = bank(.orbit, ["snap": 4, "sway": 0, "orbitSpeed": 0.7, "distance": 5, "height": 0])
+        for _ in 0..<100 {
+            let e = orbit.advance(orbitBank, frame: f).eye
+            guard min(abs(e.x), abs(e.z)) < 0.001, abs(max(abs(e.x), abs(e.z)) - 5) < 0.001 else { return "orbit snap off the steps: \(e)" }
+        }
+
+        let cutter = CameraMotion(.cutter), cutterBank = bank(.cutter, ["rate": 0, "shake": 0, "drift": 0])
+        guard let cutOut = cutter.outputs.first(where: { $0.key == "camera.cut" }) else { return "cutter has no cut output" }
+        let before = cutter.advance(cutterBank, frame: f).eye
+        cutterBank["trigger"]?.live = 1
+        let afterCut = cutter.advance(cutterBank, frame: f).eye
+        cutOut.update(SignalFrame())
+        guard afterCut != before, cutOut.value == 1 else { return "cutter didn't cut on the trigger" }
+        let held = cutter.advance(cutterBank, frame: f).eye
+        guard held == afterCut else { return "cutter cut again while the trigger stayed high" }
+        cutterBank["trigger"]?.live = 0
+        _ = cutter.advance(cutterBank, frame: f)
+        cutterBank["trigger"]?.live = 1
+        guard cutter.advance(cutterBank, frame: f).eye != held else { return "cutter didn't re-arm" }
+
+        // Scenes: a new camera type loads with its outputs, an unknown one is an error.
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-camera.json")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+            if let kaleido = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) { engine.load(kaleido, animated: false) }
+        }
+        func write(_ type: String) -> Bool {
+            let file = SceneFile(name: "Self-check Camera", inputs: [], modulators: [], camera: CameraSlot(type: type),
+                                 palette: PaletteSlot(colors: Tools.defaultPalette), generator: nil, effects: [], mappings: [])
+            guard (try? file.write(to: url)) != nil else { return false }
+            engine.store.markSeen(url)
+            engine.refreshSceneList()
+            return true
+        }
+        guard write("cutter") else { return "could not write the test scene" }
+        engine.load(url, animated: false)
+        guard engine.current?.cameraMotion?.rig == .cutter, engine.current?.outputs.contains(where: { $0.key == "camera.cut" }) == true,
+              engine.current?.mappings.isEmpty == true else { return "cutter scene didn't load with its output and no mappings" }
+        guard write("dolly") else { return "could not write the test scene" }
+        engine.load(url, animated: false)
+        guard engine.errors["camera"] != nil else { return "unknown camera type loaded without an error" }
+        return nil
+    }
+
     /// Nothing reaches a shader except through a mapping: the palette and spectrum are typed
     /// outputs, and unmapped means grey and still.
     private static func checkStreams(engine: Engine) -> String? {
@@ -1123,6 +1202,12 @@ enum SelfCheck {
             print("FAIL mappings: \(problem)"); failures += 1
         } else {
             print("ok   mappings (outputs, modulation, MIDI inputs, LFOs, paused devices, copy/paste, duplicate)")
+        }
+
+        if let problem = checkCameras(engine: engine) {
+            print("FAIL cameras: \(problem)"); failures += 1
+        } else {
+            print("ok   cameras (presets, poses, static, orbit snap, cutter trigger, unknown type fails)")
         }
 
         if let problem = checkStreams(engine: engine) {

@@ -1,0 +1,13 @@
+{
+  "name": "Skim",
+  "params": {
+    "speed": 4,
+    "length": 24,
+    "height": 0.3,
+    "weave": 0.3,
+    "weaveSpeed": 0.6,
+    "pitch": -3,
+    "fov": 95,
+    "shake": 0.1
+  }
+}

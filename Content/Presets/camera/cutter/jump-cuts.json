@@ -1,0 +1,8 @@
+{
+  "name": "Jump Cuts",
+  "params": {
+    "rate": 1,
+    "glide": 0,
+    "drift": 0.15
+  }
+}

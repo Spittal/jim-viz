@@ -1,0 +1,13 @@
+{
+  "name": "Cruise",
+  "params": {
+    "speed": 1.5,
+    "length": 20,
+    "height": 1.5,
+    "weave": 0.6,
+    "weaveSpeed": 0.2,
+    "bank": 0.4,
+    "pitch": -8,
+    "fov": 70
+  }
+}
