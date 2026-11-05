@@ -1,20 +1,22 @@
 import SwiftUI
 
-/// The global "Audio In" device: source picker, status, meters, spectrum and analysis knobs.
+/// The Audio In device: source picker, status, meters, spectrum and its analysis knobs.
+/// The source and channel pair are saved with the scene; the knobs are this scene's, and mappable.
 struct AudioDevice: View {
     @Environment(Engine.self) private var engine
+    let input: AudioInRuntime
     var accent: Color? = nil
 
     var body: some View {
-        let audio = engine.audio
+        let audio = input.capture
         DevicePanel(title: "Audio In", subtitle: nil, statusColor: color(audio.health), accent: accent, select: "audio",
                     onClose: { engine.removeInput("audio") }) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {
                     sourceMenu(audio)
-                    if audio.channelPairs > 1 {
-                        Picker("", selection: Binding(get: { audio.channelPair }, set: { audio.selectChannelPair($0) })) {
-                            ForEach(0..<audio.channelPairs, id: \.self) { i in
+                    if max(audio.channelPairs, audio.channelPair + 1) > 1 {
+                        Picker("", selection: Binding(get: { audio.channelPair }, set: { engine.setAudioChannelPair($0) })) {
+                            ForEach(0..<max(audio.channelPairs, audio.channelPair + 1), id: \.self) { i in
                                 Text("Ch \(i * 2 + 1)–\(i * 2 + 2)\(i == 0 ? " (master)" : "")").tag(i)
                             }
                         }
@@ -29,43 +31,32 @@ struct AudioDevice: View {
                         .lineLimit(3)
                         .frame(width: 168, height: 34, alignment: .topLeading)
                         .help(audio.statusText)
-                    SpectrumView(bins: engine.meters.spectrum)
+                    SpectrumView(bins: input.meters.spectrum)
                         .frame(width: 168, height: 40)
-                    Meters(meters: engine.meters)
+                    Meters(meters: input.meters)
                 }
-                // Analysis settings are global, not per scene, so they aren't mapping targets.
-                KnobGrid(params: engine.audioSettings.params)
+                KnobGrid(params: input.bank.params, prefix: "audio")
             }
         }
     }
 
     private func sourceMenu(_ audio: AudioCapture) -> some View {
-        Menu {
-            Button("Rekordbox") { audio.select(.rekordbox) }
-            Button("System Audio") { audio.select(.systemAudio) }
+        let captures = engine.audioCaptures
+        return Menu {
+            Button("Rekordbox") { engine.setAudioSource(.rekordbox) }
+            Button("System Audio") { engine.setAudioSource(.systemAudio) }
             Menu("Input Device") {
-                ForEach(audio.inputDevices) { d in
-                    Button(d.name) { audio.select(.input(uid: d.id)) }
+                ForEach(captures.inputDevices) { d in
+                    Button(d.name) { engine.setAudioSource(.input(uid: d.id)) }
                 }
             }
-            Divider()
-            Button("Off") { audio.select(.off) }
         } label: {
-            Text(label(audio)).font(.system(size: 11))
+            Text(captures.label(audio.source)).font(.system(size: 11))
         }
         .controlSize(.small)
         .frame(width: 168)
-        .onAppear { audio.refreshInputDevices() }
-        .help("Where jim-viz listens. Rekordbox taps its output directly; no virtual audio driver needed.")
-    }
-
-    private func label(_ audio: AudioCapture) -> String {
-        switch audio.source {
-        case .off: return "Off"
-        case .rekordbox: return "Rekordbox"
-        case .systemAudio: return "System Audio"
-        case .input(let uid): return audio.inputDevices.first { $0.id == uid }?.name ?? "Input"
-        }
+        .onAppear { captures.refreshInputDevices() }
+        .help("Where this scene listens. Rekordbox taps its output directly; no virtual audio driver needed.")
     }
 
     private func color(_ h: AudioCapture.Health) -> Color {

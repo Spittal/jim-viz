@@ -16,7 +16,7 @@ struct AudioFeatures {
     var active = false
 }
 
-/// Tunable analysis settings, shown as knobs in the Audio device.
+/// Audio In's knobs: analysis settings, per scene and mappable (`audio.<name>`).
 enum AudioParams {
     static let defs: [ParamDef] = [
         ParamDef(name: "range", defaultValue: 30, min: 6, max: 60, isInt: false),
@@ -89,6 +89,19 @@ final class AudioAnalyzer {
     }
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
+
+    /// Picks up another analyzer's auto-gain, envelopes and onset state, so a scene's Audio In
+    /// continues where the previous scene's left off instead of re-learning levels. Render thread.
+    func continueState(from other: AudioAnalyzer) {
+        peaks = other.peaks
+        envelopes = other.envelopes
+        spectrumPeak = other.spectrumPeak
+        spectrum = other.spectrum
+        onsets = other.onsets
+        onsetDt = other.onsetDt
+        features = other.features
+        lastWritten = other.lastWritten
+    }
 
     /// Analyzes the latest window. `settings` holds live values of `AudioParams`.
     func process(ring: SampleRing, dt: Float, settings: ParamBank?) {

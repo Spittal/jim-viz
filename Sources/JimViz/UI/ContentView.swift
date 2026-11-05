@@ -40,10 +40,10 @@ struct ContentView: View {
             }
             // Esc leaves map mode and MIDI learning.
             .background {
-                Button("") { engine.mapSource = nil; engine.learningMIDI = nil }
+                Button("") { engine.mapSource = nil; engine.current?.learnMIDI(nil) }
                     .keyboardShortcut(.escape, modifiers: [])
                     .opacity(0)
-                    .disabled(engine.mapSource == nil && engine.learningMIDI == nil)
+                    .disabled(engine.mapSource == nil && engine.current?.learningMIDI == nil)
             }
         }
         .navigationTitle(engine.current?.name ?? "jim-viz")

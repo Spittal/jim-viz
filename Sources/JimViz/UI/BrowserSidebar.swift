@@ -54,7 +54,7 @@ struct DeviceBrowser: View {
 
     @ViewBuilder
     private func section(_ title: String, _ kinds: [DeviceKind]) -> some View {
-        let tools = engine.tools.filter { kinds.contains($0.kind) }.map(withMIDIDevices).compactMap(filtered)
+        let tools = engine.tools.filter { kinds.contains($0.kind) }.map(withDevices).compactMap(filtered)
         if !tools.isEmpty {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .semibold))
@@ -72,11 +72,19 @@ struct DeviceBrowser: View {
         }
     }
 
-    /// MIDI Input and Webcam list connected devices where other tools list presets.
-    private func withMIDIDevices(_ tool: Tool) -> Tool {
-        guard tool.kind == .input, tool.name == "midi" || tool.name == "webcam" else { return tool }
-        let names = tool.name == "midi" ? engine.midi.devices.map(\.name) : engine.webcams.devices.map(\.name)
-        let devices = names.map { PresetInfo(id: $0, name: $0, colors: []) }
+    /// Audio In, MIDI Input and Webcam list their sources and connected devices where other
+    /// tools list presets.
+    private func withDevices(_ tool: Tool) -> Tool {
+        guard tool.kind == .input, ["audio", "midi", "webcam"].contains(tool.name) else { return tool }
+        let devices: [PresetInfo]
+        switch tool.name {
+        case "audio":
+            let captures = engine.audioCaptures
+            let sources = [AudioCapture.Source.rekordbox, .systemAudio] + captures.inputDevices.map { .input(uid: $0.id) }
+            devices = sources.map { PresetInfo(id: $0.key, name: captures.label($0), colors: []) }
+        case "midi": devices = engine.midi.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
+        default: devices = engine.webcams.devices.map { PresetInfo(id: $0.name, name: $0.name, colors: []) }
+        }
         return Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: devices)
     }
 
@@ -118,8 +126,11 @@ struct DeviceBrowser: View {
         case .palette: return scene.palette != nil && scene.palettePreset == preset.id
         case .generator: return scene.generators.contains { $0.type == tool.name && $0.preset == preset.id }
         case .input:
-            return tool.name == "midi" ? scene.midiInputs.contains { $0.device == preset.id }
-                                       : scene.webcams.contains { $0.device == preset.id }
+            switch tool.name {
+            case "audio": return scene.audioIn?.capture.source.key == preset.id
+            case "midi": return scene.midiInputs.contains { $0.device == preset.id }
+            default: return scene.webcams.contains { $0.device == preset.id }
+            }
         default: return false
         }
     }

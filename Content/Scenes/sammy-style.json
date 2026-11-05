@@ -93,6 +93,7 @@
   },
   "inputs" : [
     {
+      "device" : "system",
       "type" : "audio"
     },
     {

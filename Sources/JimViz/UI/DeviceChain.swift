@@ -19,14 +19,14 @@ struct DeviceChain: View {
                     // Inputs
                     ForEach(scene.inputs) { input in
                         switch input {
-                        case .audio:
-                            AudioDevice(accent: isReplacing(key: "audio", kind: .input))
+                        case .audio(let a):
+                            AudioDevice(input: a, accent: isReplacing(key: "audio", kind: .input))
                                 .contextMenu {
                                     Button("Remove", role: .destructive) { engine.removeInput("audio") }
                                 }
                                 .chainFrame("device:input:audio:audio")
-                        case .clock:
-                            ClockDevice(accent: isReplacing(key: "clock", kind: .input))
+                        case .clock(let c):
+                            ClockDevice(clock: c, accent: isReplacing(key: "clock", kind: .input))
                                 .contextMenu {
                                     Button("Remove", role: .destructive) { engine.removeInput("clock") }
                                 }

@@ -2,66 +2,14 @@ import Foundation
 import Observation
 import QuartzCore
 
-/// Per-frame snapshot of the global signals, built on the render thread.
-/// Tools turn these into their outputs.
+/// Per-frame timing, the same for every tool. It carries no tool's data: audio, the beat
+/// and colours reach other tools only through mappings.
 struct SignalFrame {
+    /// Seconds since rendering started, for shaders.
     var time: Float = 0
     var dt: Float = 1.0 / 60
-    /// Continuous beat count from the active clock.
-    var beat: Double = 0
-    var bpm: Float = 120
-    // Audio bands, normalised 0...1.
-    var bass: Float = 0
-    var mid: Float = 0
-    var high: Float = 0
-    var level: Float = 0
-    var kick: Float = 0
-    var snare: Float = 0
-    var hat: Float = 0
-
-    mutating func muteAudio() {
-        bass = 0; mid = 0; high = 0; level = 0; kick = 0; snare = 0; hat = 0
-    }
-}
-
-/// Internal tempo clock with tap tempo. Used for manual tempo and fallback.
-final class InternalClock {
-    /// Written on main, read on the render thread.
-    var bpm: Double = 124
-    private(set) var beat: Double = 0
-    private var taps: [CFTimeInterval] = []
-    private var pendingResync = false
-
-    func advance(dt: Double) {
-        if pendingResync {
-            beat = 0
-            pendingResync = false
-        }
-        beat += dt * bpm / 60
-    }
-
-    /// Snap to the first beat of the phrase (bar 1, beat 1) on the following frame.
-    func firstBeat() { pendingResync = true }
-
-    /// Snap to the first beat / downbeat.
-    func resync() { firstBeat() }
-
-    /// Follows another clock, so switching back to manual continues without a jump.
-    func sync(beat: Double, bpm: Double) {
-        self.beat = beat
-        if bpm > 0 { self.bpm = bpm }
-    }
-
-    func tap(at t: CFTimeInterval = CACurrentMediaTime()) {
-        if let last = taps.last, t - last > 2 { taps.removeAll() }
-        taps.append(t)
-        if taps.count > 8 { taps.removeFirst() }
-        guard taps.count >= 3 else { return }
-        let intervals = zip(taps.dropFirst(), taps).map { $0 - $1 }
-        let avg = intervals.reduce(0, +) / Double(intervals.count)
-        bpm = min(max(60 / avg, 40), 250)
-        resync()
-    }
+    /// Host time of the frame (`CACurrentMediaTime` scale), for the Clock's tempo tracking.
+    var now: CFTimeInterval = 0
 }
 
 // MARK: - Waves
@@ -98,8 +46,9 @@ enum Wave {
 
 /// A signal a tool produces (0...1 for unipolar, -1...1 for bipolar), that mappings
 /// can route to any knob in the scene.
-/// Keys: `audio.bass`, `clock.pulse`, `mod.lfo.out`, `camera.angle`.
-/// `compute` runs on the render thread once per frame; `value` is read by the UI meters.
+/// Keys: `audio.bass`, `clock.pulse`, `mod.lfo.out`, `camera.angle`. Each tool makes its own
+/// and computes it from its own state. `compute` runs on the render thread once per frame;
+/// `value` is read by the UI meters.
 final class OutputSignal: Identifiable {
     let key: String
     let name: String
@@ -130,43 +79,6 @@ func devicePath(_ key: String) -> String {
 }
 
 enum Outputs {
-    static func audio() -> [OutputSignal] {
-        let d = "Audio In"
-        return [
-            OutputSignal("audio.bass", "Bass", device: d) { $0.bass },
-            OutputSignal("audio.mid", "Mid", device: d) { $0.mid },
-            OutputSignal("audio.high", "High", device: d) { $0.high },
-            OutputSignal("audio.level", "Level", device: d) { $0.level },
-            OutputSignal("audio.kick", "Kick", device: d) { $0.kick },
-            OutputSignal("audio.snare", "Snare", device: d) { $0.snare },
-            OutputSignal("audio.hat", "Hat", device: d) { $0.hat },
-            intensity(d),
-        ]
-    }
-
-    /// How hard the music is going right now: loudness, bass and hit activity, smoothed over
-    /// about 1.5 seconds, so it rises into drops and falls away in breakdowns.
-    private static func intensity(_ device: String) -> OutputSignal {
-        final class State { var value: Float = 0 }
-        let state = State()
-        return OutputSignal("audio.intensity", "Intensity", device: device) { f in
-            let hits = min((f.kick + f.snare + f.hat) / 1.5, 1)
-            let target = min(f.level * 0.45 + f.bass * 0.3 + hits * 0.35, 1)
-            state.value += (target - state.value) * (1 - exp(-f.dt / 1.5))
-            return state.value
-        }
-    }
-
-    static func clock() -> [OutputSignal] {
-        let d = "Clock"
-        return [
-            OutputSignal("clock.pulse", "Pulse", device: d) { Wave.pulse($0.beat - floor($0.beat)) },
-            OutputSignal("clock.beat", "Beat Ramp", device: d) { Float($0.beat - floor($0.beat)) },
-            OutputSignal("clock.bar", "Bar Ramp", device: d) { let x = $0.beat / 4; return Float(x - floor(x)) },
-            OutputSignal("clock.phrase", "Phrase Ramp", device: d) { let x = $0.beat / 32; return Float(x - floor(x)) },
-        ]
-    }
-
     static func camera(_ motion: CameraMotion) -> [OutputSignal] {
         [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { _ in motion.orbitPhase }]
     }
@@ -260,6 +172,9 @@ final class MIDIInputRuntime: Identifiable {
     @ObservationIgnored private var held: [MIDIControl: Held] = [:]
     /// The last control that moved, for the device view.
     private(set) var lastControl: MIDIControl?
+    /// While on, each new control moved on its device is handed back by `handle` to be learned.
+    /// One input in a scene learns at a time (`RenderScene.learnMIDI`).
+    var isLearning = false
     @ObservationIgnored private(set) var lastActivity: CFAbsoluteTime = 0
 
     final class Held { var value: Float = 0 }
@@ -276,9 +191,18 @@ final class MIDIInputRuntime: Identifiable {
         }
         lastControl = old?.lastControl
         lastActivity = old?.lastActivity ?? 0
+        isLearning = old?.isLearning ?? false
     }
 
     func listens(to msg: MIDIMessage) -> Bool { device == nil || msg.device == device }
+
+    /// Main thread. Takes a message from its device. Returns the control and its value when
+    /// the control is new and this input is learning, for the scene to add as an output.
+    func handle(_ msg: MIDIMessage) -> (MIDIControl, Float)? {
+        guard listens(to: msg), let control = MIDIControl(msg) else { return nil }
+        let value = MIDIControl.value(msg)
+        return receive(control, value) || !isLearning ? nil : (control, value)
+    }
 
     /// Main thread. Returns false if the control isn't one of its outputs yet.
     @discardableResult

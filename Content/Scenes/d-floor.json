@@ -70,10 +70,10 @@
       "effect" : "palettemap",
       "id" : "palettemap",
       "params" : {
-        "bands" : 3,
-        "contrast" : 1,
+        "bands" : 2,
+        "contrast" : 3,
         "cycle" : 1,
-        "mix" : 0.1492676,
+        "mix" : 0.10397951,
         "offset" : 0
       }
     }
@@ -119,6 +119,7 @@
   },
   "inputs" : [
     {
+      "device" : "system",
       "type" : "audio"
     },
     {
@@ -127,7 +128,7 @@
     {
       "id" : "webcam",
       "params" : {
-        "bg" : 0.21621095,
+        "bg" : 0.27453613,
         "contrast" : 1,
         "depthContrast" : 2.6316345,
         "depthFloor" : 0.21658692,

@@ -73,9 +73,9 @@ struct MappingsInspector: View {
         if let source = engine.mapSource {
             banner("Click a knob to map \(Outputs.label(source, in: engine.current?.outputs ?? [])). Shift-click for several, Esc to finish.",
                    color: Theme.modulation) { engine.mapSource = nil }
-        } else if let key = engine.learningMIDI {
-            banner("Learning: move controls on \(engine.deviceName(key)) to add them as outputs. Esc to finish.",
-                   color: Theme.midi) { engine.learningMIDI = nil }
+        } else if let input = engine.current?.learningMIDI {
+            banner("Learning: move controls on \(engine.deviceName(input.key)) to add them as outputs. Esc to finish.",
+                   color: Theme.midi) { input.isLearning = false }
         }
     }
 

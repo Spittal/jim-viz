@@ -17,7 +17,8 @@ enum SelfCheck {
             if src.hasPrefix("pid:"), let pid = pid_t(src.dropFirst(4)) {
                 captureTest(source: .rekordbox, pid: pid)
             }
-            captureTest(source: AudioCapture.Source(key: src), pid: nil)
+            guard let source = AudioCapture.Source(key: src) else { print("unknown source \(src): rekordbox, system or input:<uid>"); exit(1) }
+            captureTest(source: source, pid: nil)
         }
         guard args.contains("--check") else { return }
         var snapshotDir: URL?
@@ -162,10 +163,10 @@ enum SelfCheck {
 
     /// Captures live audio for 8 seconds and prints status and levels twice a second.
     private static func captureTest(source: AudioCapture.Source, pid: pid_t?) -> Never {
-        let capture = AudioCapture(source: source)
+        let capture = AudioCapture(source: source, channelPair: 0)
         if let pid { capture.processFilter = { $0.processPID == pid } }
         let analyzer = AudioAnalyzer()
-        capture.start()
+        capture.setActive(true)
         var ticks = 0
         var kicks = 0
         var lastKick: Float = 0
@@ -219,11 +220,30 @@ enum SelfCheck {
             return "outputs missing: \(keys.sorted())"
         }
         // Audio In's Intensity climbs while the music is loud and busy.
-        guard let intensity = scene.outputs.first(where: { $0.key == "audio.intensity" }) else { return "no intensity output" }
-        var loud = SignalFrame()
+        guard let intensity = scene.outputs.first(where: { $0.key == "audio.intensity" }),
+              let audioIn = scene.audioIn else { return "no intensity output" }
+        var loud = AudioFeatures()
         loud.level = 1; loud.bass = 1; loud.kick = 1; loud.snare = 0.5
-        for _ in 0..<180 { scene.modulate(loud) }
+        audioIn.features = loud
+        for _ in 0..<180 { intensity.update(SignalFrame()) }
         guard intensity.value > 0.7 else { return "intensity didn't rise: \(intensity.value)" }
+
+        // Audio In's and the Clock's knobs belong to the scene and map like any other.
+        engine.addMapping(source: "mod.lfo.out", target: "audio.gate")
+        engine.addMapping(source: "audio.kick", target: "clock.latency")
+        guard let tools = engine.current, tools.mappings.filter({ $0.target == "audio.gate" || $0.target == "clock.latency" }).allSatisfy(\.isActive),
+              tools.audioIn?.bank["gate"]?.isModulated == true, tools.clock?.bank["latency"]?.isModulated == true else {
+            return "Audio In or Clock knobs not mappable"
+        }
+        tools.audioIn?.bank["sensitivity"]?.setBase(0.8)
+        tools.clock?.bank["minBPM"]?.setBase(100)
+        guard let saved = engine.currentSnapshot(),
+              saved.inputs.first(where: { $0.type == "audio" })?.params?["sensitivity"] == 0.8,
+              saved.inputs.first(where: { $0.type == "clock" })?.params?["minBPM"] == 100 else {
+            return "Audio In or Clock knobs not saved with the scene"
+        }
+        engine.removeMappings(target: "audio.gate")
+        engine.removeMappings(target: "clock.latency")
 
         // Palette inputs: hue turns red to green at +120°, brightness scales, and they're mappable.
         let green = PaletteParams.adjust(SIMD3(1, 0, 0)) { ["hue": 120, "saturation": 1, "brightness": 1][$0] ?? 1 }
@@ -235,8 +255,10 @@ enum SelfCheck {
         engine.apply(.palette, "palette", preset: "ice")
         guard engine.current?.palette?.bank["hue"]?.base == 30 else { return "palette inputs lost on a preset change" }
 
+        // Frames that take no time, at a beat set on the scene's own Clock.
         var f = SignalFrame()
-        f.beat = 8  // on a downbeat: pulse = 1, bar ramp = 0
+        f.dt = 0
+        engine.current?.clock?.manager.seek(beat: 8)  // on a downbeat: pulse = 1, bar ramp = 0
 
         // Modulation adds amount × signal × range on top of the knob.
         engine.addMapping(source: "clock.pulse", target: "camera.fov")
@@ -261,7 +283,7 @@ enum SelfCheck {
             MIDIMessage(channel: channel, command: .controlChange, data1: number, data2: value, timestamp: 0, device: device)
         }
         engine.apply(.input, "midi", preset: "DDJ-FLX4")
-        guard engine.learningMIDI == "midi.midi", engine.selectedDevice == "midi.midi" else { return "new MIDI input not learning" }
+        guard engine.current?.learningMIDI?.key == "midi.midi", engine.selectedDevice == "midi.midi" else { return "new MIDI input not learning" }
         engine.handleMIDI(cc(31, 127, device: "Other Controller"))
         guard engine.current?.midiInputs.first?.controls.isEmpty == true else { return "learned a control from another device" }
         engine.handleMIDI(cc(31, 127))
@@ -269,7 +291,8 @@ enum SelfCheck {
         guard engine.current?.midiInputs.first?.controls.count == 1,
               let fader = engine.current?.outputs.first(where: { $0.key == "midi.midi.cc-31-7" }),
               fader.name == "Crossfader" else { return "MIDI control not learned once as an output" }
-        engine.learningMIDI = nil
+        guard engine.current?.learningMIDI?.key == "midi.midi" else { return "MIDI input stopped learning after a control" }
+        engine.current?.learnMIDI(nil)
         engine.handleMIDI(cc(19, 127))
         guard engine.current?.midiInputs.first?.controls.count == 1 else { return "learned while not learning" }
         engine.addMapping(source: "midi.midi.cc-31-7", target: "generator.explode")
@@ -348,13 +371,13 @@ enum SelfCheck {
         }
         let depth = s2.modulators.first { $0.id == "lfo2" }!.bank["depth"]!.live
         // Synced 1-bar saw up: at beat 3 (3/4 cycle), bipolar output is +0.5 * depth.
-        f.beat = 3
+        s2.clock?.manager.seek(beat: 3)
         s2.modulate(f)
         s2.modulate(f)
         guard let out = s2.outputs.first(where: { $0.key == "mod.lfo2.out" }),
               abs(out.value - 0.5 * depth) < 0.02 else { return "LFO positive output wrong" }
         // At beat 1 (1/4 cycle), bipolar output is -0.5 * depth (negative swing).
-        f.beat = 1
+        s2.clock?.manager.seek(beat: 1)
         s2.modulate(f)
         s2.modulate(f)
         guard abs(out.value - (-0.5 * depth)) < 0.02 else { return "LFO negative bipolar output wrong" }
@@ -580,6 +603,78 @@ enum SelfCheck {
             testClock.advance(now: t, dt: 1.0 / 60, hearsAudio: true)
         }
         guard testClock.audioTempo.downbeatConfidence > 0.2 else { return "4/4 downbeat was not detected" }
+        return nil
+    }
+
+    /// Every scene owns its tools: Audio In analyses with its own knobs and Clock keeps its own
+    /// beat, nothing is broadcast to scenes without them, a switch continues levels and the
+    /// beat, and hardware stays off without a device that uses it.
+    private static func checkEncapsulation(engine: Engine) -> String? {
+        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }),
+              let urlB = engine.sceneURLs.first(where: { $0.lastPathComponent == "sammy-style.json" }),
+              let fileB = try? SceneFile.load(urlB) else { return "test scenes missing" }
+        engine.load(urlA, animated: false)
+        defer { engine.load(urlA, animated: false) }
+        guard let a = engine.current, let audioA = a.audioIn, let clockA = a.clock else { return "test scene needs Audio In and Clock" }
+
+        // Switching: the incoming scene has its own Audio In and Clock, which pick up the
+        // outgoing scene's beat on their first frame.
+        var still = SignalFrame()
+        still.dt = 0
+        clockA.manager.seek(beat: 17.5)
+        guard let b = engine.build(fileB, reuse: nil), let audioB = b.audioIn, let clockB = b.clock else { return "second scene needs Audio In and Clock" }
+        guard audioA !== audioB, audioA.analyzer !== audioB.analyzer, audioA.bank !== audioB.bank,
+              audioA.spectrum !== audioB.spectrum, clockA.manager !== clockB.manager else { return "scenes share Audio In or Clock state" }
+        b.modulate(still)
+        guard abs(clockB.beat - 17.5) < 1e-6 else { return "incoming Clock didn't continue the beat: \(clockB.beat)" }
+        clockB.manager.seek(beat: 2)
+        a.modulate(still)
+        guard abs(clockA.beat - 17.5) < 1e-6 else { return "one scene's Clock moved another's" }
+
+        // Audio In's source is the scene's: scenes on the same source share one capture, another
+        // source or channel pair gets its own, and a scene must name its source.
+        guard audioA.capture === audioB.capture, audioA.capture.source == .systemAudio else { return "scenes on one source don't share its capture" }
+        engine.setAudioSource(.rekordbox)
+        guard let rb = engine.current?.audioIn, rb.capture.source == .rekordbox, rb.capture !== audioA.capture,
+              rb.analyzer !== audioA.analyzer,
+              engine.currentSnapshot()?.inputs.first(where: { $0.type == "audio" })?.device == "rekordbox" else {
+            return "Audio In source not switched and saved with the scene"
+        }
+        engine.setAudioChannelPair(1)
+        guard let pair = engine.current?.audioIn?.capture, pair.channelPair == 1, pair !== rb.capture,
+              engine.currentSnapshot()?.inputs.first(where: { $0.type == "audio" })?.channelPair == 1 else {
+            return "Audio In channel pair not switched and saved with the scene"
+        }
+        engine.setAudioSource(.systemAudio)
+        guard engine.current?.audioIn?.capture === audioA.capture else { return "switching back didn't reuse the source's capture" }
+        for device in [nil, "bogus"] as [String?] {
+            let file = SceneFile(name: "x", inputs: [InputSpec(type: "audio", device: device)], modulators: [],
+                                 camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+            guard engine.build(file, reuse: nil) == nil, engine.errors["input"]?.hasPrefix("Audio In needs a device") == true else {
+                return "Audio In built without a valid source (\(device ?? "none"))"
+            }
+        }
+        engine.load(urlA, animated: false)
+        guard let a2 = engine.current, let audioA2 = a2.audioIn, let clockA2 = a2.clock else { return "test scene did not reload" }
+
+        // A chain edit keeps the same analysis and beat running.
+        engine.apply(.effect, "glow")
+        guard let edited = engine.current, edited.audioIn?.analyzer === audioA2.analyzer, edited.clock?.manager === clockA2.manager else {
+            return "a chain edit restarted Audio In or Clock"
+        }
+
+        // Without Audio In or Clock there are no audio or clock outputs, and LFOs run free.
+        engine.addMapping(source: StreamOutput.clockSyncKey, target: "mod.lfo.sync")
+        guard engine.current?.modulators.first?.isSynced == true else { return "LFO did not sync" }
+        engine.removeInput("audio")
+        engine.removeInput("clock")
+        guard let bare = engine.current, bare.audioIn == nil, bare.clock == nil,
+              !bare.outputs.contains(where: { $0.key.hasPrefix("audio.") || $0.key.hasPrefix("clock.") }),
+              !bare.streamOutputs.contains(where: { $0.key.hasPrefix("audio.") || $0.key.hasPrefix("clock.") }),
+              bare.modulators.allSatisfy({ !$0.isSynced }) else { return "audio or clock signals reach a scene without them" }
+
+        // Headless, no hardware runs.
+        guard engine.audioCaptures.all.allSatisfy({ !$0.isActive }), !engine.midi.isActive else { return "hardware started without a device on screen" }
         return nil
     }
 
@@ -838,7 +933,7 @@ enum SelfCheck {
             let temp = engine.store.scenesDir.appendingPathComponent("selfcheck-depth.json")
             let sceneFile = SceneFile(
                 name: "Self-Check Depth",
-                inputs: [InputSpec(type: "audio"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
+                inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
                 modulators: [],
                 camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
                 palette: PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
@@ -1012,6 +1107,12 @@ enum SelfCheck {
             print("ok   clock (follows audio only through Audio Out → Clock · Audio, typed, starts unmapped)")
         }
 
+        if let problem = checkEncapsulation(engine: engine) {
+            print("FAIL encapsulation: \(problem)"); failures += 1
+        } else {
+            print("ok   encapsulation (scenes own their Audio In and Clock, beat continues across a switch, no broadcast, hardware idle)")
+        }
+
         if let problem = checkComposition(engine: engine) {
             print("FAIL composition: \(problem)"); failures += 1
         } else {
@@ -1063,26 +1164,22 @@ extension Engine {
     }
 
     /// Renders frames at 60fps simulated time and returns the average GPU time per frame.
+    /// The scene's tools run as they would live: Audio In analyses `offlineAudio` (written into
+    /// the capture's ring, which is silent without it), the Clock advances, then the mappings.
     func renderOffscreen(_ scene: RenderScene, frames: Int, snapshot: URL?) -> Double {
         var gpu = 0.0
-        var signals = SignalFrame()
-        let ring = SampleRing()
-        let analyzer = AudioAnalyzer()
+        // Scenes on the same source share its capture, so the audio goes into that one ring.
+        let ring = scene.audioIn?.capture.ring
+        if offlineAudio == nil { ring?.reset() }
         var audioPos = 0
         for i in 0..<frames {
-            signals.time = Float(i) / 60
-            signals.dt = 1 / 60
-            signals.beat = Double(i) / 60 * 2
+            offlineTime += 1.0 / 60
+            let signals = SignalFrame(time: Float(i) / 60, dt: 1 / 60, now: offlineTime)
             if let (samples, rate) = offlineAudio {
-                ring.setSampleRate(rate)
+                ring?.setSampleRate(rate)
                 let n = Int(rate / 60)
-                ring.write(frames: n) { k in samples[(audioPos + k) % samples.count] }
+                ring?.write(frames: n) { k in samples[(audioPos + k) % samples.count] }
                 audioPos += n
-                analyzer.process(ring: ring, dt: 1 / 60, settings: audioSettings)
-                renderer.updateSpectrum(analyzer.spectrum)
-                let a = analyzer.features
-                signals.bass = a.bass; signals.mid = a.mid; signals.high = a.high; signals.level = a.level
-                signals.kick = a.kick; signals.snare = a.snare; signals.hat = a.hat
             }
             scene.modulate(signals)
             var f = FrameUniforms()
@@ -1100,10 +1197,10 @@ extension Engine {
 
     /// Renders crossfade frames between two scenes at a fixed progress, into `renderer.history`.
     func renderTransition(from a: RenderScene, to b: RenderScene, progress: Float, frames: Int) {
+        if offlineAudio == nil { for s in [a, b] { s.audioIn?.capture.ring.reset() } }
         for i in 0..<frames {
-            var signals = SignalFrame()
-            signals.time = Float(i) / 60
-            signals.dt = 1 / 60
+            offlineTime += 1.0 / 60
+            let signals = SignalFrame(time: Float(i) / 60, dt: 1 / 60, now: offlineTime)
             a.modulate(signals)
             b.modulate(signals)
             var f = FrameUniforms()

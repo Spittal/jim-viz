@@ -2,36 +2,38 @@ import CoreAudio
 import Foundation
 import Observation
 
-/// Captures audio into a mono ring buffer from Rekordbox (via a Core Audio process tap),
-/// all system audio, or an input device. A once-a-second monitor reconnects when Rekordbox
-/// starts, quits, or switches output device.
+/// Captures one source into a mono ring buffer: Rekordbox (via a Core Audio process tap),
+/// all system audio, or an input device, on one channel pair. A once-a-second monitor
+/// reconnects when Rekordbox starts, quits, or switches output device.
 ///
 /// When Rekordbox plays to a multichannel interface like the DDJ-FLX4, the tap captures that
 /// device's stream directly so only the chosen channel pair (master, by default) is analysed
 /// and the headphone cue is ignored.
+///
+/// The source and pair are fixed; `AudioCaptures` keeps one per source in use, shared by every
+/// scene's Audio In that listens to it.
 @Observable
 final class AudioCapture {
     enum Source: Hashable {
-        case off
         case rekordbox
         case systemAudio
         case input(uid: String)
 
+        /// As saved in a scene's Audio In `device`: `rekordbox`, `system` or `input:<uid>`.
         var key: String {
             switch self {
-            case .off: return "off"
             case .rekordbox: return "rekordbox"
             case .systemAudio: return "system"
             case .input(let uid): return "input:\(uid)"
             }
         }
 
-        init(key: String) {
+        init?(key: String) {
             switch key {
-            case "off": self = .off
+            case "rekordbox": self = .rekordbox
             case "system": self = .systemAudio
-            case let k where k.hasPrefix("input:"): self = .input(uid: String(k.dropFirst(6)))
-            default: self = .rekordbox
+            case let k where k.hasPrefix("input:") && k.count > 6: self = .input(uid: String(k.dropFirst(6)))
+            default: return nil
             }
         }
     }
@@ -43,13 +45,13 @@ final class AudioCapture {
         let name: String
     }
 
-    private(set) var source: Source
+    let source: Source
+    /// Which stereo pair of the tapped device or input to listen to (0 is channels 1–2).
+    let channelPair: Int
     private(set) var health: Health = .off
-    private(set) var statusText = "Audio off"
+    private(set) var statusText = "Not in use"
     /// Number of selectable stereo pairs on the tapped device (1 for a stereo mixdown).
     private(set) var channelPairs = 1
-    private(set) var channelPair: Int
-    private(set) var inputDevices: [InputDevice] = []
 
     @ObservationIgnored let ring = SampleRing()
     @ObservationIgnored private let ioQueue = DispatchQueue(label: "jim-viz.audio", qos: .userInteractive)
@@ -69,38 +71,32 @@ final class AudioCapture {
         $0.processBundleID?.lowercased().hasPrefix(AudioCapture.rekordboxBundlePrefix) == true
     }
 
-    /// Pass `source` to override the saved choice without persisting it (used by tests).
-    init(source override: Source? = nil) {
-        let d = UserDefaults.standard
-        source = override ?? Source(key: d.string(forKey: "audio.source") ?? "rekordbox")
-        channelPair = override == nil ? d.integer(forKey: "audio.channelPair") : 0
+    init(source: Source, channelPair: Int) {
+        self.source = source
+        self.channelPair = channelPair
     }
 
-    func start() {
-        refreshInputDevices()
-        reconcile()
-        monitor = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.reconcile() }
+    /// True while a scene on screen listens to it. Capture runs only then.
+    private(set) var isActive = false
+
+    /// Starts capturing (and the reconnect monitor) or stops and releases the tap.
+    func setActive(_ on: Bool) {
+        guard on != isActive else { return }
+        isActive = on
+        if on {
+            reconcile()
+            monitor = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.reconcile() }
+        } else {
+            monitor?.invalidate()
+            monitor = nil
+            teardown()
+            set(.off, "Not in use")
+        }
     }
 
-    func select(_ s: Source) {
-        guard s != source else { return }
-        source = s
-        UserDefaults.standard.set(s.key, forKey: "audio.source")
-        channelPair = 0
-        teardown()
-        reconcile()
-    }
-
-    func selectChannelPair(_ pair: Int) {
-        guard pair != channelPair else { return }
-        channelPair = pair
-        UserDefaults.standard.set(pair, forKey: "audio.channelPair")
-        teardown()
-        reconcile()
-    }
-
-    func refreshInputDevices() {
-        inputDevices = AudioObjectID.allDevices.compactMap { dev in
+    /// Every input device with input channels, except jim-viz's own aggregate devices.
+    static func inputDevices() -> [InputDevice] {
+        AudioObjectID.allDevices.compactMap { dev in
             guard dev.channelCount(scope: kAudioObjectPropertyScopeInput) > 0,
                   let uid = dev.deviceUID, let name = dev.deviceName,
                   !uid.hasPrefix("jim-viz") else { return nil }
@@ -113,9 +109,6 @@ final class AudioCapture {
     /// Works out what should be tapped right now and rebuilds if it changed.
     private func reconcile() {
         switch source {
-        case .off:
-            teardown()
-            set(.off, "Audio off")
         case .rekordbox:
             reconcileRekordbox()
         case .systemAudio:
@@ -339,4 +332,45 @@ final class AudioCapture {
     }
 
     deinit { teardown() }
+}
+
+/// Every audio source the scenes listen to: one capture per source and channel pair, shared
+/// by the scenes that use it. Captures run only while a scene on screen uses them.
+@Observable
+final class AudioCaptures {
+    /// Input devices, for the source menu and the browser.
+    private(set) var inputDevices: [AudioCapture.InputDevice] = []
+    @ObservationIgnored private var captures: [String: AudioCapture] = [:]
+
+    /// The capture for a source and pair, made on first use.
+    func capture(_ source: AudioCapture.Source, channelPair: Int) -> AudioCapture {
+        let key = "\(source.key)#\(channelPair)"
+        if let c = captures[key] { return c }
+        let c = AudioCapture(source: source, channelPair: channelPair)
+        captures[key] = c
+        return c
+    }
+
+    /// Every capture made so far, running or not.
+    var all: [AudioCapture] { Array(captures.values) }
+
+    /// Runs exactly these captures.
+    func activate(_ active: [AudioCapture]) {
+        let ids = Set(active.map(ObjectIdentifier.init))
+        for c in captures.values { c.setActive(ids.contains(ObjectIdentifier(c))) }
+    }
+
+    func refreshInputDevices() {
+        let found = AudioCapture.inputDevices()
+        if found != inputDevices { inputDevices = found }
+    }
+
+    /// "Rekordbox", "System Audio", or the input device's name.
+    func label(_ source: AudioCapture.Source) -> String {
+        switch source {
+        case .rekordbox: return "Rekordbox"
+        case .systemAudio: return "System Audio"
+        case .input(let uid): return inputDevices.first { $0.id == uid }?.name ?? "Input (not connected)"
+        }
+    }
 }

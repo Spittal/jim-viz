@@ -2,13 +2,14 @@ import SwiftUI
 
 /// The Clock input device: tempo, tap, beat position and audio-following. Placed in the
 /// scene's input chain. It follows audio only when Audio In's Audio Out is mapped into its
-/// Audio input.
+/// Audio input. Its knobs (latency, tempo range) are in the settings popover.
 struct ClockDevice: View {
     @Environment(Engine.self) private var engine
+    let clock: ClockRuntime
     var accent: Color? = nil
 
     var body: some View {
-        @Bindable var state = engine.clockState
+        let state = clock
         DevicePanel(title: "Clock", subtitle: state.active.label, statusColor: dotColor(state),
                     accent: accent,
                     select: "clock", settings: AnyView(ClockSettings(state: state)),
@@ -49,14 +50,14 @@ struct ClockDevice: View {
         }
     }
 
-    private func status(_ state: ClockState) -> String {
+    private func status(_ state: ClockRuntime) -> String {
         if !state.hearsAudio { return "Manual tempo" }
         if state.audioBPM == 0 { return "Listening for a beat" }
         let conf = Int(state.audioConfidence * 100)
         return String(format: "Audio %.1f BPM, %d%%", state.audioBPM, conf)
     }
 
-    private func dotColor(_ state: ClockState) -> Color {
+    private func dotColor(_ state: ClockRuntime) -> Color {
         switch state.active {
         case .audio: return Theme.beatOn
         case .manual: return state.hearsAudio ? Theme.accent : Theme.text
@@ -78,9 +79,10 @@ struct BeatLights: View {
     }
 }
 
-/// The clock's less-used settings, in a popover from the Clock device.
+/// The clock's less-used settings, in a popover from the Clock device: source status and its
+/// knobs, which belong to the scene's Clock and can be mapped like any other.
 struct ClockSettings: View {
-    @Bindable var state: ClockState
+    let state: ClockRuntime
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -91,24 +93,9 @@ struct ClockSettings: View {
 
             Divider()
 
-            LabeledContent("Latency") {
-                HStack {
-                    Slider(value: $state.latencyMs, in: -100...250, step: 5).frame(width: 160)
-                    Text("\(Int(state.latencyMs)) ms").monospacedDigit().frame(width: 52, alignment: .trailing)
-                }
-            }
-            .help("Shifts the visuals earlier to make up for projector and audio delay. Increase it if visuals land after the kick.")
-
-            LabeledContent("Audio tempo range") {
-                HStack(spacing: 4) {
-                    TextField("", value: $state.minBPM, format: .number).frame(width: 44)
-                    Text("–")
-                    TextField("", value: $state.maxBPM, format: .number).frame(width: 44)
-                    Text("BPM").foregroundStyle(.secondary)
-                }
-                .textFieldStyle(.roundedBorder)
-            }
-            .help("Keep this to one octave (max = 2 × min) so half- and double-time can't be confused.")
+            KnobGrid(params: state.bank.params, prefix: "clock")
+            Text("Latency (ms) shifts the visuals earlier to make up for projector and audio delay: increase it if visuals land after the kick. Keep the audio tempo range to one octave (max = 2 × min) so half- and double-time can't be confused.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 360)

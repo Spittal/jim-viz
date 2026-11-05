@@ -194,7 +194,7 @@ struct MIDIInputDevice: View {
     var accent: Color? = nil
 
     var body: some View {
-        let learning = engine.learningMIDI == input.key
+        let learning = input.isLearning
         let connected = input.device.map { name in engine.midi.devices.contains { $0.name == name } } ?? !engine.midi.devices.isEmpty
         DevicePanel(title: "MIDI Input", subtitle: input.title, statusColor: connected ? Theme.beatOn : Theme.knobTrack,
                     accent: accent,
@@ -211,7 +211,10 @@ struct MIDIInputDevice: View {
                 }
                 .controlSize(.small)
                 .help(connected ? "Which controller to listen to" : "Not connected. Plug it in, or pick another device.")
-                Toggle(isOn: Binding(get: { learning }, set: { engine.learningMIDI = $0 ? input.key : nil })) {
+                Toggle(isOn: Binding(get: { learning }, set: { on in
+                    engine.current?.learnMIDI(on ? input.key : nil)
+                    if on { engine.selectDevice(input.key); engine.showInspector = true }
+                })) {
                     Label(learning ? "Learning…" : "Learn Controls", systemImage: "dot.radiowaves.left.and.right")
                         .font(.system(size: 11, weight: .medium))
                         .frame(maxWidth: .infinity)

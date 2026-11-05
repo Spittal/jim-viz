@@ -23,8 +23,11 @@ final class MIDIEngine {
     @ObservationIgnored private let queue = DispatchQueue(label: "jim-viz.midi", qos: .userInteractive)
     @ObservationIgnored private var connectedSources: Set<MIDIEndpointRef> = []
 
-    /// Global message listeners (such as MIDI learn or live monitor).
+    /// Receives every message, on main. The engine routes them to the scene's MIDI inputs.
     @ObservationIgnored var onMessage: ((MIDIMessage) -> Void)?
+    /// True while a scene on screen has a MIDI Input. Sources are connected only then;
+    /// devices are listed either way, for the browser and device menus.
+    private(set) var isActive = false
 
     init() {
         setupClient()
@@ -34,7 +37,16 @@ final class MIDIEngine {
         stop()
     }
 
-    func start() {
+    /// Connects every source, or disconnects them all. The engine turns it on only while a
+    /// scene on screen has a MIDI Input.
+    func setActive(_ on: Bool) {
+        guard on != isActive else { return }
+        isActive = on
+        if !on {
+            for src in connectedSources { MIDIPortDisconnectSource(inPort, src) }
+            connectedSources.removeAll()
+            isConnected = false
+        }
         refreshEndpoints()
     }
 
@@ -125,7 +137,7 @@ final class MIDIEngine {
             let src = MIDIGetSource(i)
             var offline: Int32 = 0
             MIDIObjectGetIntegerProperty(src, kMIDIPropertyOffline, &offline)
-            guard offline == 0 else { continue }
+            guard offline == 0, isActive else { continue }
 
             if !connectedSources.contains(src) {
                 // The endpoint rides along as the connection's refCon, so messages know their device.

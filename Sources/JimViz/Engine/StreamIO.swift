@@ -36,32 +36,34 @@ enum IOKind: String {
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
-/// (`audio.spectrum`) and audio out (`audio.out`), or the palette's gradient (`palette.colors`).
+/// (`audio.spectrum`) and audio out (`audio.out`), the palette's gradient (`palette.colors`) or
+/// the Clock's sync (`clock.sync`). Each tool makes its own.
 final class StreamOutput: Identifiable {
     let key: String
     let name: String
     /// The device it belongs to, for display.
     let device: String
     let kind: IOKind
-    /// Video: written by the renderer each frame. Spectrum and palette textures change every
-    /// frame, so the renderer supplies those when it binds them.
+    /// Video: a texture the renderer writes each frame.
     let texture: MTLTexture?
+    /// Streams whose texture rotates (spectrum, palette): the tool's current one. Render thread.
+    private let live: (() -> MTLTexture)?
     var id: String { key }
     var deviceKey: String { devicePath(key) }
 
-    init(_ key: String, _ name: String, device: String, kind: IOKind = .video, texture: MTLTexture? = nil) {
+    init(_ key: String, _ name: String, device: String, kind: IOKind = .video, texture: MTLTexture? = nil,
+         live: (() -> MTLTexture)? = nil) {
         self.key = key; self.name = name; self.device = device; self.kind = kind; self.texture = texture
+        self.live = live
     }
+
+    /// The texture to bind this frame, if the stream is a picture.
+    var currentTexture: MTLTexture? { live?() ?? texture }
 
     static let spectrumKey = "audio.spectrum"
     static let paletteKey = "palette.colors"
     static let audioKey = "audio.out"
     static let clockSyncKey = "clock.sync"
-
-    static func spectrum() -> StreamOutput { StreamOutput(spectrumKey, "Spectrum", device: "Audio In", kind: .spectrum) }
-    static func audio() -> StreamOutput { StreamOutput(audioKey, "Audio Out", device: "Audio In", kind: .audio) }
-    static func palette() -> StreamOutput { StreamOutput(paletteKey, "Colours", device: "Palette", kind: .palette) }
-    static func clockSync() -> StreamOutput { StreamOutput(clockSyncKey, "Sync", device: "Clock", kind: .clock) }
 
     /// A stream output's kind from its key alone, for when its device isn't in the scene.
     static func kind(ofKey key: String) -> IOKind? {

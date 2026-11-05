@@ -12,7 +12,8 @@ enum ClockSourceKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Chooses the beat clock and produces one smooth, continuous beat for the visuals.
+/// The Clock tool's beat engine: chooses the beat source and produces one smooth, continuous
+/// beat. Each scene's `ClockRuntime` owns one.
 ///
 /// When audio is mapped into the Clock's Audio input (Audio In · Audio Out), it tracks the
 /// tempo and downbeat of the audio, falling back to the manual clock when audio is quiet,
@@ -24,6 +25,7 @@ final class ClockManager {
     let audioTempo = AudioTempo()
 
     /// Shifts the visuals earlier (positive) to compensate for projector and audio latency.
+    /// Set each frame from the Clock's `latency` knob.
     var latencyMs: Double = 0
 
     // Output, written on the render thread.
@@ -37,6 +39,20 @@ final class ClockManager {
 
     init() {
         bpm = manual.bpm
+    }
+
+    /// Takes over another clock's beat and tempo, so a scene's Clock continues where the
+    /// previous scene's was. Render thread.
+    func continueBeat(from other: ClockManager) {
+        beat = other.beat
+        bpm = other.bpm
+        manual.sync(beat: other.manual.beat, bpm: other.manual.bpm)
+    }
+
+    /// Jumps to a beat, keeping the tempo. Render thread (the self-check calls it directly).
+    func seek(beat b: Double) {
+        beat = b
+        manual.sync(beat: b, bpm: manual.bpm)
     }
 
     /// Snap to the first beat of the phrase (bar 1, beat 1) on the next frame.
@@ -121,5 +137,45 @@ final class ClockManager {
     func tap() -> Bool {
         manual.tap()
         return true
+    }
+}
+
+/// Internal tempo clock with tap tempo. Used for manual tempo and fallback.
+final class InternalClock {
+    /// Written on main, read on the render thread.
+    var bpm: Double = 124
+    private(set) var beat: Double = 0
+    private var taps: [CFTimeInterval] = []
+    private var pendingResync = false
+
+    func advance(dt: Double) {
+        if pendingResync {
+            beat = 0
+            pendingResync = false
+        }
+        beat += dt * bpm / 60
+    }
+
+    /// Snap to the first beat of the phrase (bar 1, beat 1) on the following frame.
+    func firstBeat() { pendingResync = true }
+
+    /// Snap to the first beat / downbeat.
+    func resync() { firstBeat() }
+
+    /// Follows another clock, so switching back to manual continues without a jump.
+    func sync(beat: Double, bpm: Double) {
+        self.beat = beat
+        if bpm > 0 { self.bpm = bpm }
+    }
+
+    func tap(at t: CFTimeInterval = CACurrentMediaTime()) {
+        if let last = taps.last, t - last > 2 { taps.removeAll() }
+        taps.append(t)
+        if taps.count > 8 { taps.removeFirst() }
+        guard taps.count >= 3 else { return }
+        let intervals = zip(taps.dropFirst(), taps).map { $0 - $1 }
+        let avg = intervals.reduce(0, +) / Double(intervals.count)
+        bpm = min(max(60 / avg, 40), 250)
+        resync()
     }
 }

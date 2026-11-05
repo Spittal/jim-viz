@@ -93,8 +93,11 @@ struct InputSpec: Codable, Equatable {
     /// MIDI inputs and webcams: unique id within the scene. `midi.<id>` and `webcam.<id>` in
     /// mapping keys (`midi.<id>.cc-31-7`, `webcam.<id>.motion`, `webcam.<id>.<param>`).
     var id: String?
+    /// Audio In: the source, required: `rekordbox`, `system` or `input:<device uid>`.
     /// MIDI and webcam: the device by name. Leave out for every MIDI device, or the default camera.
     var device: String?
+    /// Audio In: which stereo pair of the source to listen to, 0 (channels 1–2) when left out.
+    var channelPair: Int?
     /// MIDI: learned controls, which are its outputs (`cc-31-7`, `note-11-1`, `pb-0-1`).
     var controls: [String]?
     var preset: String?

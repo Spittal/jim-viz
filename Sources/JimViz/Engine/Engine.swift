@@ -10,18 +10,18 @@ final class Engine {
     @ObservationIgnored let renderer: Renderer
     @ObservationIgnored let loop: RenderLoop
     @ObservationIgnored let store = ContentStore()
-    @ObservationIgnored let clock = ClockManager()
-    let clockState: ClockState
+    // Hardware, shared by every scene's devices and running only while a scene on screen
+    // uses it (`activateHardware`). Tools in the chain own their settings and analysis.
+    /// The audio sources Audio Ins listen to, one capture per source in use.
+    let audioCaptures = AudioCaptures()
+    /// MIDI controllers, for MIDI Inputs.
     let midi = MIDIEngine()
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
     @ObservationIgnored private let compiler: ShaderCompiler
     @ObservationIgnored let output: OutputController
-    @ObservationIgnored let audio = AudioCapture()
-    /// Global analysis settings, persisted across launches.
-    @ObservationIgnored let audioSettings: ParamBank
-    let meters = AudioMeters()
-    @ObservationIgnored private var savedAudioSettings: [String: Float] = [:]
+    /// False until launch finishes, and always in the headless self-check.
+    @ObservationIgnored private var hardwareReady = false
 
     private(set) var sceneURLs: [URL] = []
     /// Display names from each scene file's `name`, falling back to the file name.
@@ -47,9 +47,10 @@ final class Engine {
     @ObservationIgnored private var renderScene: RenderScene?
     @ObservationIgnored private var cache: [URL: CacheEntry] = [:]
     @ObservationIgnored private var uiTimer: Timer?
-    @ObservationIgnored private var uiTickCount = 0
-    /// Audio fed to offscreen renders by the self-check.
+    /// Audio fed to offscreen renders by the self-check, through the capture's ring.
     @ObservationIgnored var offlineAudio: (samples: [Float], rate: Double)?
+    /// Simulated host time of offscreen renders, so it keeps counting across them.
+    @ObservationIgnored var offlineTime: Double = 0
 
     private enum CacheEntry {
         case generator(CompiledShader, mesh: MTLRenderPipelineState, background: MTLRenderPipelineState)
@@ -61,17 +62,11 @@ final class Engine {
         guard let device = MTLCreateSystemDefaultDevice() else { fatalError("Metal is not available") }
         self.device = device
         renderer = Renderer(device: device)
-        loop = RenderLoop(renderer: renderer, clock: clock)
-        clockState = ClockState(clock: clock)
+        loop = RenderLoop(renderer: renderer)
         compiler = ShaderCompiler(device: device, commonURL: store.commonShader)
         webcams = WebcamManager(device: device)
         webcams.captureEnabled = !headless
         output = OutputController(device: device, loop: loop)
-        let storedAudio = UserDefaults.standard.dictionary(forKey: "audio.params") as? [String: Float] ?? [:]
-        audioSettings = ParamBank(defs: AudioParams.defs, values: storedAudio)
-        savedAudioSettings = audioSettings.baseValues
-        loop.audioRing = audio.ring
-        loop.audioSettings = audioSettings
         loop.sceneProvider = { [unowned self] in
             self.sceneLock.lock(); defer { self.sceneLock.unlock() }
             return self.renderScene
@@ -93,10 +88,11 @@ final class Engine {
             forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
         ) { [weak self] _ in
             DispatchQueue.main.async {
-                self?.audio.start()
-                self?.midi.start()
+                self?.hardwareReady = true
+                self?.midi.refreshEndpoints()
+                self?.audioCaptures.refreshInputDevices()
                 self?.webcams.start()
-                self?.activateWebcams()
+                self?.activateHardware()
                 self?.output.start()
                 self?.applyLaunchArguments()
             }
@@ -201,10 +197,6 @@ final class Engine {
     }
     /// An output waiting to be mapped: the next knob clicked receives it.
     var mapSource: String?
-    /// The MIDI input (`midi.<id>`) learning controls: each new control moved becomes an output.
-    var learningMIDI: String? {
-        didSet { if let key = learningMIDI { selectDevice(key); showInspector = true } }
-    }
     /// The last knob clicked or turned, highlighted in the inspector.
     var selectedTarget: String?
     /// The device selected in the chain, by chain key (`audio`, `clock`, `mod.<id>`, `camera`,
@@ -290,7 +282,7 @@ final class Engine {
             undoManager?.removeAllActions()
             if animated, let currentScene = current, !isReload {
                 pendingScene = (url, file, nextScene)
-                activateWebcams()
+                activateHardware()
                 loop.transition.start(from: currentScene, to: nextScene, now: CACurrentMediaTime())
                 info = "Loaded \(file.name)"
             } else {
@@ -356,7 +348,7 @@ final class Engine {
         while taken.contains(slugify(name)) { n += 1; name = "Untitled Scene \(n)" }
         let file = SceneFile(
             name: name,
-            inputs: [InputSpec(type: "audio"), InputSpec(type: "clock")],
+            inputs: [InputSpec(type: "audio", device: Self.defaultAudioSource.key), InputSpec(type: "clock")],
             modulators: [],
             camera: cameraSlot("orbit", preset: "orbit"),
             palette: paletteSlot(preset: "ember"),
@@ -417,7 +409,10 @@ final class Engine {
                 file.inputs.append(InputSpec(type: tool, id: id, device: preset))
                 key = "midi.\(id)"
             }
-            learningMIDI = key
+            // A new MIDI Input starts learning, with the inspector open to show what it learns.
+            current?.learnMIDI(key)
+            selectDevice(key)
+            showInspector = true
         case .input where tool == "webcam":
             var key = ""
             edit("Added Webcam\(preset.map { " (\($0))" } ?? "")") { file in
@@ -429,12 +424,17 @@ final class Engine {
             selectDevice(key)
         case .input:
             if cardinality == .one, sceneFile?.inputs.contains(where: { $0.type == tool }) == true {
+                // A source picked for the Audio In already there switches it.
+                if tool == "audio", let source = preset.flatMap(AudioCapture.Source.init(key:)) {
+                    setAudioSource(source); selectDevice(tool); return
+                }
                 info = "\(label) is already in the chain"; selectDevice(tool); return
             }
             edit("Added \(label)") { file in
-                // Audio In first, then Clock, then MIDI inputs.
+                // Audio In first, then Clock, then MIDI inputs. Audio In's presets are its sources.
                 let i = tool == "audio" ? 0 : file.inputs.prefix { $0.type == "audio" }.count
-                file.inputs.insert(InputSpec(type: tool), at: i)
+                let device = tool == "audio" ? preset ?? Self.defaultAudioSource.key : nil
+                file.inputs.insert(InputSpec(type: tool, device: device), at: i)
             }
             selectDevice(tool)
         case .camera:
@@ -521,7 +521,6 @@ final class Engine {
     /// Removes an input by chain key: `audio`, `clock` or `mod.<id>`.
     func removeInput(_ key: String) {
         let name = deviceName(key)
-        if learningMIDI == key { learningMIDI = nil }
         if selectedDevice == key { selectDevice(nil) }
         edit("Removed \(name)") { $0.inputs.removeAll { $0.deviceKey == key } }
     }
@@ -583,6 +582,7 @@ final class Engine {
         edit("Input: \(label)") { file in
             guard let idx = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
             file.inputs[idx].device = preset
+            file.inputs[idx].channelPair = nil
         }
         selectDevice(key)
     }
@@ -734,6 +734,7 @@ final class Engine {
         switch parts.first {
         case "generator": device = current?.generatorLabel ?? "Generator"
         case "camera": device = "Camera"
+        case "audio": device = "Audio In"
         case "clock": device = "Clock"
         case "post", "mod": device = parts.count > 2 ? parts[1] : target
         default: device = parts.dropLast().joined(separator: ".")
@@ -820,16 +821,41 @@ final class Engine {
         sceneLock.lock(); renderScene = scene; sceneLock.unlock()
         current = scene
         if let key = selectedDevice, !scene.deviceKeys.contains(key) { selectedDevice = nil }
-        activateWebcams()
+        activateHardware()
     }
 
-    /// Runs the cameras the scenes on screen use (both, mid-transition) and stops the rest,
-    /// and runs depth estimation on those whose Depth is mapped.
-    private func activateWebcams() {
-        let runtimes = (current?.webcams ?? []) + (pendingScene?.scene.webcams ?? [])
+    /// Runs only the hardware the scenes on screen (both, mid-transition) use: the audio
+    /// sources their Audio Ins listen to, MIDI while one has a MIDI Input, and the cameras their webcams
+    /// use, with depth estimation for those whose Depth is mapped. Everything else stops.
+    private func activateHardware() {
+        let scenes = [current, pendingScene?.scene].compactMap { $0 }
+        let runtimes = scenes.flatMap(\.webcams)
         let depthFeeds = Set(runtimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
         for f in webcams.allFeeds { f.depthWanted = depthFeeds.contains(ObjectIdentifier(f)) }
         webcams.activate(runtimes.map(\.feed))
+        guard hardwareReady else { return }
+        audioCaptures.activate(scenes.compactMap { $0.audioIn?.capture })
+        midi.setActive(scenes.contains { !$0.midiInputs.isEmpty })
+    }
+
+    /// The source a new Audio In listens to.
+    static let defaultAudioSource = AudioCapture.Source.systemAudio
+
+    /// Points Audio In at a source, on its first channel pair.
+    func setAudioSource(_ source: AudioCapture.Source) {
+        edit("Audio In: \(audioCaptures.label(source))") { file in
+            guard let i = file.inputs.firstIndex(where: { $0.type == "audio" }) else { return }
+            file.inputs[i].device = source.key
+            file.inputs[i].channelPair = nil
+        }
+    }
+
+    /// Points Audio In at another stereo pair of its source (0 is channels 1–2).
+    func setAudioChannelPair(_ pair: Int) {
+        edit("Audio In: channels \(pair * 2 + 1)–\(pair * 2 + 2)") { file in
+            guard let i = file.inputs.firstIndex(where: { $0.type == "audio" }) else { return }
+            file.inputs[i].channelPair = pair == 0 ? nil : pair
+        }
     }
 
     /// Points a webcam at a camera by name, or at the default camera (nil).
@@ -996,16 +1022,29 @@ final class Engine {
             paletteLabel = nil
         }
 
-        // Inputs: one Audio In and one Clock at most, any number of MIDI inputs.
+        // Inputs: one Audio In and one Clock at most, any number of MIDI inputs and webcams.
+        // Rebuilding a scene carries each on; a different scene's pick up where the current
+        // scene's are, so levels and the beat continue across a switch.
         var inputs: [InputDevice] = []
         var outputs: [OutputSignal] = []
         errors["input"] = nil
         for spec in file.inputs {
             switch spec.type {
             case "audio" where !inputs.contains { $0.id == "audio" }:
-                inputs.append(.audio); outputs += Outputs.audio()
+                guard let key = spec.device, let source = AudioCapture.Source(key: key) else {
+                    errors["input"] = "Audio In needs a device: rekordbox, system or input:<uid> (got \(spec.device ?? "none"))"
+                    return nil
+                }
+                let old = reuse?.audioIn
+                let capture = audioCaptures.capture(source, channelPair: spec.channelPair ?? 0)
+                let a = AudioInRuntime(capture: capture, params: spec.params ?? [:],
+                                       spectrum: old?.spectrum ?? renderer.makeSpectrumTextures(),
+                                       reuse: old, continuing: reuse == nil ? current?.audioIn : nil)
+                inputs.append(.audio(a)); outputs += a.outputs
             case "clock" where !inputs.contains { $0.id == "clock" }:
-                inputs.append(.clock); outputs += Outputs.clock()
+                let c = ClockRuntime(params: spec.params ?? [:], reuse: reuse?.clock,
+                                     continuing: reuse == nil ? current?.clock : nil)
+                inputs.append(.clock(c)); outputs += c.outputs
             case "midi":
                 let id = spec.id ?? "midi"
                 guard !inputs.contains(where: { $0.id == "midi.\(id)" }) else { continue }
@@ -1045,13 +1084,20 @@ final class Engine {
         // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
         // until it is, so removing and re-adding a device keeps its mappings.
         var banks: [String: ParamBank] = [:]
+        for input in inputs {
+            switch input {
+            case .audio(let a): banks["audio"] = a.bank
+            case .clock(let c): banks["clock"] = c.bank
+            case .webcam(let w): banks[w.key] = w.bank
+            case .midi: break
+            }
+        }
         if let camera { banks["camera"] = camera }
         if let paletteBank { banks["palette"] = paletteBank }
         for gen in generators { banks[gen.key] = gen.bank }
         if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
         for fx in effects { banks["post.\(fx.id)"] = fx.bank }
         for m in modulators { banks["mod.\(m.id)"] = m.bank }
-        for case .webcam(let w) in inputs { banks[w.key] = w.bank }
         for bank in banks.values {
             for p in bank.params { p.isModulated = false; p.display = p.base }
         }
@@ -1063,14 +1109,15 @@ final class Engine {
         var streamOutputs: [StreamOutput] = []
         for input in inputs {
             switch input {
-            case .audio: streamOutputs += [.spectrum(), .audio()]
-            case .clock: streamOutputs.append(.clockSync())
+            case .audio(let a): streamOutputs += a.streamOutputs
+            case .clock(let c): streamOutputs.append(c.syncOutput)
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
-            default: break
+            case .midi: break
             }
         }
-        if palette != nil {
-            streamOutputs.append(.palette())
+        if let palette {
+            let gpu = palette.gpu
+            streamOutputs.append(StreamOutput(StreamOutput.paletteKey, "Colours", device: "Palette", kind: .palette) { gpu.current })
         }
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
@@ -1155,6 +1202,8 @@ final class Engine {
             switch parts.first {
             case "generator": device = generatorLabel ?? "Generator"
             case "camera": device = "Camera"
+            case "audio": device = "Audio In"
+            case "clock": device = "Clock"
             default: device = parts.count > 2 ? parts[1] : (parts.first ?? spec.target)
             }
             mappings.append(MappingRuntime(
@@ -1168,9 +1217,12 @@ final class Engine {
         let boundVideo = Set(streamBindings.values.map(\.key))
         for case .webcam(let w) in inputs { w.depthMapped = boundVideo.contains(w.depthVideo.key) }
 
-        // LFOs are synced to clock only when their sync socket is mapped from Clock.
+        // The Clock hears Audio In, and LFOs follow the Clock, only through their mappings.
+        let clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
+        let audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
+        clock?.listen(to: streamBindings[StreamInput.clockAudioKey] != nil ? audioIn : nil)
         for mod in modulators {
-            mod.isSynced = streamBindings["mod.\(mod.id).sync"] != nil
+            mod.sync(to: streamBindings["mod.\(mod.id).sync"] != nil ? clock : nil)
         }
 
         return RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
@@ -1238,11 +1290,17 @@ final class Engine {
             file.modulators[i].params = m.bank.baseValues
             file.modulators[i].enabled = m.enabled ? nil : false
         }
-        for i in file.inputs.indices where file.inputs[i].isWebcam {
-            let id = file.inputs[i].id ?? "webcam"
-            guard let w = scene.webcams.first(where: { $0.id == id }) else { continue }
-            file.inputs[i].id = id
-            file.inputs[i].params = w.bank.baseValues
+        for i in file.inputs.indices {
+            switch file.inputs[i].type {
+            case "audio": if let a = scene.audioIn { file.inputs[i].params = a.bank.baseValues }
+            case "clock": if let c = scene.clock { file.inputs[i].params = c.bank.baseValues }
+            case "webcam":
+                let id = file.inputs[i].id ?? "webcam"
+                guard let w = scene.webcams.first(where: { $0.id == id }) else { continue }
+                file.inputs[i].id = id
+                file.inputs[i].params = w.bank.baseValues
+            default: break
+            }
         }
 
         // Mappings are built one per spec, in order, so their edited settings map straight back.
@@ -1312,8 +1370,8 @@ final class Engine {
                 }
             }
         }
-        meters.update(from: loop.analyzer)
-        clockState.refresh()
+        current?.audioIn?.refreshMeters()
+        current?.clock?.refresh()
         if let pending = pendingScene {
             if !loop.transition.isTransitioning {
                 currentURL = pending.url
@@ -1323,28 +1381,17 @@ final class Engine {
                 info = "Switched to \(pending.file.name)"
             }
         }
-        if uiTickCount % 60 == 0 {
-            let current = audioSettings.baseValues
-            if current != savedAudioSettings {
-                UserDefaults.standard.set(current, forKey: "audio.params")
-                savedAudioSettings = current
-            }
-        }
-        uiTickCount += 1
 
         if abs(fps - loop.fps) > 0.5 { fps = loop.fps }
         if abs(gpuMs - loop.gpuMs) > 0.05 { gpuMs = loop.gpuMs }
     }
 
-    /// MIDI arrives on main. Each MIDI input listening to the message's device takes the value
-    /// if it has learned the control; one that is learning adds the control as a new output.
+    /// MIDI arrives on main and goes to the scene's MIDI inputs. Each takes what is for it;
+    /// a control new to one that is learning is added to the scene as that input's output.
     func handleMIDI(_ msg: MIDIMessage) {
-        guard let control = MIDIControl(msg), let scene = current else { return }
-        let value = MIDIControl.value(msg)
-        for input in scene.midiInputs where input.listens(to: msg) {
-            if !input.receive(control, value), learningMIDI == input.key {
-                learn(control, into: input, value: value)
-            }
+        guard let scene = current else { return }
+        for input in scene.midiInputs {
+            if let (control, value) = input.handle(msg) { learn(control, into: input, value: value) }
         }
     }
 

@@ -48,25 +48,31 @@ final class ModulatorRuntime: Identifiable {
     let type: String
     let presetLabel: String?
     var enabled: Bool { didSet { rEnabled = enabled } }
-    /// Whether this LFO is currently synced to clock via a mapping into `mod.<id>.sync`.
-    var isSynced: Bool { didSet { rSynced = isSynced } }
+    /// Whether Clock · Sync is mapped into its `mod.<id>.sync` input.
+    private(set) var isSynced = false
     let bank: ParamBank
     /// Its bipolar output (-1...1), `mod.<id>.out`.
     @ObservationIgnored private(set) var output: OutputSignal!
 
     @ObservationIgnored private var rEnabled: Bool
-    @ObservationIgnored private var rSynced: Bool = false
+    /// The Clock it follows, through its Sync input. Set when the scene is built.
+    @ObservationIgnored private var syncClock: ClockRuntime?
     /// Free-running phase, integrated so changing `hz` never jumps.
     @ObservationIgnored private var freePhase: Double = 0
     /// Normalized phase (0...1) of the current cycle, read by UI WaveScope.
     @ObservationIgnored var currentPhase: Float = 0
 
-    init(id: String, type: String, presetLabel: String?, enabled: Bool, isSynced: Bool = false, bank: ParamBank) {
+    init(id: String, type: String, presetLabel: String?, enabled: Bool, bank: ParamBank) {
         self.id = id; self.type = type; self.presetLabel = presetLabel
         rEnabled = enabled; self.enabled = enabled
-        rSynced = isSynced; self.isSynced = isSynced
         self.bank = bank
         output = OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: true) { [unowned self] f in self.value(f) }
+    }
+
+    /// Follows a Clock's beat, or runs free (nil). Called when the scene is built, from its mappings.
+    func sync(to clock: ClockRuntime?) {
+        syncClock = clock
+        isSynced = clock != nil
     }
 
     /// Continues a free-running phase from the device this one replaces after a chain edit.
@@ -84,9 +90,9 @@ final class ModulatorRuntime: Identifiable {
         let shape = Int(bank.live("shape"))
         let phase = Double(bank.live("phase"))
         let x: Double
-        if rSynced {
+        if let clock = syncClock {
             let i = Swift.min(Swift.max(Int(bank.live("rate")), 0), LFOParams.rates.count - 1)
-            x = f.beat / LFOParams.rates[i].beats
+            x = clock.beat / LFOParams.rates[i].beats
         } else {
             freePhase += Double(f.dt * bank.live("hz"))
             x = freePhase

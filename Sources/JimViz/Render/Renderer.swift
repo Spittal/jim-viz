@@ -190,7 +190,7 @@ final class PaletteModel {
 
 /// A device in the scene's Inputs section.
 enum InputDevice: Identifiable {
-    case audio, clock, midi(MIDIInputRuntime), webcam(WebcamRuntime)
+    case audio(AudioInRuntime), clock(ClockRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime)
 
     /// Chain key, as used for selection and in mapping keys.
     var id: String {
@@ -210,8 +210,10 @@ final class RenderScene {
     /// Preset ids each device was loaded from, and display labels, for the UI.
     var generatorPreset: String? { generators.first?.preset }
     var generatorLabel: String? { generators.first?.label }
-    /// Audio In, Clock and MIDI inputs, in chain order.
+    /// Audio In, Clock, MIDI and webcam inputs, in chain order.
     let inputs: [InputDevice]
+    let audioIn: AudioInRuntime?
+    let clock: ClockRuntime?
     let modulators: [ModulatorRuntime]
     let midiInputs: [MIDIInputRuntime]
     let webcams: [WebcamRuntime]
@@ -234,9 +236,8 @@ final class RenderScene {
     let banks: [ParamBank]
     /// Knob banks by target prefix: `generator`, `camera`, `post.<id>`, `mod.<id>`.
     let banksByPath: [String: ParamBank]
-    /// False without Audio In; audio outputs then read 0.
-    let hasAudioInput: Bool
-    let hasClock: Bool
+    var hasAudioInput: Bool { audioIn != nil }
+    var hasClock: Bool { clock != nil }
     /// Every device's chain key, left to right: inputs, `camera`, `palette`, generators, `post.<id>`.
     let deviceKeys: [String]
     /// The stream feeding each generator's inputs, keyed by generator key.
@@ -246,7 +247,9 @@ final class RenderScene {
     /// True when something reads the palette's colours, so its gradient is worth updating.
     let usesPalette: Bool
     /// True when Audio In's Audio Out is mapped into the Clock's Audio input.
-    let clockHearsAudio: Bool
+    var clockHearsAudio: Bool { clock?.hearsAudio == true }
+    /// The MIDI input learning controls, if any.
+    var learningMIDI: MIDIInputRuntime? { midiInputs.first(where: \.isLearning) }
 
     init(name: String, generators: [GeneratorRuntime],
          inputs: [InputDevice], modulators: [ModulatorRuntime],
@@ -257,12 +260,13 @@ final class RenderScene {
         self.name = name; self.generators = generators
         self.inputs = inputs
         self.modulators = modulators
+        audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
+        clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
         midiInputs = inputs.compactMap { if case .midi(let m) = $0 { return m } else { return nil } }
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
-        let hasClock = inputs.contains { $0.id == "clock" }
-        streamInputs = (hasClock ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
+        streamInputs = (clock != nil ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
             + modulators.map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
             + generators.flatMap { gen in gen.inputs.map { StreamInput(key: "\(gen.key).\($0.name)", label: $0.label, kind: $0.kind) } }
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
@@ -271,14 +275,11 @@ final class RenderScene {
         effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
                                    uniquingKeysWith: { a, _ in a })
         usesPalette = palette != nil && streamBindings.values.contains { $0.kind == .palette }
-        clockHearsAudio = streamBindings[StreamInput.clockAudioKey]?.kind == .audio
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
-        hasAudioInput = inputs.contains { $0.id == "audio" }
-        self.hasClock = hasClock
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = (palette.map { [$0.bank] } ?? []) + webcams.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + webcams.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
     }
 
     convenience init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
@@ -293,10 +294,17 @@ final class RenderScene {
                   palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings, banksByPath: banksByPath)
     }
 
-    /// Render thread, once per frame: updates outputs, then applies mappings to every knob.
-    func modulate(_ input: SignalFrame) {
-        var f = input
-        if !hasAudioInput { f.muteAudio() }
+    /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
+    func learnMIDI(_ key: String?) {
+        for m in midiInputs where m.isLearning != (m.key == key) { m.isLearning = m.key == key }
+    }
+
+    /// Render thread, once per frame: runs its inputs (Audio In analyses, then the Clock
+    /// advances, hearing that analysis if mapped), updates every output, then applies mappings
+    /// to every knob. Nothing here is shared with another scene.
+    func modulate(_ f: SignalFrame) {
+        audioIn?.process(dt: f.dt)
+        clock?.advance(f)
         for o in outputs { o.update(f) }
         for bank in banks { for p in bank.params { p.modAccum = 0 } }
         for m in mappings { m.modulate(f.dt) }
@@ -333,10 +341,6 @@ final class Renderer {
     /// Scratch for writing a palette gradient, so updating one allocates nothing.
     private var gradientPixels = [Float16](repeating: 1, count: 256 * 4)
     private var gradientColors: [SIMD3<Float>] = []
-    /// Rotated per frame so the CPU never overwrites a texture the GPU is still reading.
-    private var spectrumTextures: [MTLTexture] = []
-    private var spectrumIndex = 0
-    private var spectrumTex: MTLTexture { spectrumTextures[spectrumIndex] }
     private var presentPipeline: MTLRenderPipelineState!
     /// Bound to unconnected video and spectrum inputs.
     private var blackTexture: MTLTexture!
@@ -399,12 +403,6 @@ final class Renderer {
         off.depthCompareFunction = .always
         off.isDepthWriteEnabled = false
         depthOff = device.makeDepthStencilState(descriptor: off)!
-        let sd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: AudioAnalyzer.spectrumBins,
-                                                          height: 1, mipmapped: false)
-        sd.usage = .shaderRead
-        spectrumTextures = (0..<4).map { _ in device.makeTexture(descriptor: sd)! }
-        let zeros = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins)
-        for _ in spectrumTextures { updateSpectrum(zeros) }
         let bd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
         bd.usage = .shaderRead
         blackTexture = device.makeTexture(descriptor: bd)!
@@ -417,13 +415,19 @@ final class Renderer {
         makeWebcamBgPipeline()
     }
 
-    /// Uploads this frame's spectrum. Call once per frame before `encode`.
-    func updateSpectrum(_ bins: [Float]) {
-        spectrumIndex = (spectrumIndex + 1) % spectrumTextures.count
-        bins.withUnsafeBytes { raw in
-            spectrumTex.replace(region: MTLRegionMake2D(0, 0, bins.count, 1), mipmapLevel: 0,
-                                withBytes: raw.baseAddress!, bytesPerRow: bins.count * 4)
+    /// Textures for an Audio In's spectrum, silent to start. Call on main, when it is built.
+    func makeSpectrumTextures() -> SpectrumTextures {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: AudioAnalyzer.spectrumBins,
+                                                         height: 1, mipmapped: false)
+        d.usage = .shaderRead
+        let zeros = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins)
+        let textures = (0..<4).map { _ in
+            let t = device.makeTexture(descriptor: d)!
+            zeros.withUnsafeBytes { t.replace(region: MTLRegionMake2D(0, 0, zeros.count, 1), mipmapLevel: 0,
+                                              withBytes: $0.baseAddress!, bytesPerRow: zeros.count * 4) }
+            return t
         }
+        return SpectrumTextures(textures)
     }
 
     private func makeTargets() {
@@ -675,17 +679,13 @@ final class Renderer {
     /// unconnected palette the grey ramp. Generators also get them in the vertex stage, at the
     /// same indices, so the spectrum or a video (like a webcam's depth) can move the mesh.
     private func bindInputs(_ enc: MTLRenderCommandEncoder, _ inputs: [StreamInputDef], sources: [StreamOutput?],
-                            scene: RenderScene, from first: Int, vertex: Bool = false) -> Float {
+                            from first: Int, vertex: Bool = false) -> Float {
         var mask = 0
         for (i, input) in inputs.enumerated() {
             let source = i < sources.count ? sources[i] : nil
             let tex: MTLTexture
-            switch source?.kind {
-            case .video?: tex = source?.texture ?? blackTexture
-            case .spectrum?: tex = spectrumTex
-            case .palette?: tex = scene.palette?.gpu.current ?? greyRamp
-            default: tex = input.kind == .palette ? greyRamp : blackTexture
-            }
+            if let t = source?.currentTexture { tex = t }
+            else { tex = input.kind == .palette ? greyRamp : blackTexture }
             if source != nil { mask |= 1 << (first + i) }
             enc.setFragmentTexture(tex, index: first + i)
             if vertex { enc.setVertexTexture(tex, index: first + i) }
@@ -747,7 +747,7 @@ final class Renderer {
             // 2. Draw generator backgrounds in chain order (behind all meshes).
             for gen in scene.generators where (gen.bank["bgGlow"]?.live ?? 0) > 0 {
                 let sources = scene.generatorSources[gen.key] ?? []
-                f.inputs = bindInputs(enc, gen.inputs, sources: sources, scene: scene, from: 0, vertex: true)
+                f.inputs = bindInputs(enc, gen.inputs, sources: sources, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
                 gen.bank.withPacked {
                     enc.setFragmentBytes($0, length: $1, index: 1)
@@ -765,7 +765,7 @@ final class Renderer {
                     gen.updatePlaneMeshIfNeeded(renderer: self)
                 }
                 let sources = scene.generatorSources[gen.key] ?? []
-                f.inputs = bindInputs(enc, gen.inputs, sources: sources, scene: scene, from: 0, vertex: true)
+                f.inputs = bindInputs(enc, gen.inputs, sources: sources, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
                 gen.bank.withPacked {
                     enc.setFragmentBytes($0, length: $1, index: 1)
@@ -803,7 +803,7 @@ final class Renderer {
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { continue }
             enc.label = fx.id
             var ff = f
-            ff.inputs = bindInputs(enc, fx.inputs, sources: scene.effectSources[fx.id] ?? [], scene: scene, from: 2)
+            ff.inputs = bindInputs(enc, fx.inputs, sources: scene.effectSources[fx.id] ?? [], from: 2)
             enc.setRenderPipelineState(pipeline)
             enc.setFragmentTexture(src, index: 0)
             enc.setFragmentTexture(historyTex, index: 1)

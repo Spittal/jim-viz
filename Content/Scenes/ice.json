@@ -105,7 +105,8 @@
   },
   "inputs": [
     {
-      "type": "audio"
+      "type": "audio",
+      "device": "system"
     },
     {
       "type": "clock"

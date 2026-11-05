@@ -35,12 +35,7 @@ final class VideoPreview {
 /// so UI work on the main thread never drops frames on the projector.
 final class RenderLoop: NSObject {
     let renderer: Renderer
-    let clock: ClockManager
-    let analyzer = AudioAnalyzer()
     let transition = TransitionController()
-    /// Set by the engine. Read each frame.
-    var audioRing: SampleRing?
-    var audioSettings: ParamBank?
 
     /// Returns the scene to draw. Called on the render thread; must be cheap and thread-safe.
     var sceneProvider: () -> RenderScene? = { nil }
@@ -60,13 +55,11 @@ final class RenderLoop: NSObject {
     // Stats read by the UI.
     private(set) var fps: Double = 0
     private(set) var gpuMs: Double = 0
-    private(set) var beat: Double = 0
     private var frameCount = 0
     private var fpsWindowStart: CFTimeInterval = 0
 
-    init(renderer: Renderer, clock: ClockManager) {
+    init(renderer: Renderer) {
         self.renderer = renderer
-        self.clock = clock
         super.init()
         let ready = DispatchSemaphore(value: 0)
         thread = Thread { [weak self] in
@@ -125,41 +118,10 @@ final class RenderLoop: NSObject {
 
         let activeTransition = transition.advance(now: now)
         let primaryScene = activeTransition?.to ?? sceneProvider()
-        let fromScene = activeTransition?.from
-        // Audio is analysed only while a scene on screen has Audio In, and feeds the clock's
-        // tempo only while one maps Audio In's Audio Out into the Clock.
-        let needsAudio = primaryScene?.hasAudioInput == true || fromScene?.hasAudioInput == true
-        let hearsAudio = primaryScene?.clockHearsAudio == true || fromScene?.clockHearsAudio == true
-
-        // Audio first, so the tempo estimator sees this frame's onsets before the clock advances.
-        if needsAudio, let ring = audioRing {
-            analyzer.process(ring: ring, dt: Float(dt), settings: audioSettings)
-            renderer.updateSpectrum(analyzer.spectrum)
-            if hearsAudio && analyzer.fresh {
-                clock.audioTempo.feed(
-                    strength: analyzer.onsetStrength,
-                    kick: analyzer.kickFlux,
-                    snare: analyzer.snareFlux,
-                    bass: analyzer.features.bass,
-                    active: analyzer.features.active,
-                    time: now
-                )
-            }
-        }
-        let audio = analyzer.features
-
-        clock.advance(now: now, dt: dt, hearsAudio: hearsAudio)
-        beat = clock.beat
         guard primaryScene != nil || activeTransition != nil else { return }
 
-        var signals = SignalFrame()
-        signals.time = Float(now - startTime)
-        signals.dt = Float(dt)
-        signals.beat = clock.beat
-        signals.bpm = Float(clock.bpm)
-        signals.bass = audio.bass; signals.mid = audio.mid; signals.high = audio.high; signals.level = audio.level
-        signals.kick = audio.kick; signals.snare = audio.snare; signals.hat = audio.hat
-
+        // Each scene runs its own tools (Audio In, Clock, LFOs…) from this; nothing else is shared.
+        let signals = SignalFrame(time: Float(now - startTime), dt: Float(dt), now: now)
         // Shaders get only time; audio and the clock reach them through mappings.
         var frame = FrameUniforms()
         frame.time = signals.time
