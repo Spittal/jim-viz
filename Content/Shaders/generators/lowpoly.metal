@@ -115,7 +115,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
 
     // Depth: near things (white) rise toward the camera.
     if (hasInput(f, 4) && p.depth > 0) {
-        float d = depthVid.sample(linearClamp, fuv, level(0)).r;
+        float d = luma(depthVid.sample(linearClamp, fuv, level(0)).rgb);
         pos += v.smoothNormal.xyz * d * p.depth;
     }
     float3 depthPos = pos;

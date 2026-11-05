@@ -31,6 +31,15 @@ final class DepthEstimator {
     private var lo: Float = 0, hi: Float = 1, haveRange = false
     private var lastResult = Date.distantPast
     private var lastLoadAttempt = Date.distantPast
+    /// Depth textures, rewritten in turn so nothing is allocated per frame. With one result
+    /// every ~30 ms, a texture is rewritten ~100 ms after it was latest, long after the GPU
+    /// has read it.
+    private var ring: [MTLTexture] = []
+    private var ringIndex = 0
+    /// Scratch, reused every frame (depth queue only).
+    private var grid: [Float] = []
+    private var sorted: [Float] = []
+    private var pixels: [Float16] = []
 
     private var _status: Status = .idle
     /// Written on the depth queue; read by the UI.
@@ -117,7 +126,7 @@ final class DepthEstimator {
     // MARK: Output
 
     /// Box-downsamples the model's half-float output to the grid, normalizes it to 0...1
-    /// (near = 1) against a smoothed robust range, and uploads it.
+    /// (near = 1) against a smoothed robust range, and uploads it into the next ring texture.
     private func makeTexture(_ pb: CVPixelBuffer, aspect: Float) -> MTLTexture? {
         guard CVPixelBufferGetPixelFormatType(pb) == kCVPixelFormatType_OneComponent16Half else {
             status = .failed("Depth model output is not half-float")
@@ -130,7 +139,12 @@ final class DepthEstimator {
         let row = CVPixelBufferGetBytesPerRow(pb)
         let gw = Self.gridWidth, gh = max(2, Int((Float(gw) * aspect).rounded()))
 
-        var grid = [Float](repeating: 0, count: gw * gh)
+        let count = gw * gh
+        if grid.count != count {
+            grid = [Float](repeating: 0, count: count)
+            sorted = grid
+            pixels = [Float16](repeating: 0, count: count)
+        }
         for j in 0..<gh {
             let y0 = j * sh / gh, y1 = max(y0 + 1, (j + 1) * sh / gh)
             for i in 0..<gw {
@@ -140,23 +154,29 @@ final class DepthEstimator {
                     let line = (base + y * row).assumingMemoryBound(to: Float16.self)
                     for x in x0..<x1 { sum += Float(line[x]) }
                 }
-                grid[j * gw + i] = sum / Float((y1 - y0) * (x1 - x0))
+                let v = sum / Float((y1 - y0) * (x1 - x0))
+                grid[j * gw + i] = v.isFinite ? v : 0
             }
         }
 
         // 2nd and 98th percentiles, so a few wild pixels don't squash the rest.
-        let sorted = grid.filter(\.isFinite).sorted()
-        guard sorted.count > 16 else { return nil }
-        let pLo = sorted[sorted.count * 2 / 100], pHi = sorted[sorted.count * 98 / 100]
+        for k in 0..<count { sorted[k] = grid[k] }
+        sorted.sort()
+        let pLo = sorted[count * 2 / 100], pHi = sorted[count * 98 / 100]
         if !haveRange { lo = pLo; hi = pHi; haveRange = true }
         else { lo += (pLo - lo) * 0.15; hi += (pHi - hi) * 0.15 }
         let span = max(hi - lo, 1e-4)
-        let pixels = grid.map { Float16(min(max(($0 - lo) / span, 0), 1)) }
+        for k in 0..<count { pixels[k] = Float16(min(max((grid[k] - lo) / span, 0), 1)) }
 
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: gw, height: gh, mipmapped: false)
-        d.usage = .shaderRead
-        d.storageMode = .shared
-        guard let tex = metal.makeTexture(descriptor: d) else { return nil }
+        if ring.first.map({ $0.width != gw || $0.height != gh }) ?? true {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: gw, height: gh, mipmapped: false)
+            d.usage = .shaderRead
+            d.storageMode = .shared
+            ring = (0..<4).compactMap { _ in metal.makeTexture(descriptor: d) }
+            guard ring.count == 4 else { ring = []; return nil }
+        }
+        ringIndex = (ringIndex + 1) % ring.count
+        let tex = ring[ringIndex]
         pixels.withUnsafeBytes {
             tex.replace(region: MTLRegionMake2D(0, 0, gw, gh), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: gw * 2)
         }

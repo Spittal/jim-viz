@@ -496,7 +496,6 @@ final class Renderer {
             blit.copy(from: target, to: cam.depthHistory)
             blit.endEncoding()
         }
-        cmd.addCompletedHandler { _ in withExtendedLifetime(raw) {} }
     }
 
     /// Binds a shader's inputs from texture `first` up and returns the connected-inputs bitmask
