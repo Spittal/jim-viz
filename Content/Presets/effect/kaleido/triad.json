@@ -1,0 +1,7 @@
+{
+  "name": "Triad",
+  "params": {
+    "segments": 3,
+    "spin": 0.4
+  }
+}

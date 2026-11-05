@@ -1,0 +1,229 @@
+{
+  "camera" : {
+    "params" : {
+      "distance" : 6.806201,
+      "fov" : 121.68115,
+      "height" : 1.2,
+      "lookY" : 2.3330078,
+      "orbitSpeed" : 0.7649414,
+      "roll" : 8.630859,
+      "rollSpeed" : 0.6225586,
+      "shake" : 0.09746094,
+      "sway" : 0.2
+    },
+    "preset" : "orbit",
+    "type" : "orbit"
+  },
+  "effects" : [
+    {
+      "effect" : "glow",
+      "id" : "glow",
+      "params" : {
+        "amount" : 1.8688477,
+        "radius" : 0.05,
+        "threshold" : 0.47277832
+      }
+    },
+    {
+      "effect" : "feedback",
+      "id" : "feedback",
+      "params" : {
+        "amount" : 0.99,
+        "driftX" : 0.008154296,
+        "driftY" : 0.0060722656,
+        "mode" : 0,
+        "rotate" : -0.017119141,
+        "zoom" : 1.0063672
+      }
+    },
+    {
+      "effect" : "film",
+      "id" : "film",
+      "params" : {
+        "contrast" : 2,
+        "flash" : 0,
+        "grain" : 0.19450928,
+        "lineCount" : 699.46875,
+        "scanlines" : 0.11809082,
+        "vignette" : 0.44379884
+      }
+    },
+    {
+      "effect" : "chroma",
+      "id" : "chroma",
+      "params" : {
+        "amount" : 0.05,
+        "angle" : -1.5911499,
+        "radial" : 0.72148436
+      }
+    }
+  ],
+  "generator" : {
+    "detail" : 2,
+    "params" : {
+      "bands" : 5,
+      "bgGlow" : 0.5,
+      "colorShift" : 0,
+      "colorSpeed" : 0,
+      "depth" : 2,
+      "depthCut" : 0.5,
+      "explode" : 0.1,
+      "fill" : 1,
+      "fog" : 0.04,
+      "instances" : 1,
+      "light" : 1.1,
+      "noiseAmount" : 0.25,
+      "noiseScale" : 1.4,
+      "noiseSpeed" : 0.25,
+      "scale" : 0.81814206,
+      "spectrum" : 0.35,
+      "spectrumMode" : 1,
+      "spikes" : 0.4286865,
+      "spin" : 2.5482423,
+      "spread" : 3,
+      "stretch" : 1.2339746,
+      "tumble" : 0.5013672,
+      "twist" : 0,
+      "videoBg" : 1,
+      "videoMap" : 0,
+      "videoScale" : 1,
+      "videoScatter" : 0,
+      "videoTex" : 0.8,
+      "videoTint" : 0,
+      "wire" : 0.6
+    },
+    "preset" : "ico-shatter",
+    "shape" : "icosphere",
+    "type" : "lowpoly"
+  },
+  "inputs" : [
+    {
+      "type" : "audio"
+    },
+    {
+      "type" : "clock"
+    },
+    {
+      "id" : "webcam",
+      "params" : {
+        "contrast" : 1,
+        "depthContrast" : 1.3,
+        "depthFloor" : 0.1,
+        "depthSmooth" : 0.7,
+        "edges" : 0.4230469,
+        "exposure" : 0,
+        "mirror" : 1,
+        "panX" : -0.037402343,
+        "panY" : -0.16875,
+        "posterize" : 0.5581543,
+        "rotate" : 91.2832,
+        "saturation" : 1,
+        "warp" : 0,
+        "warpScale" : 3,
+        "warpSpeed" : 0.5,
+        "zoom" : 2.535779
+      },
+      "type" : "webcam"
+    },
+    {
+      "id" : "webcam2",
+      "params" : {
+        "contrast" : 1,
+        "depthContrast" : 2.64729,
+        "depthFloor" : 0,
+        "depthSmooth" : 0.7,
+        "edges" : 1,
+        "exposure" : -0.7767578,
+        "mirror" : 1,
+        "panX" : 0,
+        "panY" : 0,
+        "posterize" : 0,
+        "rotate" : 0,
+        "saturation" : 1,
+        "warp" : 0,
+        "warpScale" : 3,
+        "warpSpeed" : 0.5,
+        "zoom" : 1.1420166
+      },
+      "type" : "webcam"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
+    },
+    {
+      "amount" : 0.085345626,
+      "smooth" : 0.19643703,
+      "source" : "audio.kick",
+      "target" : "generator.scale"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.intensity",
+      "target" : "generator.stretch"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.mid",
+      "target" : "camera.lookY"
+    },
+    {
+      "source" : "webcam.webcam2.video",
+      "target" : "generator.bgVideo"
+    },
+    {
+      "amount" : 0.15273261,
+      "smooth" : 0.64043844,
+      "source" : "mod.lfo.out",
+      "target" : "post.feedback.rotate"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.kick",
+      "target" : "webcam.webcam2.zoom"
+    },
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
+    },
+    {
+      "source" : "audio.spectrum",
+      "target" : "generator.spec"
+    }
+  ],
+  "modulators" : [
+    {
+      "id" : "lfo",
+      "params" : {
+        "depth" : 1,
+        "hz" : 0.01,
+        "phase" : 0,
+        "rate" : 4,
+        "shape" : 0,
+        "sync" : 0
+      },
+      "type" : "lfo"
+    }
+  ],
+  "name" : "Face Rainbow",
+  "palette" : {
+    "colors" : [
+      "#C21E56",
+      "#E15000",
+      "#FFEA00",
+      "#007C30",
+      "#0500FF",
+      "#FF00F1"
+    ],
+    "params" : {
+      "blue" : 1.4168946,
+      "brightness" : 1.0325683,
+      "green" : 1,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 0.9885254
+    }
+  }
+}

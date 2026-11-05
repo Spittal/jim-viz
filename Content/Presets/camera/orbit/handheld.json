@@ -1,0 +1,11 @@
+{
+  "name": "Handheld",
+  "params": {
+    "distance": 5,
+    "height": 0.8,
+    "orbitSpeed": 0.1,
+    "fov": 65,
+    "sway": 0.6,
+    "shake": 0.15
+  }
+}

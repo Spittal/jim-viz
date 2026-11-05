@@ -1,0 +1,9 @@
+{
+  "name": "Clean",
+  "params": {
+    "grain": 0.02,
+    "scanlines": 0,
+    "vignette": 0.2,
+    "contrast": 1.0
+  }
+}

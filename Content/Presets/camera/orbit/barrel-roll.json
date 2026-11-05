@@ -1,0 +1,10 @@
+{
+  "name": "Barrel Roll",
+  "params": {
+    "distance": 5,
+    "height": 0.5,
+    "orbitSpeed": 0.3,
+    "fov": 80,
+    "rollSpeed": 0.1
+  }
+}

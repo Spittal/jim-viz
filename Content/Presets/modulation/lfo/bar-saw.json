@@ -1,0 +1,4 @@
+{
+  "name": "Bar Saw",
+  "params": { "shape": 2, "sync": 1, "rate": 4 }
+}

@@ -1,0 +1,4 @@
+{
+  "name": "Drift",
+  "params": { "shape": 6, "sync": 0, "hz": 0.15 }
+}

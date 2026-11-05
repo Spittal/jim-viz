@@ -1,0 +1,10 @@
+{
+  "name": "Orbit",
+  "params": {
+    "distance": 6,
+    "height": 1.2,
+    "orbitSpeed": 0.15,
+    "fov": 55,
+    "sway": 0.2
+  }
+}

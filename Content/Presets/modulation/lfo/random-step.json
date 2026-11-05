@@ -1,0 +1,4 @@
+{
+  "name": "Random Step",
+  "params": { "shape": 5, "sync": 1, "rate": 2 }
+}

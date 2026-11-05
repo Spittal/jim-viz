@@ -1,0 +1,10 @@
+{
+  "name": "Subtle",
+  "params": {
+    "amount": 0.15,
+    "blocks": 24,
+    "shift": 0.03,
+    "rate": 0.5,
+    "rgbSplit": 0.004
+  }
+}

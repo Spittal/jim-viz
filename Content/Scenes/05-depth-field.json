@@ -1,0 +1,118 @@
+{
+  "camera": {
+    "params": {
+      "distance": 6.5,
+      "fov": 55,
+      "height": 0.4,
+      "orbitSpeed": 0.35,
+      "sway": 0.15,
+      "swing": 28
+    },
+    "type": "orbit"
+  },
+  "effects": [
+    {
+      "effect": "glitch",
+      "id": "glitch",
+      "params": {
+        "amount": 0.0,
+        "rate": 1
+      }
+    },
+    {
+      "effect": "glow",
+      "id": "glow",
+      "params": {
+        "amount": 0.7,
+        "threshold": 0.45
+      }
+    },
+    {
+      "effect": "film",
+      "id": "film",
+      "params": {
+        "lineCount": 270,
+        "scanlines": 0.2
+      }
+    }
+  ],
+  "generator": {
+    "detail": 3,
+    "params": {
+      "bands": 5,
+      "depth": 2.2,
+      "depthCut": 0.5,
+      "fill": 0.9,
+      "fog": 0.03,
+      "light": 1.2,
+      "noiseAmount": 0.04,
+      "noiseScale": 1.2,
+      "noiseSpeed": 0.3,
+      "scale": 1.0,
+      "spectrum": 0.25,
+      "spectrumMode": 0,
+      "spin": 0.0,
+      "tumble": 0.0,
+      "videoMap": 5,
+      "videoTex": 0.7,
+      "videoTint": 0.6,
+      "wire": 0.6
+    },
+    "preset": "depth-field",
+    "shape": "field",
+    "type": "lowpoly"
+  },
+  "inputs": [
+    {
+      "type": "audio"
+    },
+    {
+      "type": "clock"
+    },
+    {
+      "id": "webcam",
+      "type": "webcam"
+    }
+  ],
+  "mappings": [
+    {
+      "source": "webcam.webcam.depth",
+      "target": "generator.depthVideo"
+    },
+    {
+      "source": "webcam.webcam.video",
+      "target": "generator.texVideo"
+    },
+    {
+      "amount": 0.15,
+      "curve": 3,
+      "source": "audio.kick",
+      "target": "generator.depth"
+    },
+    {
+      "amount": 0.3,
+      "source": "audio.hat",
+      "target": "post.glitch.amount"
+    },
+    {
+      "source": "palette.colors",
+      "target": "generator.pal"
+    },
+    {
+      "source": "audio.spectrum",
+      "target": "generator.spec"
+    }
+  ],
+  "modulators": [],
+  "name": "Depth Field",
+  "palette": {
+    "colors": [
+      "#020A0D",
+      "#0E4D5C",
+      "#2EC4B6",
+      "#FF9F1C",
+      "#FFE8C2"
+    ],
+    "preset": "sonar"
+  }
+}

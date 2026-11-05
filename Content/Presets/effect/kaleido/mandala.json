@@ -1,0 +1,8 @@
+{
+  "name": "Mandala",
+  "params": {
+    "segments": 12,
+    "spin": 0.05,
+    "zoom": 1.2
+  }
+}

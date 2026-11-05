@@ -1,0 +1,238 @@
+{
+  "camera": {
+    "params": {
+      "distance": 0.5,
+      "fov": 41.348633,
+      "height": -1.2236817,
+      "lookY": -3.5976562,
+      "orbitSpeed": 1.0809277,
+      "roll": 35.850586,
+      "rollSpeed": 0.7547852,
+      "shake": 0,
+      "sway": 0.6189942
+    },
+    "type": "orbit"
+  },
+  "effects": [
+    {
+      "effect": "feedback",
+      "id": "feedback",
+      "params": {
+        "amount": 0.92493457,
+        "driftX": 0.0020097657,
+        "driftY": 0.0020117187,
+        "mode": 0,
+        "rotate": 0,
+        "zoom": 1.02
+      }
+    },
+    {
+      "effect": "glow",
+      "id": "glow",
+      "params": {
+        "amount": 0.7,
+        "radius": 0.012,
+        "threshold": 0.55
+      }
+    },
+    {
+      "effect": "film",
+      "id": "film",
+      "params": {
+        "contrast": 0.5,
+        "flash": 0.1279541,
+        "grain": 0.03881836,
+        "lineCount": 741.87744,
+        "scanlines": 0.25751954,
+        "vignette": 1.0686767
+      }
+    },
+    {
+      "effect": "kaleido",
+      "id": "kaleido",
+      "params": {
+        "mix": 0.28046876,
+        "rotate": -0.34514648,
+        "segments": 3,
+        "spin": 0.1,
+        "zoom": 1
+      }
+    },
+    {
+      "effect": "chroma",
+      "id": "chroma",
+      "params": {
+        "amount": 0.007603516,
+        "angle": 0,
+        "radial": 1
+      }
+    }
+  ],
+  "generator": {
+    "detail": 2,
+    "params": {
+      "bands": 5,
+      "bgGlow": 0.5,
+      "colorShift": 0.47495118,
+      "colorSpeed": 0,
+      "explode": 0,
+      "fill": 1,
+      "fog": 0.04,
+      "instances": 1,
+      "light": 0.14978027,
+      "noiseAmount": 0.45,
+      "noiseScale": 1.4,
+      "noiseSpeed": 0.25,
+      "scale": 0.42228764,
+      "spectrum": 0.35,
+      "spectrumMode": 1,
+      "spikes": 0.46325684,
+      "spin": 0.05,
+      "spread": 3,
+      "stretch": 0.73977053,
+      "tumble": 0.8911133,
+      "twist": 0,
+      "videoBg": 0.07380371,
+      "videoMap": 0,
+      "videoScale": 1,
+      "videoScatter": 0,
+      "videoTex": 0.42971194,
+      "videoTint": 0,
+      "wire": 1
+    },
+    "preset": "ico-shatter",
+    "shape": "icosphere",
+    "type": "lowpoly"
+  },
+  "inputs": [
+    {
+      "type": "audio"
+    },
+    {
+      "type": "clock"
+    },
+    {
+      "id": "webcam",
+      "params": {
+        "contrast": 1,
+        "edges": 0.14802241,
+        "exposure": 0.39804688,
+        "mirror": 1,
+        "panX": 0.119824216,
+        "panY": 0.07446289,
+        "posterize": 0.35844725,
+        "rotate": 0,
+        "saturation": 0.7505859,
+        "warp": 0.1576416,
+        "warpScale": 0.5,
+        "warpSpeed": 0.5,
+        "zoom": 1
+      },
+      "type": "webcam"
+    }
+  ],
+  "mappings": [
+    {
+      "amount": 0.3,
+      "smooth": 0.1,
+      "source": "audio.bass",
+      "target": "generator.noiseAmount"
+    },
+    {
+      "amount": 0.60498345,
+      "curve": 2,
+      "smooth": 0.15445292,
+      "source": "audio.kick",
+      "target": "generator.spikes"
+    },
+    {
+      "amount": 0.13006985,
+      "source": "mod.lfo.out",
+      "target": "camera.fov"
+    },
+    {
+      "amount": 0.70862925,
+      "curve": 0.6450861,
+      "smooth": 0.08617424,
+      "source": "audio.kick",
+      "target": "generator.scale"
+    },
+    {
+      "amount": -0.6755445,
+      "source": "audio.hat",
+      "target": "generator.scale"
+    },
+    {
+      "amount": -0.40342343,
+      "source": "mod.lfo.out",
+      "target": "camera.roll"
+    },
+    {
+      "amount": 0.05859375,
+      "source": "mod.lfo.out",
+      "target": "post.kaleido.mix"
+    },
+    {
+      "amount": 0.25,
+      "source": "mod.lfo.out",
+      "target": "generator.bands"
+    },
+    {
+      "source": "webcam.webcam.video",
+      "target": "generator.bgVideo"
+    },
+    {
+      "source": "webcam.webcam.video",
+      "target": "generator.texVideo"
+    },
+    {
+      "amount": 0.3557055,
+      "smooth": 0.70676494,
+      "source": "mod.lfo.out",
+      "target": "generator.videoBg"
+    },
+    {
+      "amount": 0.12855113,
+      "smooth": 0.13608114,
+      "source": "webcam.webcam.motion",
+      "target": "camera.height"
+    },
+    {
+      "amount": 0.25,
+      "source": "webcam.webcam.motion",
+      "target": "post.kaleido.mix"
+    },
+    {
+      "source": "palette.colors",
+      "target": "generator.pal"
+    },
+    {
+      "source": "audio.spectrum",
+      "target": "generator.spec"
+    }
+  ],
+  "modulators": [
+    {
+      "id": "lfo",
+      "params": {
+        "depth": 1,
+        "hz": 1.8746005,
+        "phase": 0,
+        "rate": 4,
+        "shape": 0,
+        "sync": 1
+      },
+      "type": "lfo"
+    }
+  ],
+  "name": "Ice",
+  "palette": {
+    "colors": [
+      "#020814",
+      "#C3C3C3",
+      "#A9A9A9",
+      "#DDDDDD",
+      "#003144"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Wreck",
+  "params": {
+    "amount": 0.8,
+    "blocks": 8,
+    "shift": 0.3,
+    "rate": 4,
+    "rgbSplit": 0.05
+  }
+}
