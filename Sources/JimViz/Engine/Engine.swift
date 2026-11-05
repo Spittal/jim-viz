@@ -834,7 +834,7 @@ final class Engine {
         var streamOutputs: [StreamOutput] = []
         for input in inputs {
             switch input {
-            case .audio: streamOutputs += [.spectrum(), .onsets()]
+            case .audio: streamOutputs += [.spectrum(), .audio()]
             case .clock: streamOutputs.append(.clockSync())
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
             default: break
@@ -843,7 +843,7 @@ final class Engine {
         streamOutputs.append(.palette())
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
-        if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .onsets) }
+        if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .audio) }
         for mod in modulators { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
         for gen in generators {
             for v in gen.inputs {
@@ -889,7 +889,7 @@ final class Engine {
                 switch kind {
                 case .spectrum: fallbackLabel = "Audio In · Spectrum"
                 case .palette: fallbackLabel = "Palette · Colours"
-                case .onsets: fallbackLabel = "Audio In · Onsets"
+                case .audio: fallbackLabel = "Audio In · Audio Out"
                 case .clock: fallbackLabel = "Clock · Sync"
                 default: fallbackLabel = spec.source.hasSuffix(".depth") ? "Webcam · Depth" : "Webcam · Video"
                 }

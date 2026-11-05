@@ -12,7 +12,7 @@ enum ClockSourceKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Audio follows the beat of the audio mapped into the Clock's Audio input (Audio In · Onsets),
+/// Audio follows the beat of the audio mapped into the Clock's Audio input (Audio In · Audio Out),
 /// falling back to the manual tempo while there's no steady beat or nothing is mapped.
 /// Manual ignores the audio.
 enum ClockMode: String, CaseIterable, Identifiable {
@@ -54,7 +54,7 @@ final class ClockManager {
     }
 
     /// Render thread, once per frame. `hearsAudio` is true while the scene on screen maps
-    /// Audio In's Onsets into the Clock; only then has the tempo estimator been fed.
+    /// Audio In's Audio Out into the Clock; only then has the tempo estimator been fed.
     func advance(now: CFTimeInterval, dt: Double, hearsAudio: Bool) {
         let t = now + latencyMs / 1000
         // Unmapped, the estimate is dropped, so mapping again starts from fresh audio.

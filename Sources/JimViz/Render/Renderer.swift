@@ -211,7 +211,7 @@ final class RenderScene {
     let effectSources: [String: [StreamOutput?]]
     /// True when something reads the palette's colours, so its gradient is worth updating.
     let usesPalette: Bool
-    /// True when Audio In's Onsets is mapped into the Clock's Audio input.
+    /// True when Audio In's Audio Out is mapped into the Clock's Audio input.
     let clockHearsAudio: Bool
 
     init(name: String, generators: [GeneratorRuntime],
@@ -228,7 +228,7 @@ final class RenderScene {
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
         let hasClock = inputs.contains { $0.id == "clock" }
-        streamInputs = (hasClock ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .onsets)] : [])
+        streamInputs = (hasClock ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
             + modulators.map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
             + generators.flatMap { gen in gen.inputs.map { StreamInput(key: "\(gen.key).\($0.name)", label: $0.label, kind: $0.kind) } }
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
@@ -237,7 +237,7 @@ final class RenderScene {
         effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
                                    uniquingKeysWith: { a, _ in a })
         usesPalette = streamBindings.values.contains { $0.kind == .palette }
-        clockHearsAudio = streamBindings[StreamInput.clockAudioKey]?.kind == .onsets
+        clockHearsAudio = streamBindings[StreamInput.clockAudioKey]?.kind == .audio
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath

@@ -50,6 +50,8 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
 | spectrum | Audio In · Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
+| audio | Audio In · Audio Out | Clock · Audio |
+| clock | Clock · Sync | LFO · Sync |
 
 - A value mapping is additive: `value = base + amount × curve(signal) × span`.
 - A stream input (video, spectrum or palette) takes one stream; mapping another replaces it.

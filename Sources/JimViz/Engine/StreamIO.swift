@@ -5,13 +5,13 @@ import Metal
 /// - video: a picture, like a webcam's feed.
 /// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1.
 /// - palette: a Palette's gradient, with its inputs applied.
-/// - onsets: Audio In's onset strength, frame by frame, for the Clock's beat tracking.
+/// - audio: Audio In's audio stream, frame by frame, for the Clock's beat tracking.
 /// - clock: Clock's tempo / beat sync stream, for syncing LFOs and modulators.
-/// Video, spectrum and palette are textures a shader declares an input for; onsets go only
+/// Video, spectrum and palette are textures a shader declares an input for; audio goes only
 /// into the Clock's Audio input; clock sync goes into modulators. Nothing reaches a shader,
 /// the Clock, or an LFO except through a mapping: no shared audio, clock or colors.
 enum IOKind: String {
-    case value, video, spectrum, palette, onsets, clock
+    case value, video, spectrum, palette, audio, clock
 
     var isStream: Bool { self != .value }
 
@@ -25,18 +25,18 @@ enum IOKind: String {
         case .video: return "video"
         case .spectrum: return "waveform"
         case .palette: return "paintpalette"
-        case .onsets: return "metronome"
+        case .audio: return "speaker.wave.2"
         case .clock: return "clock"
         }
     }
 
     /// The shader declaration that makes an input of this kind: `// @video name Label`.
-    /// Values, onsets and clock have none.
-    var directive: String? { isStream && self != .onsets && self != .clock ? "// @\(rawValue) " : nil }
+    /// Values, audio and clock have none.
+    var directive: String? { isStream && self != .audio && self != .clock ? "// @\(rawValue) " : nil }
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
-/// (`audio.spectrum`) and onsets (`audio.onsets`), or the palette's gradient (`palette.colors`).
+/// (`audio.spectrum`) and audio out (`audio.out`), or the palette's gradient (`palette.colors`).
 final class StreamOutput: Identifiable {
     let key: String
     let name: String
@@ -55,11 +55,13 @@ final class StreamOutput: Identifiable {
 
     static let spectrumKey = "audio.spectrum"
     static let paletteKey = "palette.colors"
-    static let onsetsKey = "audio.onsets"
+    static let audioKey = "audio.out"
+    static let onsetsKey = audioKey
     static let clockSyncKey = "clock.sync"
 
     static func spectrum() -> StreamOutput { StreamOutput(spectrumKey, "Spectrum", device: "Audio In", kind: .spectrum) }
-    static func onsets() -> StreamOutput { StreamOutput(onsetsKey, "Onsets", device: "Audio In", kind: .onsets) }
+    static func audio() -> StreamOutput { StreamOutput(audioKey, "Audio Out", device: "Audio In", kind: .audio) }
+    static func onsets() -> StreamOutput { audio() }
     static func palette() -> StreamOutput { StreamOutput(paletteKey, "Colours", device: "Palette", kind: .palette) }
     static func clockSync() -> StreamOutput { StreamOutput(clockSyncKey, "Sync", device: "Clock", kind: .clock) }
 
@@ -67,7 +69,7 @@ final class StreamOutput: Identifiable {
     static func kind(ofKey key: String) -> IOKind? {
         if key == spectrumKey { return .spectrum }
         if key == paletteKey { return .palette }
-        if key == onsetsKey { return .onsets }
+        if key == audioKey || key == "audio.onsets" { return .audio }
         if key == clockSyncKey { return .clock }
         if key.hasSuffix(".video") || (key.hasPrefix("webcam.") && key.hasSuffix(".depth")) { return .video }
         return nil
@@ -103,7 +105,7 @@ struct StreamInputDef: Hashable {
 
 /// A stream input in the scene, for the UI: `generator.bgVideo`, "Background", video.
 struct StreamInput: Identifiable, Hashable {
-    /// The Clock's Audio input, which takes Audio In's Onsets to follow the beat.
+    /// The Clock's Audio input, which takes Audio In's Audio Out to follow the beat.
     static let clockAudioKey = "clock.audio"
 
     let key: String

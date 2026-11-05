@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Clock input: tempo, tap, beat position and clock source. The clock always runs;
 /// this device puts its controls, its Audio input and its outputs (Pulse, ramps, shown in the
-/// inspector) in the scene. It follows audio only when Audio In's Onsets is mapped into its
+/// inspector) in the scene. It follows audio only when Audio In's Audio Out is mapped into its
 /// Audio input. Its settings are global, not per scene.
 struct ClockDevice: View {
     @Environment(Engine.self) private var engine
@@ -41,7 +41,7 @@ struct ClockDevice: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .controlSize(.mini)
-                    .help("Audio follows the beat of the audio mapped into the Clock (Audio In · Onsets) and falls back to the manual tempo. Manual ignores the audio.")
+                    .help("Audio follows the beat of the audio mapped into the Clock (Audio In · Audio Out) and falls back to the manual tempo. Manual ignores the audio.")
                     Text(status(state))
                         .font(Theme.labelFont)
                         .foregroundStyle(Theme.textDim)
@@ -54,7 +54,7 @@ struct ClockDevice: View {
 
     private func status(_ state: ClockState) -> String {
         if state.mode == .manual { return "Manual tempo" }
-        if !state.hearsAudio { return "No audio mapped: map Audio In · Onsets into Audio" }
+        if !state.hearsAudio { return "No audio mapped: map Audio In · Audio Out into Audio" }
         if state.audioBPM == 0 { return "Listening for a beat" }
         let conf = Int(state.audioConfidence * 100)
         return String(format: "Audio %.1f BPM, %d%%", state.audioBPM, conf)
@@ -122,7 +122,7 @@ struct ClockSettings: View {
 
     private var modeHelp: String {
         switch state.mode {
-        case .audio: return "Audio: follows the beat of the audio mapped into the Clock's Audio input (Audio In · Onsets) when it's steady; falls back to the manual tempo when it's quiet or nothing is mapped."
+        case .audio: return "Audio: follows the beat of the audio mapped into the Clock's Audio input (Audio In · Audio Out) when it's steady; falls back to the manual tempo when it's quiet or nothing is mapped."
         case .manual: return "Manual: locked to manual tempo (tap or typed BPM)."
         }
     }

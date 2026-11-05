@@ -388,7 +388,7 @@ struct StreamSocket: View {
                     if candidates.isEmpty {
                         switch input.kind {
                         case .spectrum: Text("Add Audio In to get a spectrum")
-                        case .onsets: Text("Add Audio In to get onsets")
+                        case .audio: Text("Add Audio In to get audio")
                         default: Text("Add a Webcam input to get video")
                         }
                     }

@@ -402,7 +402,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.onsets", "clock.sync", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "clock.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -499,7 +499,7 @@ enum SelfCheck {
         return nil
     }
 
-    /// The Clock follows audio only through a mapping: Audio In · Onsets into Clock · Audio.
+    /// The Clock follows audio only through a mapping: Audio In · Audio Out into Clock · Audio.
     private static func checkClockAudio(engine: Engine) -> String? {
         guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else { return "test scene missing" }
         engine.load(url, animated: false)
@@ -508,16 +508,16 @@ enum SelfCheck {
         engine.removeMappings(target: StreamInput.clockAudioKey)
         guard engine.current?.clockHearsAudio == false else { return "Clock hears audio without a mapping" }
 
-        // Typed: onsets only into the Clock, and the Clock takes only onsets.
+        // Typed: audio only into the Clock, and the Clock takes only audio.
         let count = engine.current?.mappings.count
-        engine.addMapping(source: StreamOutput.onsetsKey, target: "generator.spec")
-        engine.addMapping(source: StreamOutput.onsetsKey, target: "camera.fov")
+        engine.addMapping(source: StreamOutput.audioKey, target: "generator.spec")
+        engine.addMapping(source: StreamOutput.audioKey, target: "camera.fov")
         engine.addMapping(source: StreamOutput.spectrumKey, target: StreamInput.clockAudioKey)
         engine.addMapping(source: "audio.kick", target: StreamInput.clockAudioKey)
-        guard engine.current?.mappings.count == count else { return "onsets mapped across kinds" }
+        guard engine.current?.mappings.count == count else { return "audio mapped across kinds" }
 
-        engine.addMapping(source: StreamOutput.onsetsKey, target: StreamInput.clockAudioKey)
-        guard engine.current?.clockHearsAudio == true else { return "Onsets → Clock · Audio did not connect" }
+        engine.addMapping(source: StreamOutput.audioKey, target: StreamInput.clockAudioKey)
+        guard engine.current?.clockHearsAudio == true else { return "Audio Out → Clock · Audio did not connect" }
 
         // Without Audio In the mapping waits; without the Clock it has nowhere to go.
         engine.removeInput("audio")
@@ -847,7 +847,7 @@ enum SelfCheck {
         if let problem = checkClockAudio(engine: engine) {
             print("FAIL clock: \(problem)"); failures += 1
         } else {
-            print("ok   clock (follows audio only through Onsets → Clock · Audio, typed, starts unmapped)")
+            print("ok   clock (follows audio only through Audio Out → Clock · Audio, typed, starts unmapped)")
         }
 
         if let problem = checkComposition(engine: engine) {

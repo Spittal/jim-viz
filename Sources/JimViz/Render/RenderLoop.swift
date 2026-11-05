@@ -127,7 +127,7 @@ final class RenderLoop: NSObject {
         let primaryScene = activeTransition?.to ?? sceneProvider()
         let fromScene = activeTransition?.from
         // Audio is analysed only while a scene on screen has Audio In, and feeds the clock's
-        // tempo only while one maps Audio In's Onsets into the Clock.
+        // tempo only while one maps Audio In's Audio Out into the Clock.
         let needsAudio = primaryScene?.hasAudioInput == true || fromScene?.hasAudioInput == true
         let hearsAudio = primaryScene?.clockHearsAudio == true || fromScene?.clockHearsAudio == true
 
