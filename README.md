@@ -1,7 +1,6 @@
 # jim-viz
 
 Reactive, generative low-poly 3D visuals for DJ sets, native on macOS (Swift + Metal).
-See [docs/VISION.md](docs/VISION.md) for the plan and milestones.
 
 ## Run
 
