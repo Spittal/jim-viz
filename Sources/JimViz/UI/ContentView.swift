@@ -135,10 +135,6 @@ private struct SceneRow: View {
         } else {
             Label(engine.sceneName(url), systemImage: "cube.transparent")
                 .help(url.lastPathComponent)
-                .contentShape(Rectangle())
-                .simultaneousGesture(TapGesture().onEnded {
-                    engine.selectDevice(nil)
-                })
         }
     }
 }
@@ -251,6 +247,10 @@ private final class KeyDownNSView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

@@ -133,7 +133,6 @@ struct DeviceChain: View {
                 .padding(.vertical, 6)
                 .frame(minWidth: geo.size.width, alignment: .topLeading)
                 .frame(height: geo.size.height)
-                .background(ChainScrollHelper())
                 .contentShape(Rectangle())
                 // Clicking empty chain space clears the selection.
                 .onTapGesture { engine.selectDevice(nil) }
@@ -229,77 +228,6 @@ private struct EffectDevice: View {
                 KnobGrid(params: fx.bank.params, prefix: "post.\(fx.id)")
             }
         }
-    }
-}
-
-/// Disables vertical scrolling on the chain's NSScrollView and forwards vertical scroll wheel events horizontally.
-struct ChainScrollHelper: NSViewRepresentable {
-    func makeNSView(context: Context) -> ChainScrollViewConfigurator {
-        ChainScrollViewConfigurator()
-    }
-    func updateNSView(_ nsView: ChainScrollViewConfigurator, context: Context) {}
-}
-
-final class ChainScrollViewConfigurator: NSView {
-    private var didConfigure = false
-    private var monitor: Any?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        configureScrollView()
-        setupEventMonitor()
-    }
-
-    private func configureScrollView() {
-        guard let sv = enclosingScrollView, !didConfigure else { return }
-        didConfigure = true
-        sv.hasVerticalScroller = false
-        sv.hasHorizontalScroller = true
-        sv.verticalScrollElasticity = .none
-        sv.horizontalScrollElasticity = .automatic
-    }
-
-    private func setupEventMonitor() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self, let sv = self.enclosingScrollView, let window = self.window, event.window == window else {
-                return event
-            }
-            let pointInWindow = event.locationInWindow
-            let pointInSV = sv.convert(pointInWindow, from: nil)
-            guard sv.bounds.contains(pointInSV) else { return event }
-
-            let isPrecise = event.hasPreciseScrollingDeltas
-            let dy = isPrecise ? event.scrollingDeltaY : event.deltaY
-            let dx = isPrecise ? event.scrollingDeltaX : event.deltaX
-
-            // Normal scroll (vertical delta without horizontal) -> scroll horizontally
-            if abs(dx) < 0.001 && abs(dy) > 0.001 {
-                let scrollAmount: CGFloat = isPrecise ? dy : (dy * 30)
-                var origin = sv.documentVisibleRect.origin
-                let maxScroll = max(0, (sv.documentView?.bounds.width ?? 0) - sv.documentVisibleRect.width)
-                origin.x = max(0, min(origin.x - scrollAmount, maxScroll))
-                origin.y = 0
-                sv.contentView.scroll(to: origin)
-                sv.reflectScrolledClipView(sv.contentView)
-                return nil
-            } else if abs(dy) > 0.001 {
-                // Diagonal / horizontal + vertical scroll: ensure y stays 0
-                var origin = sv.documentVisibleRect.origin
-                let scrollAmount: CGFloat = isPrecise ? dx : (dx * 30)
-                let maxScroll = max(0, (sv.documentView?.bounds.width ?? 0) - sv.documentVisibleRect.width)
-                origin.x = max(0, min(origin.x - scrollAmount, maxScroll))
-                origin.y = 0
-                sv.contentView.scroll(to: origin)
-                sv.reflectScrolledClipView(sv.contentView)
-                return nil
-            }
-            return event
-        }
-    }
-
-    deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 }
 
