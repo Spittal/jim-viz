@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Clock input: tempo, tap, beat position and clock source. The clock always runs;
-/// this device puts its controls and outputs (Pulse, ramps, Track Change, shown in the
-/// inspector) in the scene. Its settings are global, not per scene.
+/// this device puts its controls, its Audio input and its outputs (Pulse, ramps, shown in the
+/// inspector) in the scene. It follows audio only when Audio In's Onsets is mapped into its
+/// Audio input. Its settings are global, not per scene.
 struct ClockDevice: View {
     @Environment(Engine.self) private var engine
 
@@ -35,12 +36,12 @@ struct ClockDevice: View {
                             .foregroundStyle(Theme.textDim)
                     }
                     Picker("", selection: $state.mode) {
-                        ForEach(ClockMode.allCases) { Text($0.shortLabel).tag($0) }
+                        ForEach(ClockMode.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .controlSize(.mini)
-                    .help("Auto follows the audio's beat when it's steady and falls back to manual. Audio and Manual lock to one source.")
+                    .help("Audio follows the beat of the audio mapped into the Clock (Audio In · Onsets) and falls back to the manual tempo. Manual ignores the audio.")
                     Text(status(state))
                         .font(Theme.labelFont)
                         .foregroundStyle(Theme.textDim)
@@ -52,7 +53,9 @@ struct ClockDevice: View {
     }
 
     private func status(_ state: ClockState) -> String {
-        if state.audioBPM == 0 { return state.mode == .manual ? "Manual tempo" : "Listening for a beat" }
+        if state.mode == .manual { return "Manual tempo" }
+        if !state.hearsAudio { return "No audio mapped: map Audio In · Onsets into Audio" }
+        if state.audioBPM == 0 { return "Listening for a beat" }
         let conf = Int(state.audioConfidence * 100)
         return String(format: "Audio %.1f BPM, %d%%", state.audioBPM, conf)
     }
@@ -89,7 +92,7 @@ struct ClockSettings: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 sourceRow(.audio, healthy: state.audioUsable, detail: audioDetail)
-                sourceRow(.manual, healthy: true, detail: "Tap or type a tempo. Follows audio when available.")
+                sourceRow(.manual, healthy: true, detail: "Tap or type a tempo. Follows the audio while it's the active source.")
             }
 
             Divider()
@@ -119,13 +122,13 @@ struct ClockSettings: View {
 
     private var modeHelp: String {
         switch state.mode {
-        case .auto: return "Auto: follows audio analysis when a steady beat is heard; falls back to manual tempo when quiet."
-        case .audio: return "Audio: locked to audio tempo analysis only."
+        case .audio: return "Audio: follows the beat of the audio mapped into the Clock's Audio input (Audio In · Onsets) when it's steady; falls back to the manual tempo when it's quiet or nothing is mapped."
         case .manual: return "Manual: locked to manual tempo (tap or typed BPM)."
         }
     }
 
     private var audioDetail: String {
+        if !state.hearsAudio { return "Nothing mapped into the Clock's Audio input." }
         if state.audioBPM == 0 { return "Listening for a steady beat." }
         let conf = Int(state.audioConfidence * 100)
         return state.audioUsable

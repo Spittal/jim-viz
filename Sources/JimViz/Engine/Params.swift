@@ -98,15 +98,21 @@ final class ParamBank {
             return Param(def: def, value: values[def.name] ?? carried)
         }
         byName = Dictionary(uniqueKeysWithValues: params.map { ($0.def.name, $0) })
+        packBuffer = [Float](repeating: 0, count: max(params.count, 1))
     }
 
     subscript(name: String) -> Param? { byName[name] }
 
     func live(_ name: String) -> Float { byName[name]?.live ?? 0 }
 
-    /// Values as a float array matching the generated Metal `Params` struct.
-    func packed() -> [Float] {
-        params.isEmpty ? [0] : params.map(\.live)
+    /// Scratch for `withPacked`, so packing a bank each frame allocates nothing.
+    private var packBuffer: [Float]
+
+    /// Live values packed to match the generated Metal `Params` struct (one 0 when there are
+    /// none), as bytes for `setFragmentBytes`. Render thread only.
+    func withPacked(_ body: (UnsafeRawPointer, Int) -> Void) {
+        for i in params.indices { packBuffer[i] = params[i].live }
+        packBuffer.withUnsafeBytes { body($0.baseAddress!, $0.count) }
     }
 
     /// Base values for saving back to JSON.

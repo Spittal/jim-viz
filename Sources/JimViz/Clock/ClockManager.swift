@@ -12,35 +12,24 @@ enum ClockSourceKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// Audio follows the beat of the audio mapped into the Clock's Audio input (Audio In · Onsets),
+/// falling back to the manual tempo while there's no steady beat or nothing is mapped.
+/// Manual ignores the audio.
 enum ClockMode: String, CaseIterable, Identifiable {
-    case auto, audio, manual
+    case audio, manual
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .auto: return "Auto"
-        case .audio: return "Audio only"
-        case .manual: return "Manual (tap)"
-        }
-    }
-    var shortLabel: String {
-        switch self {
-        case .auto: return "Auto"
         case .audio: return "Audio"
         case .manual: return "Manual"
         }
     }
 }
 
-struct DeckInfo: Equatable {
-    var title = ""
-    var artist = ""
-    var trackSerial = 0
-}
-
 /// Chooses the beat clock and produces one smooth, continuous beat for the visuals.
 ///
-/// Auto mode uses the audio tempo estimate when a steady beat is heard, and falls back to
-/// the manual clock when audio is quiet or ambiguous. The output beat advances at the chosen
+/// Audio mode uses the audio tempo estimate when a steady beat is heard in the mapped audio,
+/// and falls back to the manual clock when audio is quiet, ambiguous or unmapped. The output beat advances at the chosen
 /// tempo and glides toward the source phase without jumping, so source switches never cause
 /// visual skips. While audio is active, the manual clock follows it, so a dropout continues
 /// at the current tempo.
@@ -49,7 +38,7 @@ final class ClockManager {
     let audioTempo = AudioTempo()
 
     // Settings, written on main.
-    var mode: ClockMode = .auto
+    var mode: ClockMode = .audio
     /// Shifts the visuals earlier (positive) to compensate for projector and audio latency.
     var latencyMs: Double = 0
 
@@ -57,20 +46,25 @@ final class ClockManager {
     private(set) var beat: Double = 0
     private(set) var bpm: Double = 124
     private(set) var active: ClockSourceKind = .manual
-    private(set) var deck = DeckInfo()
-    private(set) var trackChangeBeat: Double = -1000
+    /// Whether the scene on screen maps audio into the Clock. Render thread.
+    private(set) var hearsAudio = false
 
     init() {
         bpm = manual.bpm
     }
 
-    func advance(now: CFTimeInterval, dt: Double) {
+    /// Render thread, once per frame. `hearsAudio` is true while the scene on screen maps
+    /// Audio In's Onsets into the Clock; only then has the tempo estimator been fed.
+    func advance(now: CFTimeInterval, dt: Double, hearsAudio: Bool) {
         let t = now + latencyMs / 1000
-        audioTempo.update(now: now)
+        // Unmapped, the estimate is dropped, so mapping again starts from fresh audio.
+        if self.hearsAudio && !hearsAudio { audioTempo.reset() }
+        self.hearsAudio = hearsAudio
+        if hearsAudio { audioTempo.update(now: now) }
 
         var target: (beat: Double, bpm: Double)?
         var source: ClockSourceKind = .manual
-        if mode == .auto || mode == .audio, let a = audioTempo.reading(at: t) {
+        if mode == .audio, hearsAudio, let a = audioTempo.reading(at: t) {
             target = (a.beat, a.bpm); source = .audio
         }
 
@@ -89,17 +83,6 @@ final class ClockManager {
             beat += correction(error, dt: dt)
         }
         active = source
-    }
-
-    /// Called by the Rekordbox library reader when a track is logged in history.
-    func notifyTrackChange(title: String, artist: String, bpm: Double?) {
-        deck.title = title
-        deck.artist = artist
-        deck.trackSerial += 1
-        trackChangeBeat = beat
-        if let bpm, bpm > 40, bpm < 250 {
-            audioTempo.preferredBPM = bpm
-        }
     }
 
     /// Phase correction for one frame: tiny errors snap, others glide with a ~250 ms time

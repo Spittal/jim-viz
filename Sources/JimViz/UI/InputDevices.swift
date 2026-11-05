@@ -205,11 +205,6 @@ struct WebcamDevice: View {
                     .controlSize(.small)
                     .frame(width: 160)
                     .help("Which camera to use")
-                    let routes = engine.current?.mappings.filter { $0.source == webcam.video.key && $0.isActive } ?? []
-                    Text(routes.isEmpty ? "Video not mapped" : "Video → " + routes.map(\.targetLabel).joined(separator: ", "))
-                        .font(Theme.labelFont)
-                        .foregroundStyle(routes.isEmpty ? Theme.textDim : Theme.modulation)
-                        .lineLimit(2)
                     DepthPreview(webcam: webcam)
                 }
                 .frame(width: 160)
@@ -237,14 +232,13 @@ struct WebcamDevice: View {
     }
 }
 
-/// A webcam's Depth output: its route, and while it's mapped a live preview with the depth
-/// model's state (loading, missing, rate).
+/// While a webcam's Depth output is mapped, a live preview with the depth model's state
+/// (loading, missing, rate). Its routes show in the inspector.
 private struct DepthPreview: View {
     @Environment(Engine.self) private var engine
     let webcam: WebcamRuntime
 
     var body: some View {
-        let routes = engine.current?.mappings.filter { $0.source == webcam.depthVideo.key && $0.isActive } ?? []
         VStack(alignment: .leading, spacing: 6) {
             if webcam.depthMapped {
                 TimelineView(.periodic(from: .now, by: 0.5)) { _ in
@@ -271,11 +265,6 @@ private struct DepthPreview: View {
                         .clipShape(RoundedRectangle(cornerRadius: 2))
                 }
             }
-            Text(routes.isEmpty ? "Depth not mapped" : "Depth → " + routes.map(\.targetLabel).joined(separator: ", "))
-                .font(Theme.labelFont)
-                .foregroundStyle(routes.isEmpty ? Theme.textDim : Theme.modulation)
-                .lineLimit(2)
-                .help("Depth estimated from the image, white = near. Map it into a generator's Depth input.")
         }
     }
 
@@ -328,7 +317,13 @@ struct StreamSocket: View {
                     ForEach(candidates) { v in
                         Button("\(v.device) · \(v.name)") { engine.setStreamInput(input.key, v.key) }
                     }
-                    if candidates.isEmpty { Text(input.kind == .spectrum ? "Add Audio In to get a spectrum" : "Add a Webcam input to get video") }
+                    if candidates.isEmpty {
+                        switch input.kind {
+                        case .spectrum: Text("Add Audio In to get a spectrum")
+                        case .onsets: Text("Add Audio In to get onsets")
+                        default: Text("Add a Webcam input to get video")
+                        }
+                    }
                 } label: { chip(source) }
                 .menuStyle(.button)
                 .buttonStyle(.plain)

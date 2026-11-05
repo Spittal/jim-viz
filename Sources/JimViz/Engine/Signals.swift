@@ -18,8 +18,6 @@ struct SignalFrame {
     var kick: Float = 0
     var snare: Float = 0
     var hat: Float = 0
-    // Track change from the Rekordbox library.
-    var beatsSinceTrackChange: Double = 1000
 
     mutating func muteAudio() {
         bass = 0; mid = 0; high = 0; level = 0; kick = 0; snare = 0; hat = 0
@@ -158,12 +156,11 @@ enum Outputs {
             OutputSignal("clock.beat", "Beat Ramp", device: d) { Float($0.beat - floor($0.beat)) },
             OutputSignal("clock.bar", "Bar Ramp", device: d) { let x = $0.beat / 4; return Float(x - floor(x)) },
             OutputSignal("clock.phrase", "Phrase Ramp", device: d) { let x = $0.beat / 32; return Float(x - floor(x)) },
-            OutputSignal("clock.track", "Track Change", device: d) { Float(exp(-max($0.beatsSinceTrackChange, 0) * 0.5)) },
         ]
     }
 
-    static func camera(_ renderer: Renderer) -> [OutputSignal] {
-        [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { [unowned renderer] _ in renderer.orbitPhase }]
+    static func camera(_ motion: CameraMotion) -> [OutputSignal] {
+        [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { _ in motion.orbitPhase }]
     }
 
     /// Display name for a source key, including ones whose device isn't in the scene.

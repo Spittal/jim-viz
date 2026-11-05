@@ -12,11 +12,9 @@ final class Engine {
     @ObservationIgnored let store = ContentStore()
     @ObservationIgnored let clock = ClockManager()
     let clockState: ClockState
-    let rekordbox = RekordboxReader()
     let midi = MIDIEngine()
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
-    @ObservationIgnored private var lastRekordboxTrackSerial: Int = 0
     @ObservationIgnored private let compiler: ShaderCompiler
     @ObservationIgnored let output: OutputController
     @ObservationIgnored let audio = AudioCapture()
@@ -103,7 +101,6 @@ final class Engine {
                 self?.midi.start()
                 self?.webcams.start()
                 self?.activateWebcams()
-                self?.rekordbox.start()
                 self?.output.start()
                 self?.applyLaunchArguments()
             }
@@ -502,6 +499,7 @@ final class Engine {
         switch parts.first {
         case "generator": device = current?.generatorLabel ?? "Generator"
         case "camera": device = "Camera"
+        case "clock": device = "Clock"
         case "post", "mod": device = parts.count > 2 ? parts[1] : target
         default: device = parts.dropLast().joined(separator: ".")
         }
@@ -678,6 +676,8 @@ final class Engine {
         // Camera. Only the orbit rig exists; other types fall back to it.
         errors["camera"] = file.camera.type == "orbit" ? nil : "unknown camera type \(file.camera.type), using orbit"
         let camera = ParamBank(defs: CameraParams.defs, values: file.camera.params ?? [:], reuse: reuse?.camera)
+        // A rebuilt scene keeps its camera's motion; a new one picks up from the scene on screen.
+        let cameraMotion = reuse?.cameraMotion ?? CameraMotion(continuing: current?.cameraMotion)
         let cameraLabel = presetName(.camera, file.camera.type, file.camera.preset) ?? Tools.label(.camera, file.camera.type)
 
         // Modulation: LFOs.
@@ -712,16 +712,17 @@ final class Engine {
                 fxInputs = old.inputs
             }
             let bank = ParamBank(defs: defs, values: fx.params ?? [:], reuse: old?.bank)
+            let history = selfHistory ? (old?.history ?? renderer.makeHistoryPair()) : nil
             let runtime = EffectRuntime(id: id, effect: fx.effect, presetLabel: presetName(.effect, fx.effect, fx.preset),
                                         enabled: fx.enabled ?? true, bank: bank, pipeline: pipeline, selfHistory: selfHistory,
-                                        inputs: fxInputs)
+                                        inputs: fxInputs, history: history)
             effects.append(runtime)
         }
 
         let colors = file.palette.colors.compactMap(parseHexColor)
         let paletteBank = ParamBank(defs: PaletteParams.defs, values: file.palette.params ?? [:], reuse: reuse?.palette.bank)
-        let palette = PaletteModel(colors.count >= 2 ? colors : [[0.02, 0.02, 0.05], [0.9, 0.2, 0.5], [1, 0.9, 0.6]],
-                                   bank: paletteBank)
+        let palette = PaletteModel(colors.count >= 2 ? colors : Tools.defaultPalette.compactMap(parseHexColor),
+                                   bank: paletteBank, gpu: reuse?.palette.gpu ?? renderer.makePaletteTextures())
         let paletteLabel = presetName(.palette, "palette", file.palette.preset) ?? "Custom"
 
         // Inputs: one Audio In and one Clock at most, any number of MIDI inputs.
@@ -765,7 +766,7 @@ final class Engine {
                 errors["input"] = "unknown input \(spec.type)"
             }
         }
-        outputs += Outputs.camera(renderer)
+        outputs += Outputs.camera(cameraMotion)
         outputs += modulators.map(\.output)
 
         // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
@@ -786,7 +787,7 @@ final class Engine {
         var streamOutputs: [StreamOutput] = []
         for input in inputs {
             switch input {
-            case .audio: streamOutputs.append(.spectrum())
+            case .audio: streamOutputs += [.spectrum(), .onsets()]
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
             default: break
             }
@@ -794,6 +795,7 @@ final class Engine {
         streamOutputs.append(.palette())
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
+        if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .onsets) }
         for v in generator?.inputs ?? [] { streamInputs["generator.\(v.name)"] = ("\(generatorLabel ?? "Generator") · \(v.label)", v.kind) }
         for fx in effects { for v in fx.inputs { streamInputs["post.\(fx.id).\(v.name)"] = ("\(fx.id) · \(v.label)", v.kind) } }
         var streamBindings: [String: StreamOutput] = [:]
@@ -831,6 +833,7 @@ final class Engine {
                 switch kind {
                 case .spectrum: fallbackLabel = "Audio In · Spectrum"
                 case .palette: fallbackLabel = "Palette · Colours"
+                case .onsets: fallbackLabel = "Audio In · Onsets"
                 default: fallbackLabel = spec.source.hasSuffix(".depth") ? "Webcam · Depth" : "Webcam · Video"
                 }
                 mappings.append(MappingRuntime(
@@ -878,7 +881,7 @@ final class Engine {
         return RenderScene(name: file.name, generatorPreset: file.generator?.preset, generatorLabel: generatorLabel,
                            generator: generator, inputs: inputs, modulators: modulators,
                            streamOutputs: streamOutputs, streamBindings: streamBindings,
-                           camera: camera, cameraPreset: file.camera.preset, cameraLabel: cameraLabel,
+                           camera: camera, cameraMotion: cameraMotion, cameraPreset: file.camera.preset, cameraLabel: cameraLabel,
                            effects: effects, palettePreset: file.palette.preset,
                            palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
                            banksByPath: banks)
@@ -1018,12 +1021,6 @@ final class Engine {
                 info = "Switched to \(pending.file.name)"
             }
         }
-        if rekordbox.trackSerial != lastRekordboxTrackSerial {
-            lastRekordboxTrackSerial = rekordbox.trackSerial
-            if let track = rekordbox.currentTrack {
-                clock.notifyTrackChange(title: track.title, artist: track.artist, bpm: track.bpm > 0 ? track.bpm : nil)
-            }
-        }
         if uiTickCount % 60 == 0 {
             let current = audioSettings.baseValues
             if current != savedAudioSettings {
@@ -1045,13 +1042,6 @@ final class Engine {
     func tap() { clockState.tap() }
 
     func resync() { clockState.resync() }
-
-    /// Replaces the current scene's palette with a harmonic 5-color palette matching the track's musical key.
-    func applyKeyPalette() {
-        guard let p = rekordbox.keyPalette, let scene = current else { return }
-        scene.palette.replace(p)
-        info = "Applied key palette [\(rekordbox.currentTrack?.camelot ?? "")]"
-    }
 
     /// MIDI arrives on main. Each MIDI input listening to the message's device takes the value
     /// if it has learned the control; one that is learning adds the control as a new output.

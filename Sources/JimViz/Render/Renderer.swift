@@ -41,12 +41,62 @@ final class EffectRuntime: Identifiable {
     @ObservationIgnored let selfHistory: Bool
     /// Declared with `// @video`, `// @spectrum`, `// @palette`; bound from texture(2) up.
     @ObservationIgnored let inputs: [StreamInputDef]
+    /// This effect's own output and last frame's, for `selfHistory`. Made on main when the
+    /// effect is built and carried over when the chain is edited, so the render thread never
+    /// allocates them, and two scenes in a crossfade never share one.
+    @ObservationIgnored let history: HistoryPair?
 
     init(id: String, effect: String, presetLabel: String?, enabled: Bool, bank: ParamBank,
-         pipeline: MTLRenderPipelineState?, selfHistory: Bool, inputs: [StreamInputDef] = []) {
+         pipeline: MTLRenderPipelineState?, selfHistory: Bool, inputs: [StreamInputDef] = [], history: HistoryPair? = nil) {
         self.inputs = inputs
+        self.history = selfHistory ? history : nil
         self.id = id; self.effect = effect; self.presetLabel = presetLabel; self.enabled = enabled; self.bank = bank
         self.pipeline = pipeline; self.selfHistory = selfHistory
+    }
+}
+
+/// Two textures a self-history effect swaps each frame. Render thread only, after init.
+final class HistoryPair {
+    private(set) var current: MTLTexture
+    private(set) var previous: MTLTexture
+
+    init(_ a: MTLTexture, _ b: MTLTexture) { current = a; previous = b }
+
+    func swap() { Swift.swap(&current, &previous) }
+}
+
+/// The camera's integrated motion, so speed changes never jump. Each scene has its own, so
+/// two scenes in a crossfade each move at their own speed. Render thread only, after init.
+final class CameraMotion {
+    var orbit: Float = 0
+    var roll: Float = 0
+    /// Orbit position as 0...1 of a turn, for the camera's output.
+    var orbitPhase: Float { let x = orbit / (2 * .pi); return x - floor(x) }
+
+    /// Picks up where another scene's camera is, so switching scenes doesn't jump the orbit.
+    init(continuing old: CameraMotion? = nil) {
+        orbit = old?.orbit ?? 0
+        roll = old?.roll ?? 0
+    }
+}
+
+/// A palette's gradient on the GPU: a few 256×1 textures rotated on change, so the CPU never
+/// rewrites one the GPU may still be reading. Render thread only, after init.
+final class PaletteTextures {
+    let textures: [MTLTexture]
+    private(set) var index = 0
+    /// What the current texture holds: the colours' version and the palette's input values.
+    var writtenVersion = -1
+    var writtenInputs = [Float](repeating: .nan, count: PaletteParams.defs.count)
+
+    init(_ textures: [MTLTexture]) { self.textures = textures }
+
+    var current: MTLTexture { textures[index] }
+
+    /// Moves to the next texture, to be written.
+    func advance() -> MTLTexture {
+        index = (index + 1) % textures.count
+        return textures[index]
     }
 }
 
@@ -62,8 +112,12 @@ final class PaletteModel {
     /// Versions are unique across all palettes, so switching scenes always re-uploads.
     private static var counter = 0
 
-    init(_ colors: [SIMD3<Float>], bank: ParamBank = ParamBank(defs: PaletteParams.defs, values: [:])) {
+    /// The gradient's textures. Carried over when the scene is rebuilt.
+    @ObservationIgnored let gpu: PaletteTextures
+
+    init(_ colors: [SIMD3<Float>], bank: ParamBank, gpu: PaletteTextures) {
         self.bank = bank
+        self.gpu = gpu
         let c = colors.isEmpty ? [SIMD3<Float>(0, 0, 0), SIMD3<Float>(1, 1, 1)] : colors
         self.colors = c
         renderCopy = c
@@ -126,6 +180,7 @@ final class RenderScene {
     /// Which stream feeds each stream input, by input key (`generator.bgVideo`). Active routes only.
     let streamBindings: [String: StreamOutput]
     let camera: ParamBank
+    let cameraMotion: CameraMotion
     let cameraPreset: String?
     let cameraLabel: String
     let effects: [EffectRuntime]
@@ -143,11 +198,19 @@ final class RenderScene {
     let hasClock: Bool
     /// Every device's chain key, left to right: inputs, `camera`, `palette`, `generator`, `post.<id>`.
     let deviceKeys: [String]
+    /// The stream feeding each of the generator's inputs, in declaration order, and each
+    /// effect's, by effect id. Resolved here so the render thread doesn't build keys per frame.
+    let generatorSources: [StreamOutput?]
+    let effectSources: [String: [StreamOutput?]]
+    /// True when something reads the palette's colours, so its gradient is worth updating.
+    let usesPalette: Bool
+    /// True when Audio In's Onsets is mapped into the Clock's Audio input.
+    let clockHearsAudio: Bool
 
     init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
          inputs: [InputDevice], modulators: [ModulatorRuntime],
          streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
-         camera: ParamBank, cameraPreset: String?, cameraLabel: String,
+         camera: ParamBank, cameraMotion: CameraMotion, cameraPreset: String?, cameraLabel: String,
          effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel, paletteLabel: String,
          outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
         self.name = name; self.generator = generator
@@ -158,13 +221,20 @@ final class RenderScene {
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
-        streamInputs = (generator?.inputs.map { StreamInput(key: "generator.\($0.name)", label: $0.label, kind: $0.kind) } ?? [])
+        let hasClock = inputs.contains { $0.id == "clock" }
+        streamInputs = (hasClock ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .onsets)] : [])
+            + (generator?.inputs.map { StreamInput(key: "generator.\($0.name)", label: $0.label, kind: $0.kind) } ?? [])
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
-        self.camera = camera; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
+        generatorSources = generator?.inputs.map { streamBindings["generator.\($0.name)"] } ?? []
+        effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
+                                   uniquingKeysWith: { a, _ in a })
+        usesPalette = streamBindings.values.contains { $0.kind == .palette }
+        clockHearsAudio = streamBindings[StreamInput.clockAudioKey]?.kind == .onsets
+        self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         hasAudioInput = inputs.contains { $0.id == "audio" }
-        hasClock = inputs.contains { $0.id == "clock" }
+        self.hasClock = hasClock
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + ["camera", "palette"] + (generator == nil ? [] : ["generator"]) + effects.map { "post.\($0.id)" }
         banks = [palette.bank] + webcams.map(\.bank) + modulators.map(\.bank) + (generator.map { [$0.bank] } ?? []) + [camera] + effects.map(\.bank)
     }
@@ -196,20 +266,19 @@ final class Renderer {
 
     private var msaaColor: MTLTexture!
     private var msaaDepth: MTLTexture!
+    /// The generator's resolved picture, which the post chain starts from.
     private var sceneTex: MTLTexture!
-    private var sceneTexB: MTLTexture!
     private var ping: MTLTexture!
     private var pong: MTLTexture!
+    /// Each scene's finished picture during a crossfade, blended into `history`.
+    private var transitionFrom: MTLTexture!
+    private var transitionTo: MTLTexture!
     /// Final output of the previous frame. Sampled by feedback effects and presented.
     private(set) var history: MTLTexture!
 
-    /// Two textures per self-history effect, swapped each frame. Render thread only.
-    private var effectHistory: [String: (current: MTLTexture, previous: MTLTexture)] = [:]
-    /// Rotated per scene pass: the palette's inputs can change every frame, and a transition
-    /// draws two palettes in one frame, so no texture is rewritten while the GPU may read it.
-    private var paletteTextures: [MTLTexture] = []
-    private var paletteIndex = 0
-    private var paletteTex: MTLTexture { paletteTextures[paletteIndex] }
+    /// Scratch for writing a palette gradient, so updating one allocates nothing.
+    private var gradientPixels = [Float16](repeating: 1, count: 256 * 4)
+    private var gradientColors: [SIMD3<Float>] = []
     /// Rotated per frame so the CPU never overwrites a texture the GPU is still reading.
     private var spectrumTextures: [MTLTexture] = []
     private var spectrumIndex = 0
@@ -227,18 +296,12 @@ final class Renderer {
     private let depthOn: MTLDepthStencilState
     private let depthOff: MTLDepthStencilState
 
-    // Camera state integrated over time so speed changes never jump.
-    private var orbit: Float = 0
-    /// Orbit position as 0...1 of a turn, for the camera's output.
-    var orbitPhase: Float { let x = orbit / (2 * .pi); return x - floor(x) }
-    private var rollAccum: Float = 0
-
     init(device: MTLDevice) {
         self.device = device
         queue = device.makeCommandQueue()!
         let pd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 256, height: 1, mipmapped: false)
         pd.usage = .shaderRead
-        paletteTextures = (0..<8).map { _ in device.makeTexture(descriptor: pd)! }
+        gradientColors.reserveCapacity(64)
         let on = MTLDepthStencilDescriptor()
         on.depthCompareFunction = .less
         on.isDepthWriteEnabled = true
@@ -285,10 +348,22 @@ final class Renderer {
         msaaColor = tex(Self.workFormat, samples: Self.sampleCount, usage: .renderTarget, memoryless: true)
         msaaDepth = tex(.depth32Float, samples: Self.sampleCount, usage: .renderTarget, memoryless: true)
         sceneTex = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
-        sceneTexB = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
+        transitionFrom = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
+        transitionTo = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         ping = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         pong = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         history = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
+    }
+
+    /// Textures for a self-history effect. Call on main, when the effect is built.
+    func makeHistoryPair() -> HistoryPair { HistoryPair(makeWorkTexture(), makeWorkTexture()) }
+
+    /// Textures for a palette's gradient. Call on main, when the scene is built. Four is more
+    /// than the frames in flight, so a texture is never rewritten while the GPU reads it.
+    func makePaletteTextures() -> PaletteTextures {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 256, height: 1, mipmapped: false)
+        d.usage = .shaderRead
+        return PaletteTextures((0..<4).map { _ in device.makeTexture(descriptor: d)! })
     }
 
     private func makeWorkTexture() -> MTLTexture {
@@ -451,13 +526,12 @@ final class Renderer {
             pass.colorAttachments[0].loadAction = .dontCare
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { continue }
             enc.label = cam.key
-            var params = cam.bank.packed()
             var vf = f
             vf.resolution = SIMD2(Float(Self.videoSize.width), Float(Self.videoSize.height))
             enc.setRenderPipelineState(pipeline)
             enc.setFragmentTexture(frame.texture, index: 0)
             enc.setFragmentBytes(&vf, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-            enc.setFragmentBytes(&params, length: params.count * 4, index: 1)
+            cam.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
             // Keep the camera's pixel buffer alive until the GPU has read it.
@@ -482,14 +556,13 @@ final class Renderer {
         pass.colorAttachments[0].loadAction = .dontCare
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "\(cam.key).depth"
-        var params = cam.bank.packed()
         var vf = f
         vf.resolution = SIMD2(Float(target.width), Float(target.height))
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentTexture(raw, index: 0)
         enc.setFragmentTexture(cam.depthHistory, index: 1)
         enc.setFragmentBytes(&vf, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-        enc.setFragmentBytes(&params, length: params.count * 4, index: 1)
+        cam.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
         if let blit = cmd.makeBlitCommandEncoder() {
@@ -502,16 +575,16 @@ final class Renderer {
     /// for `Frame.inputs` (bit n for texture(n)). Unconnected video and spectrum get black, an
     /// unconnected palette the grey ramp. Generators also get them in the vertex stage, at the
     /// same indices, so the spectrum or a video (like a webcam's depth) can move the mesh.
-    private func bindInputs(_ enc: MTLRenderCommandEncoder, _ inputs: [StreamInputDef], path: String,
+    private func bindInputs(_ enc: MTLRenderCommandEncoder, _ inputs: [StreamInputDef], sources: [StreamOutput?],
                             scene: RenderScene, from first: Int, vertex: Bool = false) -> Float {
         var mask = 0
         for (i, input) in inputs.enumerated() {
-            let source = scene.streamBindings["\(path).\(input.name)"]
+            let source = i < sources.count ? sources[i] : nil
             let tex: MTLTexture
             switch source?.kind {
             case .video?: tex = source?.texture ?? blackTexture
             case .spectrum?: tex = spectrumTex
-            case .palette?: tex = paletteTex
+            case .palette?: tex = scene.palette.gpu.current
             default: tex = input.kind == .palette ? greyRamp : blackTexture
             }
             if source != nil { mask |= 1 << (first + i) }
@@ -534,11 +607,13 @@ final class Renderer {
         encodeScene(cmd, scene: scene, frame: &f, into: history)
     }
 
+    /// Draws a scene and its post chain into `target`, which must not be `sceneTex`, `ping` or
+    /// `pong`: the next scene drawn in the same frame reuses those.
     func encodeScene(_ cmd: MTLCommandBuffer, scene: RenderScene, frame f: inout FrameUniforms, into target: MTLTexture) {
         encodeWebcams(cmd, scene, &f)
         f.resolution = SIMD2(Float(outputSize.width), Float(outputSize.height))
-        updatePalette(scene.palette)
-        var cam = cameraUniforms(scene.camera, frame: f)
+        if scene.usesPalette { updatePalette(scene.palette) }
+        var cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
 
         // Scene pass.
         let rp = MTLRenderPassDescriptor()
@@ -553,12 +628,14 @@ final class Renderer {
         rp.depthAttachment.storeAction = .dontCare
 
         if let gen = scene.generator {
-            var genParams = gen.bank.packed()
             if let enc = cmd.makeRenderCommandEncoder(descriptor: rp) {
                 enc.label = "scene"
-                f.inputs = bindInputs(enc, gen.inputs, path: "generator", scene: scene, from: 0, vertex: true)
+                f.inputs = bindInputs(enc, gen.inputs, sources: scene.generatorSources, scene: scene, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-                enc.setFragmentBytes(&genParams, length: genParams.count * 4, index: 1)
+                gen.bank.withPacked {
+                    enc.setFragmentBytes($0, length: $1, index: 1)
+                    enc.setVertexBytes($0, length: $1, index: 2)
+                }
                 enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
 
                 enc.setRenderPipelineState(gen.backgroundPipeline)
@@ -570,7 +647,6 @@ final class Renderer {
                 enc.setCullMode(.none)
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)
-                enc.setVertexBytes(&genParams, length: genParams.count * 4, index: 2)
                 enc.setVertexBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
                 let instances = max(1, Int(gen.bank["instances"]?.live ?? 1))
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: gen.vertexCount, instanceCount: instances)
@@ -590,10 +666,8 @@ final class Renderer {
             guard let pipeline = fx.pipeline else { continue }
             var dst: MTLTexture = src === ping ? pong! : ping!
             var historyTex: MTLTexture = history
-            if fx.selfHistory {
-                var pair = effectHistory[fx.id] ?? (makeWorkTexture(), makeWorkTexture())
-                swap(&pair.current, &pair.previous)
-                effectHistory[fx.id] = pair
+            if let pair = fx.history {
+                pair.swap()
                 dst = pair.current
                 historyTex = pair.previous
             }
@@ -603,22 +677,16 @@ final class Renderer {
             pass.colorAttachments[0].storeAction = .store
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { continue }
             enc.label = fx.id
-            var params = fx.bank.packed()
             var ff = f
-            ff.inputs = bindInputs(enc, fx.inputs, path: "post.\(fx.id)", scene: scene, from: 2)
+            ff.inputs = bindInputs(enc, fx.inputs, sources: scene.effectSources[fx.id] ?? [], scene: scene, from: 2)
             enc.setRenderPipelineState(pipeline)
             enc.setFragmentTexture(src, index: 0)
             enc.setFragmentTexture(historyTex, index: 1)
             enc.setFragmentBytes(&ff, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-            enc.setFragmentBytes(&params, length: params.count * 4, index: 1)
+            fx.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
             src = dst
-        }
-
-        if effectHistory.count > scene.effects.count {
-            let live = Set(scene.effects.map(\.id))
-            effectHistory = effectHistory.filter { live.contains($0.key) }
         }
 
         if let blit = cmd.makeBlitCommandEncoder() {
@@ -627,7 +695,7 @@ final class Renderer {
         }
     }
 
-    /// Blends two scenes together using a 300ms crossfade.
+    /// Draws both scenes, each into its own texture, and blends them into `history`.
     func encodeTransition(
         _ cmd: MTLCommandBuffer,
         from fromScene: RenderScene,
@@ -635,8 +703,8 @@ final class Renderer {
         progress: Float,
         frame f: inout FrameUniforms
     ) {
-        encodeScene(cmd, scene: fromScene, frame: &f, into: sceneTex)
-        encodeScene(cmd, scene: toScene, frame: &f, into: sceneTexB)
+        encodeScene(cmd, scene: fromScene, frame: &f, into: transitionFrom)
+        encodeScene(cmd, scene: toScene, frame: &f, into: transitionTo)
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = history
@@ -647,8 +715,8 @@ final class Renderer {
 
         var p = progress
         enc.setRenderPipelineState(transitionPipeline)
-        enc.setFragmentTexture(sceneTex, index: 0)
-        enc.setFragmentTexture(sceneTexB, index: 1)
+        enc.setFragmentTexture(transitionFrom, index: 0)
+        enc.setFragmentTexture(transitionTo, index: 1)
         enc.setFragmentBytes(&p, length: MemoryLayout<Float>.size, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -677,10 +745,11 @@ final class Renderer {
         enc.endEncoding()
     }
 
-    private func cameraUniforms(_ c: ParamBank, frame f: FrameUniforms) -> CameraUniforms {
+    private func cameraUniforms(_ c: ParamBank, _ motion: CameraMotion, frame f: FrameUniforms) -> CameraUniforms {
         let t = f.time
-        orbit += c.live("orbitSpeed") * f.dt
-        rollAccum += c.live("rollSpeed") * 90 * f.dt
+        motion.orbit += c.live("orbitSpeed") * f.dt
+        motion.roll += c.live("rollSpeed") * 90 * f.dt
+        let orbit = motion.orbit
         let dist = c.live("distance"), sway = c.live("sway"), shake = c.live("shake")
         let swing = c.live("swing")
         let angle = swing > 0 ? sin(orbit) * swing * .pi / 180 : orbit
@@ -688,7 +757,7 @@ final class Renderer {
         eye += SIMD3(sin(t * 0.37), cos(t * 0.23) * 0.5, sin(t * 0.29 + 1)) * sway
         eye += SIMD3(sin(t * 31.7), sin(t * 23.3 + 2), sin(t * 27.1 + 4)) * shake * 0.25
         let target = SIMD3<Float>(0, c.live("lookY"), 0)
-        let rollRad = (c.live("roll") + rollAccum) * .pi / 180
+        let rollRad = (c.live("roll") + motion.roll) * .pi / 180
         let up = SIMD3<Float>(sin(rollRad), cos(rollRad), 0)
         let view = simd_float4x4.lookAt(eye: eye, target: target, up: simd_normalize(up))
         let proj = simd_float4x4.perspective(fovY: c.live("fov") * .pi / 180,
@@ -696,26 +765,36 @@ final class Renderer {
         return CameraUniforms(viewProj: proj * view, position: SIMD4(eye, 1))
     }
 
-    /// Writes the 256-step gradient, with the palette's inputs applied, into the next texture.
+    /// Writes the 256-step gradient, with the palette's inputs applied, into the palette's next
+    /// texture, when its colours or inputs have changed since the last write.
     private func updatePalette(_ palette: PaletteModel) {
-        let (_, base) = palette.snapshot()
+        let (version, base) = palette.snapshot()
         guard base.count >= 2 else { return }
-        paletteIndex = (paletteIndex + 1) % paletteTextures.count
-        writeGradient(base.map { PaletteParams.adjust($0) { palette.bank.live($0) } }, into: paletteTex)
+        let gpu = palette.gpu
+        var changed = version != gpu.writtenVersion
+        for (i, p) in palette.bank.params.enumerated() where i < gpu.writtenInputs.count {
+            if gpu.writtenInputs[i] != p.live { changed = true; gpu.writtenInputs[i] = p.live }
+        }
+        guard changed else { return }
+        gpu.writtenVersion = version
+        gradientColors.removeAll(keepingCapacity: true)
+        for c in base { gradientColors.append(PaletteParams.adjust(c) { palette.bank.live($0) }) }
+        writeGradient(gradientColors, into: gpu.advance())
     }
 
     /// Writes colors as an even 256-step gradient into a 256×1 RGBA16Float texture.
     private func writeGradient(_ colors: [SIMD3<Float>], into tex: MTLTexture) {
         guard colors.count >= 2 else { return }
-        var pixels = [Float16](repeating: 1, count: 256 * 4)
         for i in 0..<256 {
             let x = Float(i) / 255 * Float(colors.count - 1)
             let lo = min(Int(x), colors.count - 2)
             let c = simd_mix(colors[lo], colors[lo + 1], SIMD3(repeating: x - Float(lo)))
-            pixels[i * 4] = Float16(c.x)
-            pixels[i * 4 + 1] = Float16(c.y)
-            pixels[i * 4 + 2] = Float16(c.z)
+            gradientPixels[i * 4] = Float16(c.x)
+            gradientPixels[i * 4 + 1] = Float16(c.y)
+            gradientPixels[i * 4 + 2] = Float16(c.z)
         }
-        tex.replace(region: MTLRegionMake2D(0, 0, 256, 1), mipmapLevel: 0, withBytes: pixels, bytesPerRow: 256 * 8)
+        gradientPixels.withUnsafeBytes {
+            tex.replace(region: MTLRegionMake2D(0, 0, 256, 1), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: 256 * 8)
+        }
     }
 }

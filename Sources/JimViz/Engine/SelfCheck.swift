@@ -8,22 +8,6 @@ import AVFoundation
 enum SelfCheck {
     static func runIfRequested() {
         let args = CommandLine.arguments
-        if args.contains("--rekordbox-test") {
-            let reader = RekordboxReader()
-            reader.start()
-            let end = Date().addingTimeInterval(3)
-            while Date() < end {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-            }
-            print("isAvailable: \(reader.isAvailable)")
-            print("statusText: \(reader.statusText)")
-            if let t = reader.currentTrack {
-                print("currentTrack: \(t.displayTitle), key: \(t.key) (\(t.camelot)), cues: \(t.cues.count), art: \(t.artworkURL?.path ?? "none")")
-            } else {
-                print("currentTrack is nil")
-            }
-            exit(0)
-        }
         if let i = args.firstIndex(of: "--analyze"), i + 1 < args.count {
             let truth = args.firstIndex(of: "--truth").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
             exit(analyzeFile(args[i + 1], truthPath: truth))
@@ -397,7 +381,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.onsets", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -441,28 +425,110 @@ enum SelfCheck {
         return nil
     }
 
-    private static func checkStagesAndTransitions(engine: Engine) -> Bool {
-        // 1. Verify stage loading and scene build
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }),
-              let sceneFile = try? SceneFile.load(url),
-              let sceneA = engine.build(sceneFile, reuse: nil) else {
-            return false
+    /// The crossfade's timing, and that it really blends the outgoing scene into the incoming
+    /// one: at the start the picture is the outgoing scene, at the end the incoming one.
+    private static func checkTransitions(engine: Engine) -> String? {
+        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }),
+              let urlB = engine.sceneURLs.first(where: { $0.lastPathComponent == "sammy-style.json" }),
+              let fileA = try? SceneFile.load(urlA), let fileB = try? SceneFile.load(urlB),
+              let sceneA = engine.build(fileA, reuse: nil), let sceneB = engine.build(fileB, reuse: nil) else {
+            return "test scenes missing"
         }
 
-        // 2. Verify 300ms crossfade controller
         let controller = TransitionController()
-        guard let sceneB = engine.build(sceneFile, reuse: nil) else {
-            return false
+        controller.start(from: sceneA, to: sceneB, now: 100.0)
+        guard controller.isTransitioning else { return "crossfade did not start" }
+        _ = controller.advance(now: 100.15)
+        guard abs(controller.progress - 0.5) < 0.05 else { return "crossfade not halfway at 150 ms" }
+        _ = controller.advance(now: 100.35)
+        guard !controller.isTransitioning && controller.progress >= 1.0 else { return "crossfade did not finish by 350 ms" }
+
+        // Each scene alone, then the crossfade at its start and end, all without audio so the
+        // pictures compare like for like.
+        let audio = engine.offlineAudio
+        engine.offlineAudio = nil
+        defer { engine.offlineAudio = audio }
+        _ = engine.renderOffscreen(sceneA, frames: 5, snapshot: nil)
+        let a = engine.averageColor(engine.renderer.history)
+        _ = engine.renderOffscreen(sceneB, frames: 5, snapshot: nil)
+        let b = engine.averageColor(engine.renderer.history)
+        guard simd_length(a - b) > 0.01 else { return "test scenes look the same: \(a) vs \(b)" }
+        // Each scene's camera should move at its own speed, once per frame, while both are drawn.
+        let orbitA = sceneA.cameraMotion.orbit, orbitB = sceneB.cameraMotion.orbit
+        var expectA: Float = 0, expectB: Float = 0
+        var start = SIMD3<Float>.zero
+        for i in 0..<10 {
+            if i == 5 { start = engine.averageColor(engine.renderer.history) }
+            engine.renderTransition(from: sceneA, to: sceneB, progress: i < 5 ? 0 : 1, frames: 1)
+            expectA += sceneA.camera.live("orbitSpeed") / 60
+            expectB += sceneB.camera.live("orbitSpeed") / 60
+        }
+        let end = engine.averageColor(engine.renderer.history)
+        guard simd_length(start - a) < simd_length(start - b) else {
+            return "crossfade start doesn't show the outgoing scene: \(start), outgoing \(a), incoming \(b)"
+        }
+        guard simd_length(end - b) < simd_length(end - a) else {
+            return "crossfade end doesn't show the incoming scene: \(end), outgoing \(a), incoming \(b)"
         }
 
-        controller.start(from: sceneA, to: sceneB, now: 100.0)
-        guard controller.isTransitioning else { return false }
-        _ = controller.advance(now: 100.15)
-        guard abs(controller.progress - 0.5) < 0.05 else { return false }
-        _ = controller.advance(now: 100.35)
-        guard !controller.isTransitioning && controller.progress >= 1.0 else { return false }
+        let movedA = sceneA.cameraMotion.orbit - orbitA, movedB = sceneB.cameraMotion.orbit - orbitB
+        guard abs(movedA - expectA) < 1e-3, abs(movedB - expectB) < 1e-3 else {
+            return "cameras moved \(movedA), \(movedB) in 10 crossfade frames; expected \(expectA), \(expectB)"
+        }
+        return nil
+    }
 
-        return true
+    /// The Clock follows audio only through a mapping: Audio In · Onsets into Clock · Audio.
+    private static func checkClockAudio(engine: Engine) -> String? {
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "01-ico-shatter.json" }) else { return "test scene missing" }
+        engine.load(url, animated: false)
+        defer { engine.load(url, animated: false) }
+        guard let scene = engine.current, scene.hasClock, scene.hasAudioInput else { return "test scene needs Audio In and Clock" }
+        engine.removeMappings(target: StreamInput.clockAudioKey)
+        guard engine.current?.clockHearsAudio == false else { return "Clock hears audio without a mapping" }
+
+        // Typed: onsets only into the Clock, and the Clock takes only onsets.
+        let count = engine.current?.mappings.count
+        engine.addMapping(source: StreamOutput.onsetsKey, target: "generator.spec")
+        engine.addMapping(source: StreamOutput.onsetsKey, target: "camera.fov")
+        engine.addMapping(source: StreamOutput.spectrumKey, target: StreamInput.clockAudioKey)
+        engine.addMapping(source: "audio.kick", target: StreamInput.clockAudioKey)
+        guard engine.current?.mappings.count == count else { return "onsets mapped across kinds" }
+
+        engine.addMapping(source: StreamOutput.onsetsKey, target: StreamInput.clockAudioKey)
+        guard engine.current?.clockHearsAudio == true else { return "Onsets → Clock · Audio did not connect" }
+
+        // Without Audio In the mapping waits; without the Clock it has nowhere to go.
+        engine.removeInput("audio")
+        guard engine.current?.clockHearsAudio == false,
+              engine.current?.mappings.first(where: { $0.target == StreamInput.clockAudioKey })?.problem == "Needs Audio In in the chain" else {
+            return "Clock still hears audio without Audio In"
+        }
+        engine.apply(.input, "audio")
+        guard engine.current?.clockHearsAudio == true else { return "mapping did not resume when Audio In came back" }
+
+        // Nothing connects itself: a Clock added to a scene starts unmapped.
+        engine.removeMappings(target: StreamInput.clockAudioKey)
+        engine.removeInput("clock")
+        engine.apply(.input, "clock")
+        guard engine.current?.hasClock == true, engine.current?.clockHearsAudio == false else { return "new Clock connected itself" }
+
+        // The clock follows a steady beat only while it hears it.
+        func run(hearing: Bool) -> ClockSourceKind {
+            let clock = ClockManager()
+            clock.mode = .audio
+            let period = 60.0 / 124
+            for i in 0..<(60 * 10) {
+                let t = Double(i) / 60
+                let onBeat = (t.truncatingRemainder(dividingBy: period)) < 1.0 / 60
+                if hearing { clock.audioTempo.feed(strength: onBeat ? 1 : 0, active: true, time: t) }
+                clock.advance(now: t, dt: 1.0 / 60, hearsAudio: hearing)
+            }
+            return clock.active
+        }
+        guard run(hearing: false) == .manual else { return "clock followed audio it wasn't mapped to hear" }
+        guard run(hearing: true) == .audio else { return "clock didn't follow a steady mapped beat" }
+        return nil
     }
 
     /// Edits a scene's chain in memory and checks the result. Nothing is saved.
@@ -538,7 +604,7 @@ enum SelfCheck {
         engine.addMapping(source: "webcam.webcam.video", target: "generator.texVideo")
         guard let scene = engine.current, let cam = scene.webcams.first,
               scene.streamBindings["generator.texVideo"] === cam.video,
-              scene.streamInputs.map(\.label) == ["Palette", "Spectrum", "Background", "Texture", "Depth"] else { return "video not mapped into Texture" }
+              scene.streamInputs.map(\.label) == ["Audio", "Palette", "Spectrum", "Background", "Texture", "Depth"] else { return "video not mapped into Texture" }
         guard cam.pipeline != nil, cam.bank["zoom"] != nil, cam.bank["mirror"]?.def.labels == ["Off", "Flip", "Fold", "Quad"] else {
             return "webcam shader not compiled or its knobs missing: \(engine.errors)"
         }
@@ -742,11 +808,16 @@ enum SelfCheck {
             print("ok   webcam (processing, video into the generator, outputs, removal)")
         }
 
-        if checkStagesAndTransitions(engine: engine) {
-            print("ok   stage resolution & transitions")
+        if let problem = checkTransitions(engine: engine) {
+            print("FAIL transitions: \(problem)"); failures += 1
         } else {
-            print("FAIL stage resolution & transitions")
-            failures += 1
+            print("ok   transitions (timing, outgoing and incoming scenes both drawn and blended, own cameras)")
+        }
+
+        if let problem = checkClockAudio(engine: engine) {
+            print("FAIL clock: \(problem)"); failures += 1
+        } else {
+            print("ok   clock (follows audio only through Onsets → Clock · Audio, typed, starts unmapped)")
         }
 
         if let problem = checkComposition(engine: engine) {
@@ -833,6 +904,24 @@ extension Engine {
         }
         if let snapshot { writePNG(renderer.history, to: snapshot) }
         return gpu / Double(frames) * 1000
+    }
+
+    /// Renders crossfade frames between two scenes at a fixed progress, into `renderer.history`.
+    func renderTransition(from a: RenderScene, to b: RenderScene, progress: Float, frames: Int) {
+        for i in 0..<frames {
+            var signals = SignalFrame()
+            signals.time = Float(i) / 60
+            signals.dt = 1 / 60
+            a.modulate(signals)
+            b.modulate(signals)
+            var f = FrameUniforms()
+            f.time = signals.time; f.dt = signals.dt
+            let cmd = renderer.queue.makeCommandBuffer()!
+            renderer.encodeTransition(cmd, from: a, to: b, progress: progress, frame: &f)
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            if let e = cmd.error { print("  GPU error: \(e)") }
+        }
     }
 
     private func writePNG(_ tex: MTLTexture, to url: URL) {

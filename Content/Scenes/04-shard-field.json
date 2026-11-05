@@ -100,11 +100,7 @@
       "source": "audio.kick",
       "target": "camera.fov"
     },
-    {
-      "amount": 0.3,
-      "source": "clock.track",
-      "target": "post.film.flash"
-    },
+
     {
       "source": "palette.colors",
       "target": "generator.pal"

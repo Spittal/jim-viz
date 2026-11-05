@@ -19,10 +19,12 @@ final class ClockState {
     private(set) var audioBPM: Double = 0
     private(set) var audioConfidence: Double = 0
     private(set) var audioUsable = false
+    /// Whether the scene on screen maps audio into the Clock.
+    private(set) var hearsAudio = false
 
     init(clock: ClockManager) {
         self.clock = clock
-        mode = ClockMode(rawValue: defaults.string(forKey: "clock.mode") ?? "") ?? .auto
+        mode = ClockMode(rawValue: defaults.string(forKey: "clock.mode") ?? "") ?? .audio
         latencyMs = defaults.object(forKey: "clock.latencyMs") as? Double ?? 0
         minBPM = defaults.object(forKey: "clock.minBPM") as? Double ?? 90
         maxBPM = defaults.object(forKey: "clock.maxBPM") as? Double ?? 180
@@ -35,6 +37,7 @@ final class ClockState {
     /// Called at UI rate. Only assigns when values change, to limit SwiftUI updates.
     func refresh() {
         if active != clock.active { active = clock.active }
+        if hearsAudio != clock.hearsAudio { hearsAudio = clock.hearsAudio }
         if abs(bpm - clock.bpm) > 0.05 { bpm = clock.bpm }
         let a = clock.audioTempo.status()
         if abs(a.bpm - audioBPM) > 0.05 { audioBPM = a.bpm }

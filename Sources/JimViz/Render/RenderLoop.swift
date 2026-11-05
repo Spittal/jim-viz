@@ -50,6 +50,9 @@ final class RenderLoop: NSObject {
     private let surfacesLock = NSLock()
     private var surfaces: [RenderSurface] = []
     private var previews: [VideoPreview] = []
+    /// This frame's visible surfaces and previews, reused so presenting allocates nothing.
+    private var visibleSurfaces: [RenderSurface] = []
+    private var visiblePreviews: [VideoPreview] = []
     private let inFlight = DispatchSemaphore(value: 3)
     private var startTime: CFTimeInterval = 0
     private var lastTime: CFTimeInterval = 0
@@ -120,20 +123,26 @@ final class RenderLoop: NSObject {
             fpsWindowStart = now
         }
 
+        let activeTransition = transition.advance(now: now)
+        let primaryScene = activeTransition?.to ?? sceneProvider()
+        let fromScene = activeTransition?.from
+        // Audio is analysed only while a scene on screen has Audio In, and feeds the clock's
+        // tempo only while one maps Audio In's Onsets into the Clock.
+        let needsAudio = primaryScene?.hasAudioInput == true || fromScene?.hasAudioInput == true
+        let hearsAudio = primaryScene?.clockHearsAudio == true || fromScene?.clockHearsAudio == true
+
         // Audio first, so the tempo estimator sees this frame's onsets before the clock advances.
-        if let ring = audioRing {
+        if needsAudio, let ring = audioRing {
             analyzer.process(ring: ring, dt: Float(dt), settings: audioSettings)
             renderer.updateSpectrum(analyzer.spectrum)
-            if analyzer.fresh {
+            if hearsAudio && analyzer.fresh {
                 clock.audioTempo.feed(strength: analyzer.onsetStrength, active: analyzer.features.active, time: now)
             }
         }
         let audio = analyzer.features
 
-        clock.advance(now: now, dt: dt)
+        clock.advance(now: now, dt: dt, hearsAudio: hearsAudio)
         beat = clock.beat
-        let activeTransition = transition.advance(now: now)
-        let primaryScene = activeTransition?.to ?? sceneProvider()
         guard primaryScene != nil || activeTransition != nil else { return }
 
         var signals = SignalFrame()
@@ -143,7 +152,6 @@ final class RenderLoop: NSObject {
         signals.bpm = Float(clock.bpm)
         signals.bass = audio.bass; signals.mid = audio.mid; signals.high = audio.high; signals.level = audio.level
         signals.kick = audio.kick; signals.snare = audio.snare; signals.hat = audio.hat
-        signals.beatsSinceTrackChange = clock.beat - clock.trackChangeBeat
 
         // Shaders get only time; audio and the clock reach them through mappings.
         var frame = FrameUniforms()
@@ -163,15 +171,17 @@ final class RenderLoop: NSObject {
         }
 
         surfacesLock.lock()
-        let targets = surfaces.filter(\.visible)
-        let videoPreviews = previews.filter(\.layer.visible)
+        visibleSurfaces.removeAll(keepingCapacity: true)
+        visiblePreviews.removeAll(keepingCapacity: true)
+        for s in surfaces where s.visible { visibleSurfaces.append(s) }
+        for p in previews where p.layer.visible { visiblePreviews.append(p) }
         surfacesLock.unlock()
-        for p in videoPreviews {
+        for p in visiblePreviews {
             guard let tex = p.source(), let drawable = p.layer.layer.nextDrawable() else { continue }
             renderer.present(cmd, tex, into: drawable.texture)
             cmd.present(drawable)
         }
-        for s in targets {
+        for s in visibleSurfaces {
             guard let drawable = s.layer.nextDrawable() else { continue }
             renderer.present(cmd, into: drawable.texture)
             cmd.present(drawable)

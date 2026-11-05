@@ -16,6 +16,8 @@ final class AudioTempo {
 
     static let rate: Double = 100
     static let windowSeconds: Double = 8
+    /// Spreads one frame's onset over five slots.
+    private static let kernel: [Float] = [0.1, 0.25, 0.3, 0.25, 0.1]
 
     /// Settable from main; read on the render thread.
     /// One octave by default, so a tempo and its half/double can't both be candidates.
@@ -55,8 +57,7 @@ final class AudioTempo {
             env[lastSlot! % n] = 0
             filledSlots += 1
         }
-        let kernel: [Float] = [0.1, 0.25, 0.3, 0.25, 0.1]
-        for (k, w) in kernel.enumerated() {
+        for (k, w) in Self.kernel.enumerated() {
             let s = slot + k - 2
             env[((s % n) + n) % n] += strength * w
         }
