@@ -189,7 +189,7 @@ final class PaletteModel {
 
 /// A device in the scene's Inputs section.
 enum InputDevice: Identifiable {
-    case audio(AudioInRuntime), clock(ClockRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime)
+    case audio(AudioInRuntime), clock(ClockRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime), video(VideoRuntime), picture(PictureRuntime)
 
     /// Chain key, as used for selection and in mapping keys.
     var id: String {
@@ -198,6 +198,8 @@ enum InputDevice: Identifiable {
         case .clock: return "clock"
         case .midi(let m): return m.key
         case .webcam(let w): return w.key
+        case .video(let v): return v.key
+        case .picture(let p): return p.key
         }
     }
 }
@@ -216,6 +218,11 @@ final class RenderScene {
     let modulators: [ModulatorRuntime]
     let midiInputs: [MIDIInputRuntime]
     let webcams: [WebcamRuntime]
+    let videos: [VideoRuntime]
+    let pictures: [PictureRuntime]
+    var allVideoSources: [any VideoSourceRuntime] {
+        (webcams as [any VideoSourceRuntime]) + (videos as [any VideoSourceRuntime]) + (pictures as [any VideoSourceRuntime])
+    }
     /// Every stream output (video, spectrum, palette) and stream input in the chain, in chain order.
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
@@ -263,6 +270,8 @@ final class RenderScene {
         clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
         midiInputs = inputs.compactMap { if case .midi(let m) = $0 { return m } else { return nil } }
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
+        videos = inputs.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
+        pictures = inputs.compactMap { if case .picture(let p) = $0 { return p } else { return nil } }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
         let syncInputs: [StreamInput] = modulators.filter { $0.type == .lfo }
@@ -280,7 +289,7 @@ final class RenderScene {
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + webcams.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + allVideoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
     }
 
     convenience init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
@@ -614,15 +623,15 @@ final class Renderer {
         return device.makeTexture(descriptor: d)!
     }
 
-    /// Processes each webcam's latest frame into its video output. Before the first frame
-    /// (or without a camera) the output is black.
-    private func encodeWebcams(_ cmd: MTLCommandBuffer, _ scene: RenderScene, _ f: inout FrameUniforms) {
-        for cam in scene.webcams {
+    /// Processes each video source's (webcam, video, picture) latest frame into its video output.
+    /// Before the first frame (or without input) the output is black.
+    private func encodeVideoSources(_ cmd: MTLCommandBuffer, _ scene: RenderScene, _ f: inout FrameUniforms) {
+        for source in scene.allVideoSources {
             let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = cam.processed
+            pass.colorAttachments[0].texture = source.processed
             pass.colorAttachments[0].storeAction = .store
-            let frame = cam.feed.latest()
-            guard let frame, let pipeline = cam.pipeline else {
+            let frame = source.sourceFeed.latest()
+            guard let frame, let pipeline = source.pipeline else {
                 pass.colorAttachments[0].loadAction = .clear
                 pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
                 cmd.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
@@ -630,29 +639,29 @@ final class Renderer {
             }
             pass.colorAttachments[0].loadAction = .dontCare
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { continue }
-            enc.label = cam.key
+            enc.label = source.key
             var vf = f
             vf.resolution = SIMD2(Float(Self.videoSize.width), Float(Self.videoSize.height))
             enc.setRenderPipelineState(pipeline)
             enc.setFragmentTexture(frame.texture, index: 0)
             enc.setFragmentBytes(&vf, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-            cam.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
+            source.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
-            // Keep the camera's pixel buffer alive until the GPU has read it.
+            // Keep the source's pixel buffer alive until the GPU has read it.
             if let owner = frame.owner { cmd.addCompletedHandler { _ in withExtendedLifetime(owner) {} } }
         }
-        for cam in scene.webcams where cam.depthMapped { encodeDepth(cmd, cam, f) }
+        for source in scene.allVideoSources where source.depthMapped { encodeDepth(cmd, source, f) }
     }
 
-    /// Draws a webcam's Depth output from the estimator's latest depth, framed like its video
+    /// Draws a video source's Depth output from the estimator's latest depth, framed like its video
     /// and eased toward it from last frame's. Black (all far) until the first depth arrives.
-    private func encodeDepth(_ cmd: MTLCommandBuffer, _ cam: WebcamRuntime, _ f: FrameUniforms) {
-        let target = cam.depth
+    private func encodeDepth(_ cmd: MTLCommandBuffer, _ source: any VideoSourceRuntime, _ f: FrameUniforms) {
+        let target = source.depth
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].storeAction = .store
-        guard let raw = cam.feed.depth.latest()?.texture, let pipeline = cam.depthPipeline else {
+        guard let raw = source.sourceFeed.depth.latest()?.texture, let pipeline = source.depthPipeline else {
             pass.colorAttachments[0].loadAction = .clear
             pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
             cmd.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
@@ -660,18 +669,18 @@ final class Renderer {
         }
         pass.colorAttachments[0].loadAction = .dontCare
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
-        enc.label = "\(cam.key).depth"
+        enc.label = "\(source.key).depth"
         var vf = f
         vf.resolution = SIMD2(Float(target.width), Float(target.height))
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentTexture(raw, index: 0)
-        enc.setFragmentTexture(cam.depthHistory, index: 1)
+        enc.setFragmentTexture(source.depthHistory, index: 1)
         enc.setFragmentBytes(&vf, length: MemoryLayout<FrameUniforms>.stride, index: 0)
-        cam.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
+        source.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
         if let blit = cmd.makeBlitCommandEncoder() {
-            blit.copy(from: target, to: cam.depthHistory)
+            blit.copy(from: target, to: source.depthHistory)
             blit.endEncoding()
         }
     }
@@ -704,7 +713,7 @@ final class Renderer {
     /// Draws a scene and its post chain into `target`, which must not be `sceneTex`, `ping` or
     /// `pong`: the next scene drawn in the same frame reuses those.
     func encodeScene(_ cmd: MTLCommandBuffer, scene: RenderScene, frame f: inout FrameUniforms, into target: MTLTexture) {
-        encodeWebcams(cmd, scene, &f)
+        encodeVideoSources(cmd, scene, &f)
         f.resolution = SIMD2(Float(outputSize.width), Float(outputSize.height))
         if scene.usesPalette, let pal = scene.palette { updatePalette(pal) }
         var cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
@@ -724,13 +733,13 @@ final class Renderer {
         if let enc = cmd.makeRenderCommandEncoder(descriptor: rp) {
             enc.label = "scene"
 
-            // 1. Draw webcam backgrounds in chain order for webcams with bg > 0.
-            for cam in scene.webcams {
-                let bg = cam.bank["bg"]?.live ?? 0
+            // 1. Draw video source backgrounds in chain order for sources with bg > 0.
+            for source in scene.allVideoSources {
+                let bg = source.bank["bg"]?.live ?? 0
                 if bg > 0 {
                     enc.setRenderPipelineState(webcamBgPipeline)
                     enc.setDepthStencilState(depthOff)
-                    enc.setFragmentTexture(cam.processed, index: 0)
+                    enc.setFragmentTexture(source.processed, index: 0)
                     var amount = bg
                     enc.setFragmentBytes(&amount, length: MemoryLayout<Float>.size, index: 0)
                     enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
