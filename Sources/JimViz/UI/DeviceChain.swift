@@ -20,26 +20,34 @@ struct DeviceChain: View {
                     ForEach(scene.inputs) { input in
                         switch input {
                         case .audio:
-                            AudioDevice()
+                            AudioDevice(accent: isReplacing(key: "audio", kind: .input))
                                 .contextMenu {
                                     Button("Remove", role: .destructive) { engine.removeInput("audio") }
                                 }
+                                .chainFrame("device:input:audio:audio")
                         case .clock:
-                            ClockDevice()
+                            ClockDevice(accent: isReplacing(key: "clock", kind: .input))
                                 .contextMenu {
                                     Button("Remove", role: .destructive) { engine.removeInput("clock") }
                                 }
-                        case .midi(let input): MIDIInputDevice(input: input)
-                        case .webcam(let w): WebcamDevice(webcam: w)
+                                .chainFrame("device:input:clock:clock")
+                        case .midi(let input):
+                            MIDIInputDevice(input: input, accent: isReplacing(key: input.id, kind: .input))
+                                .chainFrame("device:input:\(input.id):midi")
+                        case .webcam(let w):
+                            WebcamDevice(webcam: w, accent: isReplacing(key: w.id, kind: .input))
+                                .chainFrame("device:input:\(w.id):webcam")
                         }
                     }
+                    Color.clear.frame(width: 4).frame(maxHeight: .infinity)
+                        .chainFrame("inputs.end")
 
                     sectionDivider
 
                     // Modulation
                     if !scene.modulators.isEmpty {
                         ForEach(Array(scene.modulators.enumerated()), id: \.element.id) { index, mod in
-                            LFODevice(mod: mod)
+                            LFODevice(mod: mod, accent: isReplacing(key: mod.id, kind: .modulation))
                                 .contextMenu {
                                     Button("Move Left") { engine.moveModulator(id: mod.id, by: -1) }.disabled(index == 0)
                                     Button("Move Right") { engine.moveModulator(id: mod.id, by: 1) }
@@ -47,22 +55,26 @@ struct DeviceChain: View {
                                     Divider()
                                     Button("Remove", role: .destructive) { engine.removeModulator(id: mod.id) }
                                 }
+                                .chainFrame("device:modulation:\(mod.id):\(mod.type)")
                         }
+                        Color.clear.frame(width: 4).frame(maxHeight: .infinity)
+                            .chainFrame("modulators.end")
                         sectionDivider
                     }
 
                     // Generation
                     if let cam = scene.camera {
-                        DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera), select: "camera",
+                        DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera, key: "camera"), select: "camera",
                                     onClose: { engine.removeCamera() }) {
                             KnobGrid(params: cam.params, prefix: "camera")
                         }
                         .contextMenu {
                             Button("Remove", role: .destructive) { engine.removeCamera() }
                         }
+                        .chainFrame("device:camera:camera:orbit")
                     }
                     if let pal = scene.palette {
-                        DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette), select: "palette",
+                        DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette, key: "palette"), select: "palette",
                                     onClose: { engine.removePalette() }) {
                             HStack(alignment: .top, spacing: 6) {
                                 PaletteEditor(palette: pal)
@@ -72,10 +84,11 @@ struct DeviceChain: View {
                         .contextMenu {
                             Button("Remove", role: .destructive) { engine.removePalette() }
                         }
+                        .chainFrame("device:palette:palette:palette")
                     }
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
                         DevicePanel(title: "Generator", subtitle: "\(gen.label ?? gen.type) · \(gen.shape.rawValue) \(gen.detail)",
-                                    accent: slotColor(.generator), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
+                                    accent: slotColor(.generator, key: gen.key), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 // Stream sockets only show while a stream of their kind is waiting to be mapped.
                                 let waiting = engine.mapSource.map { engine.kind(of: $0) }
@@ -92,13 +105,16 @@ struct DeviceChain: View {
                             Divider()
                             Button("Remove", role: .destructive) { engine.removeGenerator(key: gen.key) }
                         }
+                        .chainFrame("device:generator:\(gen.key):\(gen.type)")
                     }
+                    Color.clear.frame(width: 4).frame(maxHeight: .infinity)
+                        .chainFrame("generators.end")
 
                     sectionDivider
 
                     // Effects
                     ForEach(Array(scene.effects.enumerated()), id: \.element.id) { index, fx in
-                        EffectDevice(fx: fx)
+                        EffectDevice(fx: fx, accent: isReplacing(key: fx.id, kind: .effect))
                             .contextMenu {
                                 Button("Move Left") { engine.moveEffect(id: fx.id, to: index - 1) }.disabled(index == 0)
                                 Button("Move Right") { engine.moveEffect(id: fx.id, to: index + 2) }
@@ -107,14 +123,17 @@ struct DeviceChain: View {
                                 Button("Remove", role: .destructive) { engine.removeEffect(id: fx.id) }
                             }
                             .chainFrame(fx.id)
+                            .chainFrame("device:effect:\(fx.id):\(fx.effect)")
                     }
                     // Where an effect dropped at the end lands, and where its marker draws.
                     Color.clear.frame(width: 24).frame(maxHeight: .infinity)
                         .chainFrame(ChainDropDelegate.endKey)
                 }
-                .padding(6)
-                .padding(.bottom, 8)
-                .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .frame(minWidth: geo.size.width, alignment: .topLeading)
+                .frame(height: geo.size.height)
+                .background(ChainScrollHelper())
                 .contentShape(Rectangle())
                 // Clicking empty chain space clears the selection.
                 .onTapGesture { engine.selectDevice(nil) }
@@ -138,9 +157,20 @@ struct DeviceChain: View {
 
     private func isSlot(_ kind: DeviceKind) -> Bool { dropTarget == .replace(kind) }
 
-    private func slotColor(_ kind: DeviceKind) -> Color? { isSlot(kind) ? Theme.accent : nil }
+    private func isReplacing(key: String, kind: DeviceKind) -> Color? {
+        if case .replaceDevice(let k, let kd, _) = dropTarget, k == key && kd == kind {
+            return Theme.accent
+        }
+        return nil
+    }
 
-    /// Ableton-style insertion line between effects while an effect is dragged over the chain.
+    private func slotColor(_ kind: DeviceKind, key: String? = nil) -> Color? {
+        if dropTarget == .replace(kind) { return Theme.accent }
+        if let key, isReplacing(key: key, kind: kind) != nil { return Theme.accent }
+        return nil
+    }
+
+    /// Ableton-style insertion line while a device is dragged over the chain.
     @ViewBuilder
     private func insertionMarker(_ ids: [String]) -> some View {
         if case .effectIndex(let i)? = dropTarget,
@@ -151,6 +181,32 @@ struct DeviceChain: View {
                 .frame(width: 3, height: frame.height)
                 .offset(x: x, y: frame.minY)
                 .allowsHitTesting(false)
+        } else if case .generatorIndex(let i)? = dropTarget {
+            let genKeys = frames.keys
+                .filter { $0.hasPrefix("device:generator:") }
+                .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
+            let targetKey = i < genKeys.count ? genKeys[i] : "generators.end"
+            if let frame = frames[targetKey] {
+                let x = i < genKeys.count ? (frame.minX - 4.5) : (frame.minX - 1.5)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Theme.accent)
+                    .frame(width: 3, height: frame.height)
+                    .offset(x: x, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
+        } else if case .modulatorIndex(let i)? = dropTarget {
+            let modKeys = frames.keys
+                .filter { $0.hasPrefix("device:modulation:") }
+                .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
+            let targetKey = i < modKeys.count ? modKeys[i] : "modulators.end"
+            if let frame = frames[targetKey] {
+                let x = i < modKeys.count ? (frame.minX - 4.5) : (frame.minX - 1.5)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Theme.accent)
+                    .frame(width: 3, height: frame.height)
+                    .offset(x: x, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
         }
     }
 }
@@ -158,9 +214,11 @@ struct DeviceChain: View {
 private struct EffectDevice: View {
     @Environment(Engine.self) private var engine
     @Bindable var fx: EffectRuntime
+    var accent: Color? = nil
 
     var body: some View {
         DevicePanel(title: fx.id, subtitle: fx.presetLabel, isOn: $fx.enabled, failed: fx.pipeline == nil,
+                    accent: accent,
                     drag: .move(effectID: fx.id), select: "post.\(fx.id)", onClose: { engine.removeEffect(id: fx.id) }) {
             if fx.bank.params.isEmpty {
                 Text(fx.pipeline == nil ? "shader error" : "no params")
@@ -171,6 +229,77 @@ private struct EffectDevice: View {
                 KnobGrid(params: fx.bank.params, prefix: "post.\(fx.id)")
             }
         }
+    }
+}
+
+/// Disables vertical scrolling on the chain's NSScrollView and forwards vertical scroll wheel events horizontally.
+struct ChainScrollHelper: NSViewRepresentable {
+    func makeNSView(context: Context) -> ChainScrollViewConfigurator {
+        ChainScrollViewConfigurator()
+    }
+    func updateNSView(_ nsView: ChainScrollViewConfigurator, context: Context) {}
+}
+
+final class ChainScrollViewConfigurator: NSView {
+    private var didConfigure = false
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureScrollView()
+        setupEventMonitor()
+    }
+
+    private func configureScrollView() {
+        guard let sv = enclosingScrollView, !didConfigure else { return }
+        didConfigure = true
+        sv.hasVerticalScroller = false
+        sv.hasHorizontalScroller = true
+        sv.verticalScrollElasticity = .none
+        sv.horizontalScrollElasticity = .automatic
+    }
+
+    private func setupEventMonitor() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, let sv = self.enclosingScrollView, let window = self.window, event.window == window else {
+                return event
+            }
+            let pointInWindow = event.locationInWindow
+            let pointInSV = sv.convert(pointInWindow, from: nil)
+            guard sv.bounds.contains(pointInSV) else { return event }
+
+            let isPrecise = event.hasPreciseScrollingDeltas
+            let dy = isPrecise ? event.scrollingDeltaY : event.deltaY
+            let dx = isPrecise ? event.scrollingDeltaX : event.deltaX
+
+            // Normal scroll (vertical delta without horizontal) -> scroll horizontally
+            if abs(dx) < 0.001 && abs(dy) > 0.001 {
+                let scrollAmount: CGFloat = isPrecise ? dy : (dy * 30)
+                var origin = sv.documentVisibleRect.origin
+                let maxScroll = max(0, (sv.documentView?.bounds.width ?? 0) - sv.documentVisibleRect.width)
+                origin.x = max(0, min(origin.x - scrollAmount, maxScroll))
+                origin.y = 0
+                sv.contentView.scroll(to: origin)
+                sv.reflectScrolledClipView(sv.contentView)
+                return nil
+            } else if abs(dy) > 0.001 {
+                // Diagonal / horizontal + vertical scroll: ensure y stays 0
+                var origin = sv.documentVisibleRect.origin
+                let scrollAmount: CGFloat = isPrecise ? dx : (dx * 30)
+                let maxScroll = max(0, (sv.documentView?.bounds.width ?? 0) - sv.documentVisibleRect.width)
+                origin.x = max(0, min(origin.x - scrollAmount, maxScroll))
+                origin.y = 0
+                sv.contentView.scroll(to: origin)
+                sv.reflectScrolledClipView(sv.contentView)
+                return nil
+            }
+            return event
+        }
+    }
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 }
 
@@ -311,7 +440,15 @@ struct DevicePanel<Content: View>: View {
         }
     }
 
-    /// Selects on a click; folds or unfolds on a double-click.
+    private func toggleOn() {
+        guard let isOn else { return }
+        let snapshot = engine.currentSnapshot()
+        isOn.wrappedValue.toggle()
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Toggle \(title)", before: snapshot)
+            engine.scheduleAutoSave()
+        }
+    }
     private func headerClicked() {
         guard let select else { return }
         if NSApp.currentEvent?.clickCount == 2 { engine.toggleCollapsed(select) }
@@ -322,8 +459,8 @@ struct DevicePanel<Content: View>: View {
     @ViewBuilder
     private func folded(_ on: Bool) -> some View {
         let strip = VStack(spacing: 8) {
-            if let isOn {
-                Button { isOn.wrappedValue.toggle() } label: {
+            if isOn != nil {
+                Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)
                 }
                 .buttonStyle(.plain)
@@ -352,8 +489,8 @@ struct DevicePanel<Content: View>: View {
     private var bar: some View {
         let on = isOn?.wrappedValue ?? true
         return HStack(spacing: 6) {
-            if let isOn {
-                Button { isOn.wrappedValue.toggle() } label: {
+            if isOn != nil {
+                Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)
                 }
                 .buttonStyle(.plain)
@@ -414,19 +551,37 @@ struct PaletteEditor: View {
                 .help("The palette as it renders, after red, green, blue, hue, saturation and brightness")
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 6), count: 4), alignment: .leading, spacing: 6) {
                 ForEach(palette.colors.indices, id: \.self) { i in
-                    ColorWell(color: palette.colors[i]) { palette.set(i, $0) }
+                    ColorWell(color: palette.colors[i]) { updateColor(at: i, to: $0) }
                         .frame(width: 28, height: 20)
                 }
             }
             HStack(spacing: 4) {
-                Button { palette.replace(palette.colors + [palette.colors.last ?? .one]) } label: { Image(systemName: "plus") }
-                Button { palette.replace(Array(palette.colors.dropLast())) } label: { Image(systemName: "minus") }
+                Button { replaceColors(palette.colors + [palette.colors.last ?? .one]) } label: { Image(systemName: "plus") }
+                Button { replaceColors(Array(palette.colors.dropLast())) } label: { Image(systemName: "minus") }
                     .disabled(palette.colors.count <= 2)
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
         }
         .frame(width: 150, alignment: .leading)
+    }
+
+    private func updateColor(at index: Int, to color: SIMD3<Float>) {
+        let snapshot = engine.currentSnapshot()
+        palette.set(index, color)
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Edit Palette", before: snapshot)
+            engine.scheduleAutoSave()
+        }
+    }
+
+    private func replaceColors(_ newColors: [SIMD3<Float>]) {
+        let snapshot = engine.currentSnapshot()
+        palette.replace(newColors)
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Edit Palette Colors", before: snapshot)
+            engine.scheduleAutoSave()
+        }
     }
 
     static func color(_ c: SIMD3<Float>) -> Color {

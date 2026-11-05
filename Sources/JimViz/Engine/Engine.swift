@@ -88,7 +88,10 @@ final class Engine {
         }
 
         refreshSceneList()
-        if headless { return }
+        if headless {
+            enableAutoSave = false
+            return
+        }
         if let first = sceneURLs.first { load(first) }
         store.watch { [weak self] changed in self?.filesChanged(changed) }
         uiTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.uiTick() }
@@ -127,10 +130,73 @@ final class Engine {
 
     // MARK: Scenes
 
-    /// True after a structural edit (devices added, removed, moved or replaced) until ⌘S.
+    /// True after an edit until saved.
     private(set) var isDirty = false
     /// The chain item being dragged, set when a drag starts in this app.
     @ObservationIgnored var activeDrag: ChainDrag?
+
+    @ObservationIgnored var undoManager: UndoManager?
+    @ObservationIgnored var enableAutoSave: Bool = !CommandLine.arguments.contains("--check")
+    @ObservationIgnored private var autoSaveWorkItem: DispatchWorkItem?
+
+    var canUndo: Bool { undoManager?.canUndo ?? false }
+    var canRedo: Bool { undoManager?.canRedo ?? false }
+
+    func undo() {
+        undoManager?.undo()
+    }
+
+    func redo() {
+        undoManager?.redo()
+    }
+
+    func currentSnapshot() -> SceneFile? {
+        guard var file = sceneFile, let scene = current else { return nil }
+        syncValues(from: scene, into: &file)
+        return file
+    }
+
+    func recordUndo(name: String, before: SceneFile) {
+        guard let um = undoManager else { return }
+        um.setActionName(name)
+        um.registerUndo(withTarget: self) { engine in
+            if let current = engine.currentSnapshot() {
+                engine.recordUndo(name: name, before: current)
+            }
+            engine.restoreState(before, actionName: "Undo: \(name)")
+        }
+    }
+
+    func restoreState(_ file: SceneFile, actionName: String? = nil) {
+        guard let currentScene = current else { return }
+        if let rebuilt = build(file, reuse: currentScene) {
+            sceneFile = file
+            install(rebuilt)
+            isDirty = true
+            if let actionName { info = actionName }
+            scheduleAutoSave()
+        }
+    }
+
+    func scheduleAutoSave(delay: TimeInterval = 0.5) {
+        isDirty = true
+        guard enableAutoSave else { return }
+        autoSaveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.isDirty else { return }
+            self.saveCurrent()
+        }
+        autoSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    func flushAutoSave() {
+        if isDirty && enableAutoSave {
+            autoSaveWorkItem?.cancel()
+            autoSaveWorkItem = nil
+            saveCurrent()
+        }
+    }
 
     // MARK: Mapping state
 
@@ -223,7 +289,10 @@ final class Engine {
             errors[url.lastPathComponent] = nil
             let isReload = url == currentURL
             guard let nextScene = build(file, reuse: isReload ? current : nil) else { return }
+            autoSaveWorkItem?.cancel()
+            autoSaveWorkItem = nil
             isDirty = false
+            undoManager?.removeAllActions()
             if animated, let currentScene = current, !isReload {
                 pendingScene = (url, file, nextScene)
                 activateWebcams()
@@ -243,6 +312,8 @@ final class Engine {
 
     func saveCurrent() {
         guard let url = currentURL, var file = sceneFile, let scene = current else { return }
+        autoSaveWorkItem?.cancel()
+        autoSaveWorkItem = nil
         syncValues(from: scene, into: &file)
         do {
             try file.write(to: url)
@@ -252,6 +323,28 @@ final class Engine {
             info = "Saved \(url.lastPathComponent)"
         } catch {
             errors[url.lastPathComponent] = "save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteScene(_ url: URL) {
+        do {
+            try FileManager.default.removeItem(at: url)
+            errors[url.lastPathComponent] = nil
+            info = "Deleted \(sceneName(url))"
+            let wasCurrent = (url == currentURL)
+            refreshSceneList()
+            if wasCurrent {
+                if let nextURL = sceneURLs.first {
+                    load(nextURL, animated: false)
+                } else {
+                    current = nil
+                    currentURL = nil
+                    sceneFile = nil
+                    isDirty = false
+                }
+            }
+        } catch {
+            errors["delete"] = "delete failed: \(error.localizedDescription)"
         }
     }
 
@@ -403,7 +496,9 @@ final class Engine {
             var key = ""
             edit("Added \(label)") { file in
                 let id = Self.uniqueID(tool, taken: Set(file.modulators.map(\.id)))
-                file.modulators.append(ModulatorSpec(type: tool, id: id, preset: preset, params: params))
+                let spec = ModulatorSpec(type: tool, id: id, preset: preset, params: params)
+                let i = min(max(index ?? file.modulators.count, 0), file.modulators.count)
+                file.modulators.insert(spec, at: i)
                 key = "mod.\(id)"
             }
             selectDevice(key)
@@ -448,6 +543,53 @@ final class Engine {
 
     func removeModulator(id: String) {
         edit("Removed \(id)") { $0.modulators.removeAll { $0.id == id } }
+    }
+
+    func replaceGenerator(key: String, tool: String, preset: String?) {
+        let p = preset.flatMap { store.preset(.generator, tool, $0) }
+        let label = presetName(.generator, tool, preset) ?? Tools.label(.generator, tool)
+        edit("Generator: \(label)") { file in
+            var list = file.allGenerators
+            guard let idx = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }) ?? list.indices.first else { return }
+            var slot = list[idx]
+            slot.type = tool
+            slot.preset = preset
+            slot.shape = p?.shape
+            slot.detail = p?.detail
+            slot.params = p?.params
+            list[idx] = slot
+            file.allGenerators = list
+        }
+        selectDevice(key)
+    }
+
+    func replaceEffect(id: String, tool: String, preset: String?) {
+        let params = preset.flatMap { store.preset(.effect, tool, $0)?.params }
+        let label = presetName(.effect, tool, preset) ?? Tools.label(.effect, tool)
+        edit("Effect: \(label)") { file in
+            guard let idx = file.effects.firstIndex(where: { ($0.id ?? $0.effect) == id }) else { return }
+            file.effects[idx] = EffectSpec(effect: tool, id: id, preset: preset, enabled: file.effects[idx].enabled, params: params)
+        }
+        selectDevice("post.\(id)")
+    }
+
+    func replaceModulator(id: String, tool: String, preset: String?) {
+        let params = preset.flatMap { store.preset(.modulation, tool, $0)?.params }
+        let label = presetName(.modulation, tool, preset) ?? Tools.label(.modulation, tool)
+        edit("LFO: \(label)") { file in
+            guard let idx = file.modulators.firstIndex(where: { $0.id == id }) else { return }
+            file.modulators[idx] = ModulatorSpec(type: tool, id: id, preset: preset, enabled: file.modulators[idx].enabled, params: params)
+        }
+        selectDevice("mod.\(id)")
+    }
+
+    func replaceInput(key: String, tool: String, preset: String?) {
+        let label = presetName(.input, tool, preset) ?? Tools.label(.input, tool)
+        edit("Input: \(label)") { file in
+            guard let idx = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
+            file.inputs[idx].device = preset
+        }
+        selectDevice(key)
     }
 
     /// Moves an LFO one place left (-1) or right (+1) in the Modulation section.
@@ -496,12 +638,15 @@ final class Engine {
     private func edit(_ message: String, _ change: (inout SceneFile) -> Void) {
         guard var file = sceneFile, let scene = current else { return }
         syncValues(from: scene, into: &file)
+        let stateBefore = file
         change(&file)
         if let rebuilt = build(file, reuse: scene) {
+            recordUndo(name: message, before: stateBefore)
             sceneFile = file
             install(rebuilt)
             isDirty = true
-            info = "\(message) (unsaved, ⌘S to save)"
+            info = message
+            scheduleAutoSave()
         }
     }
 

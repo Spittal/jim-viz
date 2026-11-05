@@ -22,7 +22,7 @@ struct Preset: Codable {
 /// Each device names its tool and the preset it was loaded from; the preset's values are
 /// copied in, so a scene never depends on (or changes) a preset file.
 /// Edits happen in memory and are written with ⌘S.
-struct SceneFile: Codable {
+struct SceneFile: Codable, Equatable {
     var name: String
     /// Signal sources, in chain order: at most one `audio` and one `clock`, any number of `midi`s.
     /// Without Audio In, audio signals read 0; without Clock, clock outputs aren't available.
@@ -77,7 +77,7 @@ extension SceneFile {
     }
 }
 
-struct ModulatorSpec: Codable {
+struct ModulatorSpec: Codable, Equatable {
     /// Modulator tool. Only `lfo` exists so far.
     var type: String
     /// Unique id within the scene: `mod.<id>.out` as a source, `mod.<id>.<param>` as a target.
@@ -87,7 +87,7 @@ struct ModulatorSpec: Codable {
     var params: [String: Float]?
 }
 
-struct InputSpec: Codable {
+struct InputSpec: Codable, Equatable {
     /// Input tool: `audio`, `clock`, `midi` or `webcam`.
     var type: String
     /// MIDI inputs and webcams: unique id within the scene. `midi.<id>` and `webcam.<id>` in
@@ -107,7 +107,7 @@ struct InputSpec: Codable {
     var deviceKey: String { isMIDI || isWebcam ? "\(type).\(id ?? type)" : type }
 }
 
-struct CameraSlot: Codable {
+struct CameraSlot: Codable, Equatable {
     /// Camera tool. Only `orbit` exists so far.
     var type: String
     /// Preset it was loaded from, for display.
@@ -115,14 +115,14 @@ struct CameraSlot: Codable {
     var params: [String: Float]?
 }
 
-struct PaletteSlot: Codable {
+struct PaletteSlot: Codable, Equatable {
     var preset: String?
     var colors: [String]
     /// The palette's inputs: red, green, blue, hue, saturation, brightness.
     var params: [String: Float]?
 }
 
-struct GeneratorSlot: Codable, Identifiable {
+struct GeneratorSlot: Codable, Identifiable, Equatable {
     /// Unique id within the scene, used in mapping targets when multiple are present.
     var id: String?
     /// Generator tool: a shader in Shaders/generators, without extension.
@@ -137,7 +137,7 @@ struct GeneratorSlot: Codable, Identifiable {
     var params: [String: Float]?
 }
 
-struct EffectSpec: Codable {
+struct EffectSpec: Codable, Equatable {
     /// Shader file in Shaders/effects, without extension.
     var effect: String
     /// Unique id within the scene, used in mapping targets (`post.<id>.<param>`).

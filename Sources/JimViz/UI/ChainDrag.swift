@@ -60,8 +60,16 @@ enum ChainDropTarget: Equatable {
     case replace(DeviceKind)
     /// Appends a multi-instance device to the chain (cardinality == .many: generator, modulation, input).
     case append(DeviceKind)
+    /// Replaces an existing device in the chain when dropped right on top of the same tool.
+    case replaceDevice(key: String, kind: DeviceKind, tool: String)
     /// Inserts an effect before the effect at this index (count = at the end).
     case effectIndex(Int)
+    /// Inserts a generator at this index among generators.
+    case generatorIndex(Int)
+    /// Inserts a modulator at this index among modulators.
+    case modulatorIndex(Int)
+    /// Inserts an input at this index among inputs.
+    case inputIndex(Int)
     /// Maps an output to the knob, or video input, with this target key.
     case knob(String)
 }
@@ -144,18 +152,69 @@ struct ChainDropDelegate: DropDelegate {
             return .effectIndex(index)
         }
         if case .device(let kind, let tool, _) = drag {
-            if kind == .effect {
+            // 1. If dropping RIGHT on top of the same tool, replace it.
+            for (key, rect) in frames {
+                guard key.hasPrefix("device:") && rect.contains(location) else { continue }
+                let parts = key.split(separator: ":").map(String.init)
+                guard parts.count >= 4 else { continue }
+                let fKind = parts[1], fKey = parts[2], fTool = parts[3]
+                if fKind == kind.rawValue && fTool == tool {
+                    return .replaceDevice(key: fKey, kind: kind, tool: tool)
+                }
+            }
+
+            // 2. Otherwise drop in the chain closest to the drop target.
+            switch kind {
+            case .effect:
                 let index = effectIDs.filter { (frames[$0]?.midX ?? .infinity) < location.x }.count
                 return .effectIndex(index)
+
+            case .generator:
+                let genKeys = frames.keys
+                    .filter { $0.hasPrefix("device:generator:") }
+                    .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
+                    .map { $0.split(separator: ":")[2] }
+                let index = genKeys.filter { key in
+                    let frame = frames.first { $0.key.hasPrefix("device:generator:\(key):") }?.value
+                    return (frame?.midX ?? .infinity) < location.x
+                }.count
+                return .generatorIndex(index)
+
+            case .modulation:
+                let modIDs = frames.keys
+                    .filter { $0.hasPrefix("device:modulation:") }
+                    .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
+                    .map { $0.split(separator: ":")[2] }
+                let index = modIDs.filter { id in
+                    let frame = frames.first { $0.key.hasPrefix("device:modulation:\(id):") }?.value
+                    return (frame?.midX ?? .infinity) < location.x
+                }.count
+                return .modulatorIndex(index)
+
+            case .input:
+                let cardinality = Tools.cardinality(kind, tool)
+                if cardinality == .one {
+                    return .replace(kind)
+                }
+                let inputKeys = frames.keys
+                    .filter { $0.hasPrefix("device:input:") }
+                    .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
+                    .map { $0.split(separator: ":")[2] }
+                let index = inputKeys.filter { key in
+                    let frame = frames.first { $0.key.hasPrefix("device:input:\(key):") }?.value
+                    return (frame?.midX ?? .infinity) < location.x
+                }.count
+                return .inputIndex(index)
+
+            case .camera, .palette:
+                return .replace(kind)
             }
-            let cardinality = Tools.cardinality(kind, tool)
-            return cardinality == .one ? .replace(kind) : .append(kind)
         }
         return nil
     }
 
     /// x of the insertion marker for an effect drop.
-    static func markerX(_ index: Int, ids: [String], frames: [String: CGRect]) -> CGFloat? {
+    static func markerX(_ index: Int, ids: [String], frames: [String: CGRect], endKey: String = endKey) -> CGFloat? {
         let key = index < ids.count ? ids[index] : endKey
         return frames[key].map { $0.minX - 4.5 }
     }
@@ -166,8 +225,23 @@ extension Engine {
         switch (drag, target) {
         case (.move(let id), .effectIndex(let i)):
             moveEffect(id: id, to: i)
+        case (.device(let kind, let tool, let preset), .replaceDevice(let key, _, _)):
+            switch kind {
+            case .generator: replaceGenerator(key: key, tool: tool, preset: preset)
+            case .effect: replaceEffect(id: key, tool: tool, preset: preset)
+            case .modulation: replaceModulator(id: key, tool: tool, preset: preset)
+            case .input: replaceInput(key: key, tool: tool, preset: preset)
+            case .camera: apply(.camera, tool, preset: preset)
+            case .palette: apply(.palette, tool, preset: preset)
+            }
+        case (.device(.generator, let tool, let preset), .generatorIndex(let i)):
+            apply(.generator, tool, preset: preset, at: i, replaceSelected: false)
+        case (.device(.modulation, let tool, let preset), .modulatorIndex(let i)):
+            apply(.modulation, tool, preset: preset, at: i, replaceSelected: false)
         case (.device(.effect, let tool, let preset), .effectIndex(let i)):
-            apply(.effect, tool, preset: preset, at: i)
+            apply(.effect, tool, preset: preset, at: i, replaceSelected: false)
+        case (.device(.input, let tool, let preset), .inputIndex(let i)):
+            apply(.input, tool, preset: preset, at: i, replaceSelected: false)
         case (.device(let kind, let tool, let preset), .replace):
             apply(kind, tool, preset: preset, replaceSelected: true)
         case (.device(let kind, let tool, let preset), .append):

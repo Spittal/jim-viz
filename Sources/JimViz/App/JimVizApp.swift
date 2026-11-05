@@ -19,6 +19,27 @@ struct JimVizApp: App {
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canUndo == true {
+                        text.undoManager?.undo()
+                    } else {
+                        engine.undo()
+                    }
+                }
+                .keyboardShortcut("z")
+                .disabled(!engine.canUndo)
+
+                Button("Redo") {
+                    if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canRedo == true {
+                        text.undoManager?.redo()
+                    } else {
+                        engine.redo()
+                    }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!engine.canRedo)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Empty Scene") { engine.createNewScene() }
                     .keyboardShortcut("n")

@@ -6,11 +6,13 @@ import SwiftUI
 /// Audio input. Its settings are global, not per scene.
 struct ClockDevice: View {
     @Environment(Engine.self) private var engine
+    var accent: Color? = nil
 
     var body: some View {
         @Bindable var engine = engine
         @Bindable var state = engine.clockState
         DevicePanel(title: "Clock", subtitle: state.active.label, statusColor: dotColor(state),
+                    accent: accent,
                     select: "clock", settings: AnyView(ClockSettings(state: state)),
                     settingsHelp: "Latency and audio tempo range", onClose: { engine.removeInput("clock") }) {
                 VStack(alignment: .leading, spacing: 7) {

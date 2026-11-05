@@ -321,7 +321,7 @@ private struct MappingRow: View {
                 if mapping.kind.isStream {
                     Image(systemName: mapping.kind.icon).font(.system(size: 8)).foregroundStyle(color)
                 } else {
-                    Button { mapping.enabled.toggle() } label: {
+                    Button(action: toggleEnabled) {
                         Circle().fill(mapping.enabled ? color : Theme.knobTrack).frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
@@ -382,6 +382,15 @@ private struct MappingRow: View {
         }
     }
 
+    private func toggleEnabled() {
+        let snapshot = engine.currentSnapshot()
+        mapping.enabled.toggle()
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Toggle Mapping", before: snapshot)
+            engine.scheduleAutoSave()
+        }
+    }
+
     private func percent(_ v: Float, signed: Bool) -> String {
         let p = Int((v * 100).rounded())
         return signed && p > 0 ? "+\(p)%" : "\(p)%"
@@ -424,15 +433,28 @@ private struct ContributionMeter: View {
 }
 
 private struct SliderRow: View {
+    @Environment(Engine.self) private var engine
     let label: String
     @Binding var value: Float
     let range: ClosedRange<Float>
     let text: String
+    @State private var dragSnapshot: SceneFile?
 
     var body: some View {
         HStack(spacing: 6) {
             Text(label).font(.system(size: 10)).foregroundStyle(Theme.textDim).frame(width: 44, alignment: .leading)
-            Slider(value: $value, in: range).controlSize(.mini)
+            Slider(value: $value, in: range) { isEditing in
+                if isEditing {
+                    dragSnapshot = engine.currentSnapshot()
+                } else {
+                    if let snapshot = dragSnapshot, let current = engine.currentSnapshot(), snapshot != current {
+                        engine.recordUndo(name: "Adjust \(label)", before: snapshot)
+                        engine.scheduleAutoSave()
+                    }
+                    dragSnapshot = nil
+                }
+            }
+            .controlSize(.mini)
             Text(text).font(.system(size: 10).monospacedDigit()).frame(width: 46, alignment: .trailing)
         }
     }

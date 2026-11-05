@@ -6,11 +6,13 @@ import SwiftUI
 struct LFODevice: View {
     @Environment(Engine.self) private var engine
     @Bindable var mod: ModulatorRuntime
+    var accent: Color? = nil
 
     var body: some View {
         let isSyncWaiting = engine.mapSource.map { engine.kind(of: $0) == .clock } ?? false
         let subtitle = mod.presetLabel.map { "\($0) · \(mod.isSynced ? "Sync" : "Free")" } ?? (mod.isSynced ? "Sync" : "Free")
         DevicePanel(title: mod.id, subtitle: subtitle, isOn: $mod.enabled,
+                    accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
             VStack(alignment: .leading, spacing: 6) {
                 if let scene = engine.current, let socket = scene.streamInputs.first(where: { $0.key == "mod.\(mod.id).sync" }) {
@@ -189,11 +191,13 @@ private struct MeterBar: View {
 struct MIDIInputDevice: View {
     @Environment(Engine.self) private var engine
     let input: MIDIInputRuntime
+    var accent: Color? = nil
 
     var body: some View {
         let learning = engine.learningMIDI == input.key
         let connected = input.device.map { name in engine.midi.devices.contains { $0.name == name } } ?? !engine.midi.devices.isEmpty
         DevicePanel(title: "MIDI Input", subtitle: input.title, statusColor: connected ? Theme.beatOn : Theme.knobTrack,
+                    accent: accent,
                     select: input.key, onClose: { engine.removeInput(input.key) }) {
             VStack(alignment: .leading, spacing: 7) {
                 Menu {
@@ -242,10 +246,12 @@ struct MIDIInputDevice: View {
 struct WebcamDevice: View {
     @Environment(Engine.self) private var engine
     let webcam: WebcamRuntime
+    var accent: Color? = nil
 
     var body: some View {
         let feed = webcam.feed
         DevicePanel(title: "Webcam", subtitle: webcam.device ?? "Default camera", statusColor: color(feed.status),
+                    accent: accent,
                     select: webcam.key, onClose: { engine.removeInput(webcam.key) }) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {

@@ -3,10 +3,11 @@ import SwiftUI
 /// The global "Audio In" device: source picker, status, meters, spectrum and analysis knobs.
 struct AudioDevice: View {
     @Environment(Engine.self) private var engine
+    var accent: Color? = nil
 
     var body: some View {
         let audio = engine.audio
-        DevicePanel(title: "Audio In", subtitle: nil, statusColor: color(audio.health), select: "audio",
+        DevicePanel(title: "Audio In", subtitle: nil, statusColor: color(audio.health), accent: accent, select: "audio",
                     onClose: { engine.removeInput("audio") }) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {

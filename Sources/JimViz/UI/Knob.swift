@@ -10,6 +10,7 @@ struct Knob: View {
     let param: Param
     var targetPath: String? = nil
     @State private var dragStart: Float?
+    @State private var dragSnapshot: SceneFile?
 
     private static let startAngle = 135.0
     private static let sweep = 270.0
@@ -43,7 +44,14 @@ struct Knob: View {
                 if let targetPath, engine.knobClicked(targetPath, keepMapping: NSEvent.modifierFlags.contains(.shift)) {
                     return
                 }
-                if NSApp.currentEvent?.clickCount == 2 { param.reset() }
+                if NSApp.currentEvent?.clickCount == 2 {
+                    let snapshot = engine.currentSnapshot()
+                    param.reset()
+                    if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+                        engine.recordUndo(name: "Reset \(knobLabel(param.def.name))", before: snapshot)
+                        engine.scheduleAutoSave()
+                    }
+                }
             }
 
             Text(valueText)
@@ -130,13 +138,21 @@ struct Knob: View {
             .onChanged { v in
                 if dragStart == nil {
                     dragStart = param.base
+                    dragSnapshot = engine.currentSnapshot()
                     if let targetPath { engine.selectedTarget = targetPath; engine.selectDevice(devicePath(targetPath)) }
                 }
                 let fine: Float = NSEvent.modifierFlags.contains(.shift) ? 0.1 : 1
                 let delta = Float(-v.translation.height / 160) * param.def.span * fine
                 param.setBase((dragStart ?? param.base) + delta)
             }
-            .onEnded { _ in dragStart = nil }
+            .onEnded { _ in
+                if let snapshot = dragSnapshot, let current = engine.currentSnapshot(), snapshot != current {
+                    engine.recordUndo(name: "Adjust \(knobLabel(param.def.name))", before: snapshot)
+                    engine.scheduleAutoSave()
+                }
+                dragStart = nil
+                dragSnapshot = nil
+            }
     }
 
     private var valueText: String {

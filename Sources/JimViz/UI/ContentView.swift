@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(Engine.self) private var engine
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         @Bindable var engine = engine
@@ -47,6 +48,8 @@ struct ContentView: View {
         }
         .navigationTitle(engine.current?.name ?? "jim-viz")
         .navigationSubtitle(engine.isDirty ? "Edited" : "")
+        .onAppear { engine.undoManager = undoManager }
+        .onChange(of: undoManager) { _, um in engine.undoManager = um }
     }
 }
 
@@ -77,6 +80,8 @@ private struct SceneList: View {
                 Button("Rename") { engine.renamingScene = url }
                 Button("Duplicate") { engine.duplicateScene(url) }
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                Divider()
+                Button("Delete", role: .destructive) { engine.deleteScene(url) }
             }
         } primaryAction: { urls in
             if let url = urls.first { engine.renamingScene = url }

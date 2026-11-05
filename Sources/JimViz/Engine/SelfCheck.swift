@@ -640,8 +640,41 @@ enum SelfCheck {
         guard engine.current?.generators.count == initialGenCount + 1 else { return "generator drop didn't append" }
         guard engine.current?.generators.first?.preset == firstGenPreset else { return "generator drop replaced selected generator" }
         _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
+
+        // Drop right on top of same tool replaces instead of appending.
+        let genCountBefore = engine.current?.generators.count ?? 0
+        engine.drop(.device(.generator, tool: "lowpoly", preset: "plane"), at: .replaceDevice(key: "generator", kind: .generator, tool: "lowpoly"))
+        guard engine.current?.generators.count == genCountBefore else { return "drop on same tool changed generator count" }
+        guard engine.current?.generators.first?.preset == "plane" else { return "drop on same tool didn't replace" }
+
         if let secondKey = engine.current?.generators.last?.key { engine.removeGenerator(key: secondKey) }
         guard engine.current?.generators.count == initialGenCount else { return "second generator not removed" }
+
+        // Native Undo / Redo support.
+        engine.undoManager = UndoManager()
+        let presetBeforeUndo = engine.current?.generators.first?.preset
+        engine.apply(.generator, "lowpoly", preset: "torus-swarm")
+        guard engine.canUndo else { return "cannot undo after apply" }
+        engine.undo()
+        guard engine.current?.generators.first?.preset == presetBeforeUndo else { return "undo failed to restore preset" }
+        guard engine.canRedo else { return "cannot redo after undo" }
+        engine.redo()
+        guard engine.current?.generators.first?.preset == "torus-swarm" else { return "redo failed to restore preset" }
+
+        // Scene deletion.
+        let delURL = engine.store.scenesDir.appendingPathComponent("selfcheck-test-delete.json")
+        let tempScene = SceneFile(name: "Temp Delete", inputs: [], modulators: [], camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+        do {
+            try tempScene.write(to: delURL)
+            engine.refreshSceneList()
+            guard engine.sceneURLs.contains(delURL) else { return "temp scene to delete not found" }
+            engine.deleteScene(delURL)
+            guard !engine.sceneURLs.contains(delURL) && !FileManager.default.fileExists(atPath: delURL.path) else {
+                return "scene not deleted from disk"
+            }
+        } catch {
+            return "failed to write temp scene for deletion check"
+        }
 
         guard engine.isDirty else { return "edits not marked unsaved" }
         guard (try? Data(contentsOf: presetURL)) == presetBefore else { return "a scene edit wrote to a preset file" }
