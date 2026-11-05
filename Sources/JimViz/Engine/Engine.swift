@@ -39,13 +39,6 @@ final class Engine {
     // Stats, refreshed at UI rate.
     private(set) var fps: Double = 0
     private(set) var gpuMs: Double = 0
-    private(set) var beatInBar = 0
-    private(set) var bar = 0
-    /// Shown in the toolbar. Setting it switches to the manual clock.
-    var bpm: Double {
-        get { clockState.bpm }
-        set { clockState.setManualBPM(newValue) }
-    }
 
     var isTransitioning: Bool { loop.transition.isTransitioning }
     @ObservationIgnored private var pendingScene: (url: URL, file: SceneFile, scene: RenderScene)?
@@ -643,6 +636,15 @@ final class Engine {
         } else if key.hasPrefix("post.") {
             let id = String(key.dropFirst(5))
             removeEffect(id: id)
+        }
+    }
+
+    /// Deletes whichever item is currently highlighted: a selected tool, or prompts to delete the active scene.
+    func deleteHighlighted() {
+        if selectedDevice != nil {
+            removeSelectedDevice()
+        } else if let url = currentURL {
+            scenePendingDeletion = url
         }
     }
 
@@ -1330,18 +1332,9 @@ final class Engine {
         }
         uiTickCount += 1
 
-        let beat = loop.beat
-        let b = Int(beat) % 4
-        if b != beatInBar { beatInBar = b }
-        let br = Int(beat / 4)
-        if br != bar { bar = br }
         if abs(fps - loop.fps) > 0.5 { fps = loop.fps }
         if abs(gpuMs - loop.gpuMs) > 0.05 { gpuMs = loop.gpuMs }
     }
-
-    func tap() { clockState.tap() }
-
-    func resync() { clockState.resync() }
 
     /// MIDI arrives on main. Each MIDI input listening to the message's device takes the value
     /// if it has learned the control; one that is learning adds the control as a new output.

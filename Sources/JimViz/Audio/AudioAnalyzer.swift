@@ -47,6 +47,10 @@ final class AudioAnalyzer {
     private(set) var features = AudioFeatures()
     /// Weighted onset flux of this frame, for tempo estimation. 0 when no new audio arrived.
     private(set) var onsetStrength: Float = 0
+    /// Kick flux of this frame (35-120 Hz).
+    var kickFlux: Float { onsets[0].lastFlux }
+    /// Snare/clap flux of this frame (1500-5000 Hz).
+    var snareFlux: Float { onsets[1].lastFlux }
     /// True when this frame analysed new audio.
     private(set) var fresh = false
     /// Log-spaced spectrum, 0...1, for shaders.

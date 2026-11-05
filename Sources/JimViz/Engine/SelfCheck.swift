@@ -76,7 +76,16 @@ enum SelfCheck {
             analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
-            if analyzer.fresh { tempo.feed(strength: analyzer.onsetStrength, active: f.active, time: t) }
+            if analyzer.fresh {
+                tempo.feed(
+                    strength: analyzer.onsetStrength,
+                    kick: analyzer.kickFlux,
+                    snare: analyzer.snareFlux,
+                    bass: f.bass,
+                    active: f.active,
+                    time: t
+                )
+            }
             tempo.update(now: t)
             if let rd = tempo.reading(at: t) { beatAt.append((t, rd.beat)) }
             if pos / chunk % 120 == 0 {
@@ -537,7 +546,6 @@ enum SelfCheck {
         // The clock follows a steady beat only while it hears it.
         func run(hearing: Bool) -> ClockSourceKind {
             let clock = ClockManager()
-            clock.mode = .audio
             let period = 60.0 / 124
             for i in 0..<(60 * 10) {
                 let t = Double(i) / 60
@@ -549,6 +557,29 @@ enum SelfCheck {
         }
         guard run(hearing: false) == .manual else { return "clock followed audio it wasn't mapped to hear" }
         guard run(hearing: true) == .audio else { return "clock didn't follow a steady mapped beat" }
+
+        // Test first beat resets beat to 0 mod 32
+        let clock = ClockManager()
+        clock.firstBeat()
+        clock.advance(now: 0.1, dt: 0.1, hearsAudio: false)
+        guard Int(floor(clock.beat)) % 32 == 0 else { return "firstBeat did not align to first beat of phrase" }
+
+        // Test downbeat detection on 4/4 pattern (kicks on 1 & 3, snares on 2 & 4)
+        let testClock = ClockManager()
+        let beatPeriod = 60.0 / 124
+        for i in 0..<(60 * 8) {
+            let t = Double(i) / 60
+            let beatIndex = Int(floor(t / beatPeriod))
+            let beatFrac = (t.truncatingRemainder(dividingBy: beatPeriod)) / beatPeriod
+            let onBeat = beatFrac < (1.0 / 60) / beatPeriod
+            let pos = beatIndex % 4
+            let kick: Float = onBeat && (pos == 0 || pos == 2) ? 1 : 0
+            let snare: Float = onBeat && (pos == 1 || pos == 3) ? 1 : 0
+            let str = kick + 0.5 * snare
+            testClock.audioTempo.feed(strength: str, kick: kick, snare: snare, active: true, time: t)
+            testClock.advance(now: t, dt: 1.0 / 60, hearsAudio: true)
+        }
+        guard testClock.audioTempo.downbeatConfidence > 0.2 else { return "4/4 downbeat was not detected" }
         return nil
     }
 
@@ -798,7 +829,42 @@ enum SelfCheck {
     /// half, far on the right): it should come out of the depth pass framed like the video
     /// (mirrored, so near on the right), raise the field, and stop when unmapped.
     private static func checkDepth(engine: Engine, snapshotDir: URL?) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "05-depth-field.json" }) else { return "depth scene missing" }
+        let url: URL
+        let temporaryURL: URL?
+        if let existing = engine.sceneURLs.first(where: { $0.lastPathComponent == "05-depth-field.json" }) {
+            url = existing
+            temporaryURL = nil
+        } else {
+            let temp = engine.store.scenesDir.appendingPathComponent("selfcheck-depth.json")
+            let sceneFile = SceneFile(
+                name: "Self-Check Depth",
+                inputs: [InputSpec(type: "audio"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
+                modulators: [],
+                camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
+                palette: PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
+                generator: GeneratorSlot(type: "lowpoly", preset: "plane", shape: "plane", detail: 3, params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6]),
+                effects: [EffectSpec(effect: "glitch", id: "glitch"), EffectSpec(effect: "glow", id: "glow"), EffectSpec(effect: "film", id: "film")],
+                mappings: [
+                    MappingSpec(source: "webcam.webcam.depth", target: "generator.depthVideo"),
+                    MappingSpec(source: "webcam.webcam.video", target: "generator.texVideo")
+                ]
+            )
+            do {
+                try sceneFile.write(to: temp)
+                engine.store.markSeen(temp)
+                engine.refreshSceneList()
+                url = temp
+                temporaryURL = temp
+            } catch {
+                return "could not write selfcheck-depth scene"
+            }
+        }
+        defer {
+            if let temporaryURL {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                engine.refreshSceneList()
+            }
+        }
         engine.load(url, animated: false)
         guard let scene = engine.current, let cam = scene.webcams.first, let gen = scene.generator else { return "depth scene didn't build" }
         guard gen.shape == .plane, scene.streamBindings["generator.depthVideo"] === cam.depthVideo,

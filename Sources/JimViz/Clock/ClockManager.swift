@@ -12,33 +12,17 @@ enum ClockSourceKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Audio follows the beat of the audio mapped into the Clock's Audio input (Audio In · Audio Out),
-/// falling back to the manual tempo while there's no steady beat or nothing is mapped.
-/// Manual ignores the audio.
-enum ClockMode: String, CaseIterable, Identifiable {
-    case audio, manual
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .audio: return "Audio"
-        case .manual: return "Manual"
-        }
-    }
-}
-
 /// Chooses the beat clock and produces one smooth, continuous beat for the visuals.
 ///
-/// Audio mode uses the audio tempo estimate when a steady beat is heard in the mapped audio,
-/// and falls back to the manual clock when audio is quiet, ambiguous or unmapped. The output beat advances at the chosen
-/// tempo and glides toward the source phase without jumping, so source switches never cause
-/// visual skips. While audio is active, the manual clock follows it, so a dropout continues
-/// at the current tempo.
+/// When audio is mapped into the Clock's Audio input (Audio In · Audio Out), it tracks the
+/// tempo and downbeat of the audio, falling back to the manual clock when audio is quiet,
+/// ambiguous or unmapped. The output beat advances at the chosen tempo and glides toward the
+/// source phase without jumping, so source switches never cause visual skips. While audio is active,
+/// the manual clock follows it, so a dropout continues seamlessly.
 final class ClockManager {
     let manual = InternalClock()
     let audioTempo = AudioTempo()
 
-    // Settings, written on main.
-    var mode: ClockMode = .audio
     /// Shifts the visuals earlier (positive) to compensate for projector and audio latency.
     var latencyMs: Double = 0
 
@@ -49,8 +33,15 @@ final class ClockManager {
     /// Whether the scene on screen maps audio into the Clock. Render thread.
     private(set) var hearsAudio = false
 
+    private var pendingFirstBeat = false
+
     init() {
         bpm = manual.bpm
+    }
+
+    /// Snap to the first beat of the phrase (bar 1, beat 1) on the next frame.
+    func firstBeat() {
+        pendingFirstBeat = true
     }
 
     /// Render thread, once per frame. `hearsAudio` is true while the scene on screen maps
@@ -62,13 +53,36 @@ final class ClockManager {
         self.hearsAudio = hearsAudio
         if hearsAudio { audioTempo.update(now: now) }
 
+        if pendingFirstBeat {
+            pendingFirstBeat = false
+            audioTempo.setFirstBeat()
+            let frac = beat - floor(beat)
+            beat = frac
+            manual.sync(beat: beat, bpm: bpm)
+        }
+
         var target: (beat: Double, bpm: Double)?
         var source: ClockSourceKind = .manual
-        if mode == .audio, hearsAudio, let a = audioTempo.reading(at: t) {
+        if hearsAudio, let a = audioTempo.reading(at: t) {
             target = (a.beat, a.bpm); source = .audio
         }
 
         if let target {
+            // If audio tempo detected a phrase drop, align the phrase boundary.
+            if audioTempo.consumePhraseDrop() {
+                let frac = beat - floor(beat)
+                beat = (round(beat / 32) * 32) + frac
+            } else if audioTempo.downbeatConfidence > 0.35 {
+                // Downbeat alignment check: align bar position (0..<4) without changing fractional phase
+                let targetBar = ((Int(floor(target.beat)) % 4) + 4) % 4
+                let clockBar = ((Int(floor(beat)) % 4) + 4) % 4
+                let diff = ((targetBar - clockBar) % 4 + 4) % 4
+                if diff != 0 {
+                    let adj = diff > 2 ? diff - 4 : diff
+                    beat += Double(adj)
+                }
+            }
+
             // Tempo eases quickly; phase glides with a ~250 ms time constant.
             bpm += (target.bpm - bpm) * min(1, dt * 8)
             beat += dt * bpm / 60
@@ -102,13 +116,10 @@ final class ClockManager {
         return x
     }
 
-    /// Tap tempo. Switches to manual if another source is driving the clock.
+    /// Tap tempo.
+    @discardableResult
     func tap() -> Bool {
         manual.tap()
-        if active != .manual {
-            mode = .manual
-            return true
-        }
-        return false
+        return true
     }
 }

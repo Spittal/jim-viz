@@ -136,7 +136,14 @@ final class RenderLoop: NSObject {
             analyzer.process(ring: ring, dt: Float(dt), settings: audioSettings)
             renderer.updateSpectrum(analyzer.spectrum)
             if hearsAudio && analyzer.fresh {
-                clock.audioTempo.feed(strength: analyzer.onsetStrength, active: analyzer.features.active, time: now)
+                clock.audioTempo.feed(
+                    strength: analyzer.onsetStrength,
+                    kick: analyzer.kickFlux,
+                    snare: analyzer.snareFlux,
+                    bass: analyzer.features.bass,
+                    active: analyzer.features.active,
+                    time: now
+                )
             }
         }
         let audio = analyzer.features

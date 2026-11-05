@@ -50,7 +50,6 @@ struct ContentView: View {
         .navigationSubtitle(engine.isDirty ? "Edited" : "")
         .onAppear { engine.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in engine.undoManager = um }
-        .background(KeyDownHandler(engine: engine))
         .alert(
             "Delete “\(engine.scenePendingDeletion.map { engine.sceneName($0) } ?? "Scene")”?",
             isPresented: Binding(
@@ -222,72 +221,5 @@ private struct StatusBar: View {
         .padding(.horizontal, 10)
         .frame(height: 22)
         .background(Theme.chainBackground)
-    }
-}
-
-private struct KeyDownHandler: NSViewRepresentable {
-    let engine: Engine
-
-    func makeNSView(context: Context) -> KeyDownNSView {
-        KeyDownNSView(engine: engine)
-    }
-
-    func updateNSView(_ nsView: KeyDownNSView, context: Context) {
-        nsView.engine = engine
-    }
-}
-
-private final class KeyDownNSView: NSView {
-    var engine: Engine
-    private var monitor: Any?
-
-    init(engine: Engine) {
-        self.engine = engine
-        super.init(frame: .zero)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil && monitor == nil {
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let win = self.window, event.window == win else { return event }
-                // Backspace is keyCode 51, Delete (forward) is keyCode 117
-                guard event.keyCode == 51 || event.keyCode == 117 else { return event }
-                // Do not intercept if Cmd, Option, or Ctrl are held
-                guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
-
-                // Do not intercept if an editable text field/view has focus
-                if let fr = win.firstResponder as? NSTextView, fr.isEditable {
-                    return event
-                }
-
-                // If a tool in the chain is selected:
-                if self.engine.selectedDevice != nil {
-                    self.engine.removeSelectedDevice()
-                    return nil
-                }
-
-                // If a scene is selected and no confirmation dialog is currently open:
-                if let url = self.engine.currentURL, self.engine.scenePendingDeletion == nil {
-                    self.engine.scenePendingDeletion = url
-                    return nil
-                }
-
-                return event
-            }
-        } else if window == nil, let m = monitor {
-            NSEvent.removeMonitor(m)
-            monitor = nil
-        }
-    }
-
-    deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 }

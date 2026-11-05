@@ -55,6 +55,9 @@ struct JimVizApp: App {
             }
             CommandGroup(after: .pasteboard) {
                 Divider()
+                Button("Delete") { engine.deleteHighlighted() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .disabled(engine.selectedDevice == nil && engine.currentURL == nil)
                 Button("Copy Mappings") { engine.copyMappings() }
                     .keyboardShortcut("c", modifiers: [.command, .option])
                 Button("Paste Mappings") { engine.pasteMappings() }
@@ -74,15 +77,6 @@ struct JimVizApp: App {
                     .keyboardShortcut("r")
                 Button("Open Content Folder") { NSWorkspace.shared.open(engine.contentRoot) }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-            }
-            CommandMenu("Transport") {
-                Button("Tap Tempo") { engine.tap() }
-                    .keyboardShortcut("t", modifiers: [.command, .option])
-                Button("Snap to Downbeat") { engine.resync() }
-                    .keyboardShortcut("d", modifiers: [.command, .option])
-            }
-            CommandMenu("Control") {
-                Button("Rescan MIDI Devices") { engine.midi.refreshEndpoints() }
             }
             CommandMenu("Output") {
                 Button("Toggle Fullscreen Output") { engine.output.toggleFullscreen() }

@@ -16,6 +16,16 @@
   },
   "effects" : [
     {
+      "effect" : "slices",
+      "id" : "slices",
+      "params" : {
+        "amount" : 0,
+        "count" : 24,
+        "jitter" : 1,
+        "speed" : 0.5
+      }
+    },
+    {
       "effect" : "glitch",
       "id" : "glitch",
       "params" : {
@@ -27,33 +37,44 @@
       }
     },
     {
-      "effect" : "glow",
-      "id" : "glow",
-      "params" : {
-        "amount" : 1.1543945,
-        "radius" : 0.012,
-        "threshold" : 0.45
-      }
-    },
-    {
-      "effect" : "film",
-      "id" : "film",
-      "params" : {
-        "contrast" : 1.05,
-        "flash" : 0,
-        "grain" : 0.21628661,
-        "lineCount" : 270,
-        "scanlines" : 0.43623048,
-        "vignette" : 0.4
-      }
-    },
-    {
       "effect" : "chroma",
       "id" : "chroma",
       "params" : {
         "amount" : 0.009197754,
         "angle" : 0,
         "radial" : 1
+      }
+    },
+    {
+      "effect" : "glow",
+      "id" : "glow",
+      "params" : {
+        "amount" : 3,
+        "radius" : 0.012,
+        "threshold" : 0.26796874
+      }
+    },
+    {
+      "effect" : "film",
+      "id" : "film",
+      "params" : {
+        "contrast" : 1.0744995,
+        "flash" : 0,
+        "grain" : 0.21628661,
+        "lineCount" : 300.15674,
+        "scanlines" : 0.43623048,
+        "vignette" : 0.4
+      }
+    },
+    {
+      "effect" : "palettemap",
+      "id" : "palettemap",
+      "params" : {
+        "bands" : 3,
+        "contrast" : 1,
+        "cycle" : 1,
+        "mix" : 0.1492676,
+        "offset" : 0
       }
     }
   ],
@@ -64,16 +85,16 @@
       "bgGlow" : 0.5,
       "colorShift" : 0,
       "colorSpeed" : 0,
-      "depth" : 2.2,
-      "depthCut" : 0.5,
-      "explode" : 2.4256835,
+      "depth" : 2.9000487,
+      "depthCut" : 1,
+      "explode" : 1.0880859,
       "fill" : 0.9,
       "fog" : 0.03,
-      "height" : 11.201075,
+      "height" : 12.5146,
       "instances" : 1,
       "light" : 1.2,
       "noiseAmount" : 0.04,
-      "noiseScale" : 1.2,
+      "noiseScale" : 2.8272533,
       "noiseSpeed" : 0.3,
       "scale" : 1,
       "spectrum" : 0.22919922,
@@ -84,12 +105,12 @@
       "stretch" : 1,
       "tumble" : 0,
       "twist" : 0,
-      "videoMap" : 5,
+      "videoMap" : 0,
       "videoScale" : 1,
       "videoScatter" : 0,
       "videoTex" : 0.7,
       "videoTint" : 0.6,
-      "width" : 12.823242,
+      "width" : 20.02251,
       "wire" : 0.6
     },
     "preset" : "plane",
@@ -106,11 +127,11 @@
     {
       "id" : "webcam",
       "params" : {
-        "bg" : 0.13986817,
+        "bg" : 0.21621095,
         "contrast" : 1,
-        "depthContrast" : 1.3,
-        "depthFloor" : 0.1,
-        "depthSmooth" : 0.7,
+        "depthContrast" : 2.6316345,
+        "depthFloor" : 0.21658692,
+        "depthSmooth" : 0.4525088,
         "edges" : 0.45024413,
         "exposure" : -0.19257812,
         "mirror" : 1,
@@ -164,12 +185,26 @@
       "amount" : -0.22431344,
       "source" : "clock.phrase",
       "target" : "camera.distance"
+    },
+    {
+      "source" : "audio.out",
+      "target" : "clock.audio"
+    },
+    {
+      "amount" : -0.8381274,
+      "source" : "clock.beat",
+      "target" : "post.glow.amount"
+    },
+    {
+      "amount" : 0.047881126,
+      "source" : "clock.beat",
+      "target" : "post.slices.amount"
     }
   ],
   "modulators" : [
 
   ],
-  "name" : "Depth Field",
+  "name" : "D Floor",
   "palette" : {
     "colors" : [
       "#020A0D",

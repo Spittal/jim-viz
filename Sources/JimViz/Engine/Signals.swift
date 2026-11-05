@@ -34,14 +34,17 @@ final class InternalClock {
 
     func advance(dt: Double) {
         if pendingResync {
-            beat = beat.rounded(.up)
+            beat = 0
             pendingResync = false
         }
         beat += dt * bpm / 60
     }
 
-    /// Snap to the next downbeat on the following frame.
-    func resync() { pendingResync = true }
+    /// Snap to the first beat of the phrase (bar 1, beat 1) on the following frame.
+    func firstBeat() { pendingResync = true }
+
+    /// Snap to the first beat / downbeat.
+    func resync() { firstBeat() }
 
     /// Follows another clock, so switching back to manual continues without a jump.
     func sync(beat: Double, bpm: Double) {
