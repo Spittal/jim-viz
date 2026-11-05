@@ -35,13 +35,21 @@ struct MeshBuilder {
         }
     }
 
-    static func build(_ shape: MeshShape, detail: Int) -> [MeshVertex] {
+    static func planeDivisions(detail: Int, width: Float, height: Float) -> (cols: Int, rows: Int) {
+        let d = min(max(detail, 0), 6)
+        let n = min(4 << d, 160)
+        let cols = min(max(2, Int(round(Float(n) * (max(width, 0.1) / 10.0)))), 320)
+        let rows = min(max(2, Int(round(Float(n) * (max(height, 0.1) / 10.0)))), 320)
+        return (cols, rows)
+    }
+
+    static func build(_ shape: MeshShape, detail: Int, width: Float = 10, height: Float = 10) -> [MeshVertex] {
         var b = MeshBuilder()
         let d = min(max(detail, 0), 6)
         switch shape {
         case .icosphere: b.icosphere(d)
         case .torus: b.torus(d)
-        case .plane: b.plane(d)
+        case .plane: b.plane(d, width: width, height: height)
         case .cube: b.cube(d)
         case .shards: b.shards(d)
         }
@@ -97,25 +105,25 @@ struct MeshBuilder {
         }
     }
 
-    private mutating func plane(_ detail: Int) {
-        let n = min(4 << detail, 160)
-        let size: Float = 1
-        var grid = [SIMD3<Float>](repeating: .zero, count: (n + 1) * (n + 1))
+    private mutating func plane(_ detail: Int, width: Float = 10, height: Float = 10) {
+        let (cols, rows) = Self.planeDivisions(detail: detail, width: width, height: height)
+        var grid = [SIMD3<Float>](repeating: .zero, count: (cols + 1) * (rows + 1))
         var jitter = SplitMix(seed: 42)
-        for j in 0...n {
-            for i in 0...n {
-                let cell = size / Float(n)
-                let edge = i == 0 || j == 0 || i == n || j == n
-                let jx = edge ? 0 : (jitter.nextFloat() - 0.5) * cell * 0.7
-                let jz = edge ? 0 : (jitter.nextFloat() - 0.5) * cell * 0.7
-                grid[j * (n + 1) + i] = [Float(i) * cell - size / 2 + jx, 0, Float(j) * cell - size / 2 + jz]
+        let cellX: Float = 1.0 / Float(rows)
+        let cellZ: Float = 1.0 / Float(cols)
+        for j in 0...cols {
+            for i in 0...rows {
+                let edge = i == 0 || j == 0 || i == rows || j == cols
+                let jx = edge ? 0 : (jitter.nextFloat() - 0.5) * cellX * 0.7
+                let jz = edge ? 0 : (jitter.nextFloat() - 0.5) * cellZ * 0.7
+                grid[j * (rows + 1) + i] = [Float(i) * cellX - 0.5 + jx, 0, Float(j) * cellZ - 0.5 + jz]
             }
         }
         let up = SIMD3<Float>(0, 1, 0)
-        for j in 0..<n {
-            for i in 0..<n {
-                let a = grid[j * (n + 1) + i], b = grid[j * (n + 1) + i + 1]
-                let c = grid[(j + 1) * (n + 1) + i + 1], d = grid[(j + 1) * (n + 1) + i]
+        for j in 0..<cols {
+            for i in 0..<rows {
+                let a = grid[j * (rows + 1) + i], b = grid[j * (rows + 1) + i + 1]
+                let c = grid[(j + 1) * (rows + 1) + i + 1], d = grid[(j + 1) * (rows + 1) + i]
                 if (i + j) % 2 == 0 {
                     tri(a, b, c, up, up, up); tri(a, c, d, up, up, up)
                 } else {

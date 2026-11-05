@@ -50,6 +50,26 @@ struct ContentView: View {
         .navigationSubtitle(engine.isDirty ? "Edited" : "")
         .onAppear { engine.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in engine.undoManager = um }
+        .background(KeyDownHandler(engine: engine))
+        .alert(
+            "Delete “\(engine.scenePendingDeletion.map { engine.sceneName($0) } ?? "Scene")”?",
+            isPresented: Binding(
+                get: { engine.scenePendingDeletion != nil },
+                set: { if !$0 { engine.scenePendingDeletion = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                engine.scenePendingDeletion = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let url = engine.scenePendingDeletion {
+                    engine.deleteScene(url)
+                    engine.scenePendingDeletion = nil
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this scene? The file will be removed from Content/Scenes.")
+        }
     }
 }
 
@@ -57,7 +77,7 @@ private struct SceneList: View {
     @Environment(Engine.self) private var engine
 
     var body: some View {
-        List(selection: Binding(get: { engine.currentURL }, set: { if let u = $0 { engine.load(u) } })) {
+        List(selection: Binding(get: { engine.currentURL }, set: { if let u = $0 { engine.selectDevice(nil); engine.load(u) } })) {
             Section {
                 ForEach(engine.sceneURLs, id: \.self) { url in
                     SceneRow(url: url).tag(url)
@@ -81,7 +101,7 @@ private struct SceneList: View {
                 Button("Duplicate") { engine.duplicateScene(url) }
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 Divider()
-                Button("Delete", role: .destructive) { engine.deleteScene(url) }
+                Button("Delete…", role: .destructive) { engine.scenePendingDeletion = url }
             }
         } primaryAction: { urls in
             if let url = urls.first { engine.renamingScene = url }
@@ -115,6 +135,10 @@ private struct SceneRow: View {
         } else {
             Label(engine.sceneName(url), systemImage: "cube.transparent")
                 .help(url.lastPathComponent)
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded {
+                    engine.selectDevice(nil)
+                })
         }
     }
 }
@@ -202,5 +226,68 @@ private struct StatusBar: View {
         .padding(.horizontal, 10)
         .frame(height: 22)
         .background(Theme.chainBackground)
+    }
+}
+
+private struct KeyDownHandler: NSViewRepresentable {
+    let engine: Engine
+
+    func makeNSView(context: Context) -> KeyDownNSView {
+        KeyDownNSView(engine: engine)
+    }
+
+    func updateNSView(_ nsView: KeyDownNSView, context: Context) {
+        nsView.engine = engine
+    }
+}
+
+private final class KeyDownNSView: NSView {
+    var engine: Engine
+    private var monitor: Any?
+
+    init(engine: Engine) {
+        self.engine = engine
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil && monitor == nil {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let win = self.window, event.window == win else { return event }
+                // Backspace is keyCode 51, Delete (forward) is keyCode 117
+                guard event.keyCode == 51 || event.keyCode == 117 else { return event }
+                // Do not intercept if Cmd, Option, or Ctrl are held
+                guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
+
+                // Do not intercept if an editable text field/view has focus
+                if let fr = win.firstResponder as? NSTextView, fr.isEditable {
+                    return event
+                }
+
+                // If a tool in the chain is selected:
+                if self.engine.selectedDevice != nil {
+                    self.engine.removeSelectedDevice()
+                    return nil
+                }
+
+                // If a scene is selected and no confirmation dialog is currently open:
+                if let url = self.engine.currentURL, self.engine.scenePendingDeletion == nil {
+                    self.engine.scenePendingDeletion = url
+                    return nil
+                }
+
+                return event
+            }
+        } else if window == nil, let m = monitor {
+            NSEvent.removeMonitor(m)
+            monitor = nil
+        }
+    }
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 }

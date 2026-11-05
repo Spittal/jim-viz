@@ -135,6 +135,8 @@ final class Engine {
     /// The chain item being dragged, set when a drag starts in this app.
     @ObservationIgnored var activeDrag: ChainDrag?
 
+    var scenePendingDeletion: URL?
+
     @ObservationIgnored var undoManager: UndoManager?
     @ObservationIgnored var enableAutoSave: Bool = !CommandLine.arguments.contains("--check")
     @ObservationIgnored private var autoSaveWorkItem: DispatchWorkItem?
@@ -624,6 +626,26 @@ final class Engine {
         edit("Removed \(id)") { $0.effects.removeAll { ($0.id ?? $0.effect) == id } }
     }
 
+    func removeSelectedDevice() {
+        guard let key = selectedDevice else { return }
+        selectDevice(nil)
+        if key == "camera" {
+            removeCamera()
+        } else if key == "palette" {
+            removePalette()
+        } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") {
+            removeInput(key)
+        } else if key.hasPrefix("mod.") {
+            let id = String(key.dropFirst(4))
+            removeModulator(id: id)
+        } else if key.hasPrefix("generator") {
+            removeGenerator(key: key)
+        } else if key.hasPrefix("post.") {
+            let id = String(key.dropFirst(5))
+            removeEffect(id: id)
+        }
+    }
+
     /// Moves an effect so it lands before the effect currently at `index` (or at the end).
     func moveEffect(id: String, to index: Int) {
         edit("Moved \(id)") { file in
@@ -876,19 +898,23 @@ final class Engine {
                 return nil
             }
             let detail = slot.detail ?? 2
-            let (buffer, count): (MTLBuffer, Int)
-            if let old = reuse?.generators.first(where: { $0.key == slotKey }), old.shape == shape, old.detail == detail {
-                (buffer, count) = (old.vertexBuffer, old.vertexCount)
-            } else {
-                (buffer, count) = renderer.makeMesh(shape, detail: detail)
-            }
             let same = reuse?.generators.first(where: { $0.key == slotKey })?.type == slot.type && reuse?.generators.first(where: { $0.key == slotKey })?.preset == slot.preset
             let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? reuse?.generators.first(where: { $0.key == slotKey })?.bank : nil)
+            let w = bank["width"]?.liveBase ?? 10
+            let h = bank["height"]?.liveBase ?? 10
+            let (buffer, count): (MTLBuffer, Int)
+            if let old = reuse?.generators.first(where: { $0.key == slotKey }), old.shape == shape, old.detail == detail,
+               (shape != .plane || (old.planeWidth == w && old.planeHeight == h)) {
+                (buffer, count) = (old.vertexBuffer, old.vertexCount)
+            } else {
+                (buffer, count) = renderer.makeMesh(shape, detail: detail, width: w, height: h)
+            }
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
                                                shape: shape, detail: detail, bank: bank,
                                                meshPipeline: meshPipe, backgroundPipeline: bgPipe,
-                                               vertexBuffer: buffer, vertexCount: count, inputs: shader.inputs))
+                                               vertexBuffer: buffer, vertexCount: count, inputs: shader.inputs,
+                                               planeWidth: w, planeHeight: h))
         }
 
         // Camera. Only the orbit rig exists; other types fall back to it.

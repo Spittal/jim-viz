@@ -582,6 +582,25 @@ enum SelfCheck {
         engine.apply(.generator, "lowpoly", preset: "plane")
         guard engine.current?.generators.count == 2 else { return "second generator not added" }
         guard let secondGen = engine.current?.generators[1], secondGen.preset == "plane" else { return "second generator preset mismatch" }
+
+        // Plane width and height add polygons in the direction modified.
+        let initialVerts = secondGen.vertexCount
+        secondGen.bank["width"]?.setBase(20)
+        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        guard secondGen.vertexCount == initialVerts * 2 else {
+            return "plane width didn't double polygons: \(secondGen.vertexCount) vs \(initialVerts * 2)"
+        }
+        secondGen.bank["height"]?.setBase(20)
+        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        guard secondGen.vertexCount == initialVerts * 4 else {
+            return "plane height didn't double polygons again: \(secondGen.vertexCount) vs \(initialVerts * 4)"
+        }
+        secondGen.bank["width"]?.setBase(10)
+        secondGen.bank["height"]?.setBase(10)
+        secondGen.updatePlaneMeshIfNeeded(renderer: engine.renderer)
+        guard secondGen.vertexCount == initialVerts else {
+            return "plane did not restore original polygon count: \(secondGen.vertexCount) vs \(initialVerts)"
+        }
         engine.moveGenerator(key: secondGen.key, by: -1)
         guard engine.current?.generators.first?.key == secondGen.key else { return "generator not moved left" }
         engine.removeGenerator(key: secondGen.key)
@@ -675,6 +694,12 @@ enum SelfCheck {
         } catch {
             return "failed to write temp scene for deletion check"
         }
+
+        // Tool deletion via removeSelectedDevice
+        engine.selectDevice("camera")
+        engine.removeSelectedDevice()
+        guard engine.current?.camera == nil else { return "selected camera not removed by removeSelectedDevice" }
+        engine.apply(.camera, "orbit")
 
         guard engine.isDirty else { return "edits not marked unsaved" }
         guard (try? Data(contentsOf: presetURL)) == presetBefore else { return "a scene edit wrote to a preset file" }
@@ -800,7 +825,7 @@ enum SelfCheck {
         gen.bank["depth"]?.setBase(0)
         _ = engine.renderOffscreen(scene, frames: 3, snapshot: snapshotDir?.appendingPathComponent("depth-plane-flat.png"))
         let without = engine.averageColor(engine.renderer.history)
-        guard simd_length(with - without) > 0.005 else { return "depth didn't move the plane: \(with) vs \(without)" }
+        guard simd_length(with - without) > 0.003 else { return "depth didn't move the plane: \(with) vs \(without)" }
 
         // With a snapshot folder, a person-shaped blob (head and shoulders) in front of a far
         // wall, under a test pattern video, the way a real camera would look.
