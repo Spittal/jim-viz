@@ -14,7 +14,7 @@ enum ClockParams {
     ]
 }
 
-/// The Clock tool in a scene: a beat clock with tap tempo that follows audio only when Audio
+/// The Clock tool in a scene: a beat clock at a typed tempo that follows audio only when Audio
 /// In · Audio Out is mapped into its Audio input. Its outputs are the beat as values (Pulse,
 /// Beat, Bar, Phrase) and as a Sync stream that LFOs follow when mapped.
 ///
@@ -81,9 +81,7 @@ final class ClockRuntime {
         manager.audioTempo.minBPM = min(lo, hi)
         manager.audioTempo.maxBPM = max(lo, hi, min(lo, hi) + 1)
         if let a = audioSource, a.analyzer.fresh {
-            manager.audioTempo.feed(strength: a.analyzer.onsetStrength, kick: a.analyzer.kickFlux,
-                                    snare: a.analyzer.snareFlux, bass: a.features.bass,
-                                    active: a.features.active, time: f.now)
+            manager.audioTempo.feed(strength: a.analyzer.onsetStrength, active: a.features.active, time: f.now)
         }
         manager.advance(now: f.now, dt: Double(f.dt), hearsAudio: audioSource != nil)
     }
@@ -106,8 +104,6 @@ final class ClockRuntime {
     /// Manual tempo entry.
     func setManualBPM(_ v: Double) { manager.manual.bpm = min(max(v, 40), 250) }
 
-    func tap() { manager.tap() }
-
-    /// Snaps to the first beat of the phrase (bar 1, beat 1).
-    func firstBeat() { manager.firstBeat() }
+    /// The user pressed First Beat: the beat nearest this moment becomes bar 1, beat 1.
+    func firstBeat() { manager.firstBeat(at: CACurrentMediaTime()) }
 }

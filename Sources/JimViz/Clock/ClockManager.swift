@@ -16,7 +16,7 @@ enum ClockSourceKind: String, CaseIterable, Identifiable {
 /// beat. Each scene's `ClockRuntime` owns one.
 ///
 /// When audio is mapped into the Clock's Audio input (Audio In · Audio Out), it tracks the
-/// tempo and downbeat of the audio, falling back to the manual clock when audio is quiet,
+/// tempo and beat phase of the audio, falling back to the manual clock when audio is quiet,
 /// ambiguous or unmapped. The output beat advances at the chosen tempo and glides toward the
 /// source phase without jumping, so source switches never cause visual skips. While audio is active,
 /// the manual clock follows it, so a dropout continues seamlessly.
@@ -35,7 +35,9 @@ final class ClockManager {
     /// Whether the scene on screen maps audio into the Clock. Render thread.
     private(set) var hearsAudio = false
 
-    private var pendingFirstBeat = false
+    /// When the user pressed First Beat, waiting for the render thread. Guarded by `lock`.
+    private var firstBeatPress: CFTimeInterval?
+    private let lock = NSLock()
 
     init() {
         bpm = manual.bpm
@@ -55,9 +57,12 @@ final class ClockManager {
         manual.sync(beat: b, bpm: manual.bpm)
     }
 
-    /// Snap to the first beat of the phrase (bar 1, beat 1) on the next frame.
-    func firstBeat() {
-        pendingFirstBeat = true
+    /// The user pressed First Beat at host time `time`, on the downbeat they heard. Following
+    /// audio, the tracked beat nearest the press becomes bar 1, beat 1 of the phrase. On the
+    /// manual clock, which has no grid tied to the music, the press itself is the downbeat.
+    /// Applied on the next frame. Main thread.
+    func firstBeat(at time: CFTimeInterval) {
+        lock.lock(); firstBeatPress = time; lock.unlock()
     }
 
     /// Render thread, once per frame. `hearsAudio` is true while the scene on screen maps
@@ -69,12 +74,22 @@ final class ClockManager {
         self.hearsAudio = hearsAudio
         if hearsAudio { audioTempo.update(now: now) }
 
-        if pendingFirstBeat {
-            pendingFirstBeat = false
-            audioTempo.setFirstBeat()
-            let frac = beat - floor(beat)
-            beat = frac
-            manual.sync(beat: beat, bpm: bpm)
+        lock.lock(); let press = firstBeatPress; firstBeatPress = nil; lock.unlock()
+        if let press {
+            // `beat` runs `latencyMs` ahead of the sound.
+            let sincePress = (now - press + latencyMs / 1000) * bpm / 60
+            if active == .audio {
+                // Renumber so the beat heard at the press is 0. A whole-beat shift keeps the
+                // phase, so nothing jumps.
+                let shift = (beat - sincePress).rounded()
+                beat -= shift
+                manual.sync(beat: manual.beat - shift, bpm: manual.bpm)
+            } else {
+                // The press is beat 0. Renumber the output to within half a beat of it; the
+                // rest of the phase glides in below. `manual.advance` adds this frame's step.
+                manual.sync(beat: sincePress - dt * manual.bpm / 60, bpm: manual.bpm)
+                beat -= (beat - sincePress).rounded()
+            }
         }
 
         var target: (beat: Double, bpm: Double)?
@@ -84,21 +99,6 @@ final class ClockManager {
         }
 
         if let target {
-            // If audio tempo detected a phrase drop, align the phrase boundary.
-            if audioTempo.consumePhraseDrop() {
-                let frac = beat - floor(beat)
-                beat = (round(beat / 32) * 32) + frac
-            } else if audioTempo.downbeatConfidence > 0.35 {
-                // Downbeat alignment check: align bar position (0..<4) without changing fractional phase
-                let targetBar = ((Int(floor(target.beat)) % 4) + 4) % 4
-                let clockBar = ((Int(floor(beat)) % 4) + 4) % 4
-                let diff = ((targetBar - clockBar) % 4 + 4) % 4
-                if diff != 0 {
-                    let adj = diff > 2 ? diff - 4 : diff
-                    beat += Double(adj)
-                }
-            }
-
             // Tempo eases quickly; phase glides with a ~250 ms time constant.
             bpm += (target.bpm - bpm) * min(1, dt * 8)
             beat += dt * bpm / 60
@@ -131,51 +131,21 @@ final class ClockManager {
         if x < -cycle / 2 { x += cycle }
         return x
     }
-
-    /// Tap tempo.
-    @discardableResult
-    func tap() -> Bool {
-        manual.tap()
-        return true
-    }
 }
 
-/// Internal tempo clock with tap tempo. Used for manual tempo and fallback.
+/// Internal tempo clock at a typed tempo. Used for manual tempo and fallback.
 final class InternalClock {
     /// Written on main, read on the render thread.
     var bpm: Double = 124
     private(set) var beat: Double = 0
-    private var taps: [CFTimeInterval] = []
-    private var pendingResync = false
 
     func advance(dt: Double) {
-        if pendingResync {
-            beat = 0
-            pendingResync = false
-        }
         beat += dt * bpm / 60
     }
-
-    /// Snap to the first beat of the phrase (bar 1, beat 1) on the following frame.
-    func firstBeat() { pendingResync = true }
-
-    /// Snap to the first beat / downbeat.
-    func resync() { firstBeat() }
 
     /// Follows another clock, so switching back to manual continues without a jump.
     func sync(beat: Double, bpm: Double) {
         self.beat = beat
         if bpm > 0 { self.bpm = bpm }
-    }
-
-    func tap(at t: CFTimeInterval = CACurrentMediaTime()) {
-        if let last = taps.last, t - last > 2 { taps.removeAll() }
-        taps.append(t)
-        if taps.count > 8 { taps.removeFirst() }
-        guard taps.count >= 3 else { return }
-        let intervals = zip(taps.dropFirst(), taps).map { $0 - $1 }
-        let avg = intervals.reduce(0, +) / Double(intervals.count)
-        bpm = min(max(60 / avg, 40), 250)
-        resync()
     }
 }

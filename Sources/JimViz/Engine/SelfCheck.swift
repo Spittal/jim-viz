@@ -77,16 +77,7 @@ enum SelfCheck {
             analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
-            if analyzer.fresh {
-                tempo.feed(
-                    strength: analyzer.onsetStrength,
-                    kick: analyzer.kickFlux,
-                    snare: analyzer.snareFlux,
-                    bass: f.bass,
-                    active: f.active,
-                    time: t
-                )
-            }
+            if analyzer.fresh { tempo.feed(strength: analyzer.onsetStrength, active: f.active, time: t) }
             tempo.update(now: t)
             if let rd = tempo.reading(at: t) { beatAt.append((t, rd.beat)) }
             if pos / chunk % 120 == 0 {
@@ -581,28 +572,48 @@ enum SelfCheck {
         guard run(hearing: false) == .manual else { return "clock followed audio it wasn't mapped to hear" }
         guard run(hearing: true) == .audio else { return "clock didn't follow a steady mapped beat" }
 
-        // Test first beat resets beat to 0 mod 32
-        let clock = ClockManager()
-        clock.firstBeat()
-        clock.advance(now: 0.1, dt: 0.1, hearsAudio: false)
-        guard Int(floor(clock.beat)) % 32 == 0 else { return "firstBeat did not align to first beat of phrase" }
-
-        // Test downbeat detection on 4/4 pattern (kicks on 1 & 3, snares on 2 & 4)
-        let testClock = ClockManager()
-        let beatPeriod = 60.0 / 124
-        for i in 0..<(60 * 8) {
-            let t = Double(i) / 60
-            let beatIndex = Int(floor(t / beatPeriod))
-            let beatFrac = (t.truncatingRemainder(dividingBy: beatPeriod)) / beatPeriod
-            let onBeat = beatFrac < (1.0 / 60) / beatPeriod
-            let pos = beatIndex % 4
-            let kick: Float = onBeat && (pos == 0 || pos == 2) ? 1 : 0
-            let snare: Float = onBeat && (pos == 1 || pos == 3) ? 1 : 0
-            let str = kick + 0.5 * snare
-            testClock.audioTempo.feed(strength: str, kick: kick, snare: snare, active: true, time: t)
-            testClock.advance(now: t, dt: 1.0 / 60, hearsAudio: true)
+        // First Beat: the beat nearest the press becomes bar 1, beat 1 of the phrase, whether
+        // pressed a little early or late, without the output jumping.
+        func firstBeat(early: Bool, hearing: Bool) -> String? {
+            let clock = ClockManager()
+            let period = 60.0 / 124
+            let dt = 1.0 / 60
+            let downbeat = period * 20  // the beat the user means, ~10 s in
+            let press = downbeat + (early ? -0.1 : 0.1) * period
+            var pressed = false
+            var last: Double?
+            for i in 0..<(60 * 16) {
+                let t = Double(i) * dt
+                let onBeat = (t.truncatingRemainder(dividingBy: period)) < dt
+                if hearing { clock.audioTempo.feed(strength: onBeat ? 1 : 0, active: true, time: t) }
+                if !pressed, t >= press { clock.firstBeat(at: press); pressed = true }
+                clock.advance(now: t, dt: dt, hearsAudio: hearing)
+                if let l = last {
+                    // Renumbering moves the count by whole beats only; the phase keeps flowing.
+                    let step = clock.beat - l
+                    let phaseStep = step - step.rounded()
+                    if abs(phaseStep) > 2 * dt * 124 / 60 { return "First Beat made the clock jump (hearing: \(hearing))" }
+                }
+                last = clock.beat
+            }
+            if hearing, clock.active != .audio { return "clock lost the beat after First Beat" }
+            // At the end, the beat count should match the beats elapsed since the downbeat:
+            // following audio that's the beat the press was nearest; on the manual clock, the
+            // press itself.
+            let end = Double(60 * 16 - 1) * dt
+            let expected = (end - (hearing ? downbeat : press)) / period
+            let off = clock.beat - expected
+            guard abs(off) < 0.05 else {
+                return String(format: "First Beat pressed %@ landed %.2f beats off (hearing: %@)",
+                              early ? "early" : "late", off, hearing ? "yes" : "no")
+            }
+            return nil
         }
-        guard testClock.audioTempo.downbeatConfidence > 0.2 else { return "4/4 downbeat was not detected" }
+        for hearing in [true, false] {
+            for early in [true, false] {
+                if let e = firstBeat(early: early, hearing: hearing) { return e }
+            }
+        }
         return nil
     }
 

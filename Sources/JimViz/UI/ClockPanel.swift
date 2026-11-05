@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Clock input device: tempo, tap, beat position and audio-following. Placed in the
+/// The Clock input device: tempo, first beat, beat position and audio-following. Placed in the
 /// scene's input chain. It follows audio only when Audio In's Audio Out is mapped into its
 /// Audio input. Its knobs (latency, tempo range) are in the settings popover.
 struct ClockDevice: View {
@@ -21,17 +21,12 @@ struct ClockDevice: View {
                             .controlSize(.small)
                             .frame(width: 54)
                             .multilineTextAlignment(.trailing)
-                            .help("Current tempo. Follows mapped audio when steady, or manual tempo.")
+                            .help("Current tempo. Follows mapped audio when steady; otherwise the manual tempo typed here.")
                         Text("BPM").font(Theme.labelFont).foregroundStyle(Theme.textDim)
-                        Spacer(minLength: 0)
-                        Button("Tap") { state.tap() }
-                            .controlSize(.small)
-                            .help("Tap tempo. Tap three or more times on the beat.")
                     }
                     HStack(spacing: 6) {
                         BeatLights(beat: state.beatInBar)
-                            .onTapGesture { state.firstBeat() }
-                            .help("Beat position. Click to align first beat.")
+                            .help("Beat position in the bar.")
                         Text("\(state.bar + 1).\(state.beatInBar + 1)")
                             .font(Theme.valueFont)
                             .foregroundStyle(Theme.textDim)
@@ -39,7 +34,7 @@ struct ClockDevice: View {
                     Button("First Beat") { state.firstBeat() }
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
-                        .help("First beat of the phrase. Snaps to bar 1, beat 1.")
+                        .help("Press on the first beat of a phrase. The nearest beat becomes bar 1, beat 1.")
                     Text(status(state))
                         .font(Theme.labelFont)
                         .foregroundStyle(Theme.textDim)
@@ -88,7 +83,7 @@ struct ClockSettings: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
                 sourceRow(.audio, healthy: state.audioUsable, detail: audioDetail)
-                sourceRow(.manual, healthy: true, detail: "Manual fallback tempo. Tap or type a BPM.")
+                sourceRow(.manual, healthy: true, detail: "Manual fallback tempo. Type a BPM.")
             }
 
             Divider()
