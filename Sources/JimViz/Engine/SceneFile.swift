@@ -29,8 +29,8 @@ struct SceneFile: Codable {
     var inputs: [InputSpec]
     /// LFOs. Any number.
     var modulators: [ModulatorSpec]
-    var camera: CameraSlot
-    var palette: PaletteSlot
+    var camera: CameraSlot?
+    var palette: PaletteSlot?
     var generator: GeneratorSlot?
     var generators: [GeneratorSlot]?
     var effects: [EffectSpec]
@@ -68,8 +68,8 @@ extension SceneFile {
         name = try c.decode(String.self, forKey: .name)
         inputs = try c.decodeIfPresent([InputSpec].self, forKey: .inputs) ?? []
         modulators = try c.decodeIfPresent([ModulatorSpec].self, forKey: .modulators) ?? []
-        camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera) ?? CameraSlot(type: "orbit")
-        palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette) ?? PaletteSlot(colors: [])
+        camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera)
+        palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette)
         generator = try c.decodeIfPresent(GeneratorSlot.self, forKey: .generator)
         generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators)
         effects = try c.decodeIfPresent([EffectSpec].self, forKey: .effects) ?? []

@@ -19,8 +19,16 @@ struct DeviceChain: View {
                     // Inputs
                     ForEach(scene.inputs) { input in
                         switch input {
-                        case .audio: AudioDevice()
-                        case .clock: ClockDevice()
+                        case .audio:
+                            AudioDevice()
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) { engine.removeInput("audio") }
+                                }
+                        case .clock:
+                            ClockDevice()
+                                .contextMenu {
+                                    Button("Remove", role: .destructive) { engine.removeInput("clock") }
+                                }
                         case .midi(let input): MIDIInputDevice(input: input)
                         case .webcam(let w): WebcamDevice(webcam: w)
                         }
@@ -44,13 +52,25 @@ struct DeviceChain: View {
                     }
 
                     // Generation
-                    DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera), select: "camera") {
-                        KnobGrid(params: scene.camera.params, prefix: "camera")
+                    if let cam = scene.camera {
+                        DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera), select: "camera",
+                                    onClose: { engine.removeCamera() }) {
+                            KnobGrid(params: cam.params, prefix: "camera")
+                        }
+                        .contextMenu {
+                            Button("Remove", role: .destructive) { engine.removeCamera() }
+                        }
                     }
-                    DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette), select: "palette") {
-                        HStack(alignment: .top, spacing: 6) {
-                            PaletteEditor(palette: scene.palette)
-                            KnobGrid(params: scene.palette.bank.params, prefix: "palette")
+                    if let pal = scene.palette {
+                        DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette), select: "palette",
+                                    onClose: { engine.removePalette() }) {
+                            HStack(alignment: .top, spacing: 6) {
+                                PaletteEditor(palette: pal)
+                                KnobGrid(params: pal.bank.params, prefix: "palette")
+                            }
+                        }
+                        .contextMenu {
+                            Button("Remove", role: .destructive) { engine.removePalette() }
                         }
                     }
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
@@ -116,7 +136,7 @@ struct DeviceChain: View {
         Rectangle().fill(Theme.deviceBorder).frame(width: 2).padding(.vertical, 4)
     }
 
-    private func isSlot(_ kind: DeviceKind) -> Bool { dropTarget == .slot(kind) }
+    private func isSlot(_ kind: DeviceKind) -> Bool { dropTarget == .replace(kind) }
 
     private func slotColor(_ kind: DeviceKind) -> Color? { isSlot(kind) ? Theme.accent : nil }
 

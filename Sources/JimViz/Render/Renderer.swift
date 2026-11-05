@@ -186,14 +186,14 @@ final class RenderScene {
     let streamInputs: [StreamInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
     let streamBindings: [String: StreamOutput]
-    let camera: ParamBank
-    let cameraMotion: CameraMotion
+    let camera: ParamBank?
+    let cameraMotion: CameraMotion?
     let cameraPreset: String?
-    let cameraLabel: String
+    let cameraLabel: String?
     let effects: [EffectRuntime]
-    let palette: PaletteModel
+    let palette: PaletteModel?
     let palettePreset: String?
-    let paletteLabel: String
+    let paletteLabel: String?
     /// Every output in the chain, in chain order.
     let outputs: [OutputSignal]
     let mappings: [MappingRuntime]
@@ -217,8 +217,8 @@ final class RenderScene {
     init(name: String, generators: [GeneratorRuntime],
          inputs: [InputDevice], modulators: [ModulatorRuntime],
          streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
-         camera: ParamBank, cameraMotion: CameraMotion, cameraPreset: String?, cameraLabel: String,
-         effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel, paletteLabel: String,
+         camera: ParamBank?, cameraMotion: CameraMotion?, cameraPreset: String?, cameraLabel: String?,
+         effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
          outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
         self.name = name; self.generators = generators
         self.inputs = inputs
@@ -236,22 +236,22 @@ final class RenderScene {
                                       uniquingKeysWith: { a, _ in a })
         effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
                                    uniquingKeysWith: { a, _ in a })
-        usesPalette = streamBindings.values.contains { $0.kind == .palette }
+        usesPalette = palette != nil && streamBindings.values.contains { $0.kind == .palette }
         clockHearsAudio = streamBindings[StreamInput.clockAudioKey]?.kind == .audio
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         hasAudioInput = inputs.contains { $0.id == "audio" }
         self.hasClock = hasClock
-        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + ["camera", "palette"] + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [palette.bank] + webcams.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + [camera] + effects.map(\.bank)
+        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
+        banks = (palette.map { [$0.bank] } ?? []) + webcams.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
     }
 
     convenience init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
                      inputs: [InputDevice], modulators: [ModulatorRuntime],
                      streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
-                     camera: ParamBank, cameraMotion: CameraMotion, cameraPreset: String?, cameraLabel: String,
-                     effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel, paletteLabel: String,
+                     camera: ParamBank?, cameraMotion: CameraMotion?, cameraPreset: String?, cameraLabel: String?,
+                     effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
                      outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
         self.init(name: name, generators: generator.map { [$0] } ?? [], inputs: inputs, modulators: modulators,
                   streamOutputs: streamOutputs, streamBindings: streamBindings, camera: camera, cameraMotion: cameraMotion,
@@ -649,7 +649,7 @@ final class Renderer {
             switch source?.kind {
             case .video?: tex = source?.texture ?? blackTexture
             case .spectrum?: tex = spectrumTex
-            case .palette?: tex = scene.palette.gpu.current
+            case .palette?: tex = scene.palette?.gpu.current ?? greyRamp
             default: tex = input.kind == .palette ? greyRamp : blackTexture
             }
             if source != nil { mask |= 1 << (first + i) }
@@ -677,7 +677,7 @@ final class Renderer {
     func encodeScene(_ cmd: MTLCommandBuffer, scene: RenderScene, frame f: inout FrameUniforms, into target: MTLTexture) {
         encodeWebcams(cmd, scene, &f)
         f.resolution = SIMD2(Float(outputSize.width), Float(outputSize.height))
-        if scene.usesPalette { updatePalette(scene.palette) }
+        if scene.usesPalette, let pal = scene.palette { updatePalette(pal) }
         var cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
 
         // Scene pass.
@@ -708,7 +708,22 @@ final class Renderer {
                 }
             }
 
-            // 2. Render generators in chain order.
+            // 2. Draw generator backgrounds in chain order (behind all meshes).
+            for gen in scene.generators where (gen.bank["bgGlow"]?.live ?? 0) > 0 {
+                let sources = scene.generatorSources[gen.key] ?? []
+                f.inputs = bindInputs(enc, gen.inputs, sources: sources, scene: scene, from: 0, vertex: true)
+                enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
+                gen.bank.withPacked {
+                    enc.setFragmentBytes($0, length: $1, index: 1)
+                    enc.setVertexBytes($0, length: $1, index: 2)
+                }
+                enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
+                enc.setRenderPipelineState(gen.backgroundPipeline)
+                enc.setDepthStencilState(depthOff)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            }
+
+            // 3. Render generator meshes in chain order on the same stage.
             for gen in scene.generators {
                 let sources = scene.generatorSources[gen.key] ?? []
                 f.inputs = bindInputs(enc, gen.inputs, sources: sources, scene: scene, from: 0, vertex: true)
@@ -718,12 +733,6 @@ final class Renderer {
                     enc.setVertexBytes($0, length: $1, index: 2)
                 }
                 enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
-
-                if (gen.bank["bgGlow"]?.live ?? 0) > 0 {
-                    enc.setRenderPipelineState(gen.backgroundPipeline)
-                    enc.setDepthStencilState(depthOff)
-                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-                }
 
                 enc.setRenderPipelineState(gen.meshPipeline)
                 enc.setDepthStencilState(depthOn)
@@ -822,7 +831,10 @@ final class Renderer {
         enc.endEncoding()
     }
 
-    private func cameraUniforms(_ c: ParamBank, _ motion: CameraMotion, frame f: FrameUniforms) -> CameraUniforms {
+    private func cameraUniforms(_ c: ParamBank?, _ motion: CameraMotion?, frame f: FrameUniforms) -> CameraUniforms {
+        guard let c, let motion else {
+            return CameraUniforms(viewProj: matrix_identity_float4x4, position: SIMD4(0, 0, 0, 1))
+        }
         let t = f.time
         motion.orbit += c.live("orbitSpeed") * f.dt
         motion.roll += c.live("rollSpeed") * 90 * f.dt

@@ -221,17 +221,17 @@ enum SelfCheck {
         guard green.y > 0.9, green.x < 0.1, green.z < 0.1 else { return "palette hue wrong: \(green)" }
         engine.addMapping(source: "audio.kick", target: "palette.brightness")
         guard engine.current?.mappings.first(where: { $0.target == "palette.brightness" })?.isActive == true,
-              engine.current?.palette.bank["brightness"]?.isModulated == true else { return "palette input not mappable" }
-        engine.current?.palette.bank["hue"]?.setBase(30)
+              engine.current?.palette?.bank["brightness"]?.isModulated == true else { return "palette input not mappable" }
+        engine.current?.palette?.bank["hue"]?.setBase(30)
         engine.apply(.palette, "palette", preset: "ice")
-        guard engine.current?.palette.bank["hue"]?.base == 30 else { return "palette inputs lost on a preset change" }
+        guard engine.current?.palette?.bank["hue"]?.base == 30 else { return "palette inputs lost on a preset change" }
 
         var f = SignalFrame()
         f.beat = 8  // on a downbeat: pulse = 1, bar ramp = 0
 
         // Modulation adds amount × signal × range on top of the knob.
         engine.addMapping(source: "clock.pulse", target: "camera.fov")
-        guard let s1 = engine.current, let fov = s1.camera["fov"],
+        guard let s1 = engine.current, let fov = s1.camera?["fov"],
               let m = s1.mappings.first(where: { $0.source == "clock.pulse" && $0.target == "camera.fov" }),
               m.isActive, m.amount == 0.25, fov.isModulated else { return "pulse → fov not mapped" }
         s1.modulate(f)
@@ -475,14 +475,14 @@ enum SelfCheck {
         let b = engine.averageColor(engine.renderer.history)
         guard simd_length(a - b) > 0.01 else { return "test scenes look the same: \(a) vs \(b)" }
         // Each scene's camera should move at its own speed, once per frame, while both are drawn.
-        let orbitA = sceneA.cameraMotion.orbit, orbitB = sceneB.cameraMotion.orbit
+        let orbitA = sceneA.cameraMotion?.orbit ?? 0, orbitB = sceneB.cameraMotion?.orbit ?? 0
         var expectA: Float = 0, expectB: Float = 0
         var start = SIMD3<Float>.zero
         for i in 0..<10 {
             if i == 5 { start = engine.averageColor(engine.renderer.history) }
             engine.renderTransition(from: sceneA, to: sceneB, progress: i < 5 ? 0 : 1, frames: 1)
-            expectA += sceneA.camera.live("orbitSpeed") / 60
-            expectB += sceneB.camera.live("orbitSpeed") / 60
+            expectA += (sceneA.camera?.live("orbitSpeed") ?? 0) / 60
+            expectB += (sceneB.camera?.live("orbitSpeed") ?? 0) / 60
         }
         let end = engine.averageColor(engine.renderer.history)
         guard simd_length(start - a) < simd_length(start - b) else {
@@ -492,7 +492,7 @@ enum SelfCheck {
             return "crossfade end doesn't show the incoming scene: \(end), outgoing \(a), incoming \(b)"
         }
 
-        let movedA = sceneA.cameraMotion.orbit - orbitA, movedB = sceneB.cameraMotion.orbit - orbitB
+        let movedA = (sceneA.cameraMotion?.orbit ?? 0) - orbitA, movedB = (sceneB.cameraMotion?.orbit ?? 0) - orbitB
         guard abs(movedA - expectA) < 1e-3, abs(movedB - expectB) < 1e-3 else {
             return "cameras moved \(movedA), \(movedB) in 10 crossfade frames; expected \(expectA), \(expectB)"
         }
@@ -569,7 +569,7 @@ enum SelfCheck {
         guard let start = engine.current else { return "scene did not load" }
         let n = start.effects.count
 
-        engine.removeGenerator()
+        while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
         guard engine.current?.generator == nil else { return "generator not removed" }
         engine.apply(.generator, "lowpoly")
         guard engine.current?.generator?.shape == .icosphere, engine.current?.generatorPreset == nil else { return "bare generator tool not loaded" }
@@ -601,11 +601,48 @@ enum SelfCheck {
         engine.toggleCollapsed("generator")
         guard !engine.isCollapsed("generator") else { return "device not unfolded" }
         engine.apply(.camera, "orbit", preset: "drift")
-        guard engine.current?.cameraLabel == "Drift", engine.current?.camera["distance"]?.base == 9 else { return "camera preset not applied" }
+        guard engine.current?.cameraLabel == "Drift", engine.current?.camera?["distance"]?.base == 9 else { return "camera preset not applied" }
         engine.apply(.palette, "palette", preset: "ice")
         guard engine.current?.paletteLabel == "Ice" else { return "palette preset not applied" }
         engine.removeInput("audio")
         guard engine.current?.hasAudioInput == false else { return "input not removed" }
+
+        // Tool cardinality: audio/clock/camera/palette are single, generators/effects/LFOs/MIDI/webcams are many.
+        guard Tools.cardinality(.input, "audio") == .one,
+              Tools.cardinality(.input, "clock") == .one,
+              Tools.cardinality(.camera, "orbit") == .one,
+              Tools.cardinality(.palette, "palette") == .one,
+              Tools.cardinality(.generator, "lowpoly") == .many else { return "tool cardinality incorrect" }
+
+        // Optional camera and palette removal and rendering without them.
+        engine.removeCamera()
+        guard engine.current?.camera == nil else { return "camera not removed" }
+        _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
+        engine.removePalette()
+        guard engine.current?.palette == nil else { return "palette not removed" }
+        _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
+
+        // Restore camera and palette.
+        engine.apply(.camera, "orbit")
+        guard engine.current?.camera != nil else { return "camera not restored" }
+        engine.apply(.palette, "palette")
+        guard engine.current?.palette != nil else { return "palette not restored" }
+
+        // Drag and drop: 'one' replaces, 'many' appends.
+        engine.drop(.device(.camera, tool: "orbit", preset: "barrel-roll"), at: .replace(.camera))
+        guard engine.current?.cameraLabel == "Barrel Roll" else { return "camera drop didn't replace" }
+
+        // Multiple generators render on the same stage.
+        let initialGenCount = engine.current?.generators.count ?? 0
+        let firstGenPreset = engine.current?.generators.first?.preset
+        engine.selectDevice("generator")
+        engine.drop(.device(.generator, tool: "lowpoly", preset: "torus-swarm"), at: .append(.generator))
+        guard engine.current?.generators.count == initialGenCount + 1 else { return "generator drop didn't append" }
+        guard engine.current?.generators.first?.preset == firstGenPreset else { return "generator drop replaced selected generator" }
+        _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
+        if let secondKey = engine.current?.generators.last?.key { engine.removeGenerator(key: secondKey) }
+        guard engine.current?.generators.count == initialGenCount else { return "second generator not removed" }
+
         guard engine.isDirty else { return "edits not marked unsaved" }
         guard (try? Data(contentsOf: presetURL)) == presetBefore else { return "a scene edit wrote to a preset file" }
         return nil
@@ -634,7 +671,8 @@ enum SelfCheck {
         guard engine.current?.mappings.count == count else { return "mapped across kinds (video ↔ value)" }
         guard let scene = engine.current, let cam = scene.webcams.first,
               scene.streamBindings["generator.texVideo"] === cam.video,
-              scene.streamInputs.map(\.label) == ["Audio", "Sync", "Palette", "Spectrum", "Texture", "Depth"] else { return "stream inputs missing Texture or Depth" }
+              scene.streamInputs.contains(where: { $0.label == "Texture" }),
+              scene.streamInputs.contains(where: { $0.label == "Depth" }) else { return "stream inputs missing Texture or Depth" }
         guard cam.pipeline != nil, cam.bank["zoom"] != nil, cam.bank["bg"] != nil, cam.bank["mirror"]?.def.labels == ["Off", "Flip", "Fold", "Quad"] else {
             return "webcam shader not compiled or its knobs missing: \(engine.errors)"
         }

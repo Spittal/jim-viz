@@ -56,8 +56,10 @@ extension View {
 
 /// Where a hovering drag would land.
 enum ChainDropTarget: Equatable {
-    /// Replaces a single-slot device (camera, palette, generator), or adds an input or modulator.
-    case slot(DeviceKind)
+    /// Replaces a single-slot device in the chain (cardinality == .one: camera, palette).
+    case replace(DeviceKind)
+    /// Appends a multi-instance device to the chain (cardinality == .many: generator, modulation, input).
+    case append(DeviceKind)
     /// Inserts an effect before the effect at this index (count = at the end).
     case effectIndex(Int)
     /// Maps an output to the knob, or video input, with this target key.
@@ -133,13 +135,23 @@ struct ChainDropDelegate: DropDelegate {
             }
             return hit.map { .knob(String($0.key.dropFirst(5))) }
         }
-        guard let kind = drag.kind, kind == .effect else { return drag.kind.map { .slot($0) } }
-        let index = effectIDs.filter { (frames[$0]?.midX ?? .infinity) < location.x }.count
-        // Moving an effect into the gap on either side of itself changes nothing.
-        if case .move(let id) = drag, let from = effectIDs.firstIndex(of: id), index == from || index == from + 1 {
-            return nil
+        if case .move(let id) = drag {
+            let index = effectIDs.filter { (frames[$0]?.midX ?? .infinity) < location.x }.count
+            // Moving an effect into the gap on either side of itself changes nothing.
+            if let from = effectIDs.firstIndex(of: id), index == from || index == from + 1 {
+                return nil
+            }
+            return .effectIndex(index)
         }
-        return .effectIndex(index)
+        if case .device(let kind, let tool, _) = drag {
+            if kind == .effect {
+                let index = effectIDs.filter { (frames[$0]?.midX ?? .infinity) < location.x }.count
+                return .effectIndex(index)
+            }
+            let cardinality = Tools.cardinality(kind, tool)
+            return cardinality == .one ? .replace(kind) : .append(kind)
+        }
+        return nil
     }
 
     /// x of the insertion marker for an effect drop.
@@ -156,8 +168,10 @@ extension Engine {
             moveEffect(id: id, to: i)
         case (.device(.effect, let tool, let preset), .effectIndex(let i)):
             apply(.effect, tool, preset: preset, at: i)
-        case (.device(let kind, let tool, let preset), .slot):
-            apply(kind, tool, preset: preset)
+        case (.device(let kind, let tool, let preset), .replace):
+            apply(kind, tool, preset: preset, replaceSelected: true)
+        case (.device(let kind, let tool, let preset), .append):
+            apply(kind, tool, preset: preset, replaceSelected: false)
         case (.output(let key), .knob(let target)):
             addMapping(source: key, target: target)
             if mapSource == key, kind(of: key).isStream { mapSource = nil }

@@ -77,7 +77,7 @@ struct DeviceBrowser: View {
         guard tool.kind == .input, tool.name == "midi" || tool.name == "webcam" else { return tool }
         let names = tool.name == "midi" ? engine.midi.devices.map(\.name) : engine.webcams.devices.map(\.name)
         let devices = names.map { PresetInfo(id: $0, name: $0, colors: []) }
-        return Tool(kind: tool.kind, name: tool.name, label: tool.label, presets: devices)
+        return Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: devices)
     }
 
     /// While searching, keeps a tool if its name matches (with all presets) or only its matching presets.
@@ -85,7 +85,7 @@ struct DeviceBrowser: View {
         guard !search.isEmpty else { return tool }
         if tool.label.localizedCaseInsensitiveContains(search) { return tool }
         let presets = tool.presets.filter { $0.name.localizedCaseInsensitiveContains(search) }
-        return presets.isEmpty ? nil : Tool(kind: tool.kind, name: tool.name, label: tool.label, presets: presets)
+        return presets.isEmpty ? nil : Tool(kind: tool.kind, name: tool.name, label: tool.label, cardinality: tool.cardinality, presets: presets)
     }
 
     private var expanded: Set<String> { Set(expandedRaw.split(separator: ",").map(String.init)) }
@@ -104,7 +104,9 @@ struct DeviceBrowser: View {
         guard let scene = engine.current else { return false }
         switch tool.kind {
         case .input: return tool.name == "audio" ? scene.hasAudioInput : tool.name == "clock" ? scene.hasClock : false
-        case .generator: return scene.generator?.type == tool.name
+        case .camera: return scene.camera != nil
+        case .palette: return scene.palette != nil
+        case .generator: return scene.generators.contains { $0.type == tool.name }
         default: return false
         }
     }
@@ -112,9 +114,9 @@ struct DeviceBrowser: View {
     private func presetInUse(_ tool: Tool, _ preset: PresetInfo) -> Bool {
         guard let scene = engine.current else { return false }
         switch tool.kind {
-        case .camera: return scene.cameraPreset == preset.id
-        case .palette: return scene.palettePreset == preset.id
-        case .generator: return scene.generator?.type == tool.name && scene.generatorPreset == preset.id
+        case .camera: return scene.camera != nil && scene.cameraPreset == preset.id
+        case .palette: return scene.palette != nil && scene.palettePreset == preset.id
+        case .generator: return scene.generators.contains { $0.type == tool.name && $0.preset == preset.id }
         case .input:
             return tool.name == "midi" ? scene.midiInputs.contains { $0.device == preset.id }
                                        : scene.webcams.contains { $0.device == preset.id }

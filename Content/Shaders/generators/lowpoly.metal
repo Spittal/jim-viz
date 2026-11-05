@@ -45,8 +45,8 @@
 // sliced onto it), Screen (as seen from the camera, so the mesh becomes a window onto the
 // video), Shards (every face shows its own patch of the screen view), Sphere (wrapped around
 // the object), Normal (by face direction, kaleidoscopic) or Front (projected flat from the
-// front, the way Depth is, so a webcam's video sits on its own depth relief; best with the
-// field shape). videoScatter turns and shifts each face's copy by a random amount in Faces
+// front, the way Depth is, so a webcam's video sits on its own depth relief; best with
+// the field and plane shapes). videoScatter turns and shifts each face's copy by a random amount in Faces
 // mode, so the facets don't all match.
 // videoTint recolours the video through the palette by brightness.
 // @video texVideo Texture
@@ -70,9 +70,16 @@
 // The field shape's size; matches MeshShape.fieldSize.
 constant float FIELD_W = 6.4;
 constant float FIELD_H = 3.6;
+constant float PLANE_SIZE = 10.0;
 
-// Where a mesh point lands in a front-projected video: the field shape covers it exactly.
-inline float2 frontUV(float3 pos) { return float2(0.5 - pos.z / FIELD_W, 0.5 - pos.y / FIELD_H); }
+// Where a mesh point lands in a front-projected video: the field shape (16:9) and plane
+// shape (terrain) cover it edge-to-edge.
+inline float2 frontUV(float3 pos, float3 norm) {
+    if (norm.y > 0.9 && abs(pos.y) < 0.01) {
+        return float2(0.5 - pos.z / PLANE_SIZE, 0.5 + pos.x / PLANE_SIZE);
+    }
+    return float2(0.5 - pos.z / FIELD_W, 0.5 - pos.y / FIELD_H);
+}
 
 struct MeshVertex {
     float4 position;     // w = per-face random
@@ -117,7 +124,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
     float ir = hash11(float(iid) * 17.13 + 1.7);
     float t = f.time * p.noiseSpeed;
     float3 pos = v.position.xyz;
-    float2 fuv = frontUV(pos);
+    float2 fuv = frontUV(pos, v.smoothNormal.xyz);
 
     // Depth: near things (white) rise toward the camera.
     if (hasInput(f, 3) && p.depth > 0) {

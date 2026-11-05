@@ -318,8 +318,9 @@ final class Engine {
     /// generator replace what is there; effects insert at `index` or append; inputs are added
     /// (one Audio In and one Clock, any number of MIDI inputs). A preset's values are copied in;
     /// the preset file is never touched.
-    func apply(_ kind: DeviceKind, _ tool: String, preset: String? = nil, at index: Int? = nil) {
+    func apply(_ kind: DeviceKind, _ tool: String, preset: String? = nil, at index: Int? = nil, replaceSelected: Bool = true) {
         let label = presetName(kind, tool, preset) ?? Tools.label(kind, tool)
+        let cardinality = Tools.cardinality(kind, tool)
         switch kind {
         case .input where tool == "midi":
             var key = ""
@@ -339,7 +340,7 @@ final class Engine {
             }
             selectDevice(key)
         case .input:
-            if sceneFile?.inputs.contains(where: { $0.type == tool }) == true {
+            if cardinality == .one, sceneFile?.inputs.contains(where: { $0.type == tool }) == true {
                 info = "\(label) is already in the chain"; selectDevice(tool); return
             }
             edit("Added \(label)") { file in
@@ -351,11 +352,13 @@ final class Engine {
         case .camera:
             let slot = cameraSlot(tool, preset: preset)
             edit("Camera: \(label)") { $0.camera = slot }
+            selectDevice("camera")
         case .palette:
             var slot = paletteSlot(preset: preset)
             // A preset brings colours; the palette's inputs stay as they are.
-            slot.params = current?.palette.bank.baseValues
+            slot.params = current?.palette?.bank.baseValues
             edit("Palette: \(label)") { $0.palette = slot }
+            selectDevice("palette")
         case .generator:
             let p = preset.flatMap { store.preset(.generator, tool, $0) }
             var key = "generator"
@@ -365,7 +368,16 @@ final class Engine {
                     let slot = GeneratorSlot(id: nil, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
                     list.append(slot)
                     key = "generator"
-                } else if let selected = self.selectedDevice, selected.hasPrefix("generator"),
+                } else if cardinality == .one {
+                    var slot = list[0]
+                    slot.type = tool
+                    slot.preset = preset
+                    slot.shape = p?.shape
+                    slot.detail = p?.detail
+                    slot.params = p?.params
+                    list[0] = slot
+                    key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
+                } else if replaceSelected, preset != nil, let selected = self.selectedDevice, selected.hasPrefix("generator"),
                           let idx = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == selected }) {
                     var slot = list[idx]
                     slot.type = tool
@@ -376,7 +388,7 @@ final class Engine {
                     list[idx] = slot
                     key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
                 } else {
-                    let taken = Set(list.compactMap(\.id))
+                    let taken = Set(list.compactMap(\.id) + ["generator"])
                     let id = Self.uniqueID(tool, taken: taken)
                     let slot = GeneratorSlot(id: id, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
                     let i = min(max(index ?? list.count, 0), list.count)
@@ -420,7 +432,18 @@ final class Engine {
     func removeInput(_ key: String) {
         let name = deviceName(key)
         if learningMIDI == key { learningMIDI = nil }
+        if selectedDevice == key { selectDevice(nil) }
         edit("Removed \(name)") { $0.inputs.removeAll { $0.deviceKey == key } }
+    }
+
+    func removeCamera() {
+        if selectedDevice == "camera" { selectDevice(nil) }
+        edit("Removed Camera") { $0.camera = nil }
+    }
+
+    func removePalette() {
+        if selectedDevice == "palette" { selectDevice(nil) }
+        edit("Removed Palette") { $0.palette = nil }
     }
 
     func removeModulator(id: String) {
@@ -437,6 +460,7 @@ final class Engine {
     }
 
     func removeGenerator(key: String = "generator") {
+        if selectedDevice == key { selectDevice(nil) }
         edit("Removed generator") { file in
             var list = file.allGenerators
             list.removeAll { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }
@@ -720,11 +744,23 @@ final class Engine {
         }
 
         // Camera. Only the orbit rig exists; other types fall back to it.
-        errors["camera"] = file.camera.type == "orbit" ? nil : "unknown camera type \(file.camera.type), using orbit"
-        let camera = ParamBank(defs: CameraParams.defs, values: file.camera.params ?? [:], reuse: reuse?.camera)
-        // A rebuilt scene keeps its camera's motion; a new one picks up from the scene on screen.
-        let cameraMotion = reuse?.cameraMotion ?? CameraMotion(continuing: current?.cameraMotion)
-        let cameraLabel = presetName(.camera, file.camera.type, file.camera.preset) ?? Tools.label(.camera, file.camera.type)
+        let camera: ParamBank?
+        let cameraMotion: CameraMotion?
+        let cameraPreset: String?
+        let cameraLabel: String?
+        if let camSlot = file.camera {
+            errors["camera"] = camSlot.type == "orbit" ? nil : "unknown camera type \(camSlot.type), using orbit"
+            camera = ParamBank(defs: CameraParams.defs, values: camSlot.params ?? [:], reuse: reuse?.camera)
+            cameraMotion = reuse?.cameraMotion ?? CameraMotion(continuing: current?.cameraMotion)
+            cameraPreset = camSlot.preset
+            cameraLabel = presetName(.camera, camSlot.type, camSlot.preset) ?? Tools.label(.camera, camSlot.type)
+        } else {
+            errors["camera"] = nil
+            camera = nil
+            cameraMotion = nil
+            cameraPreset = nil
+            cameraLabel = nil
+        }
 
         // Modulation: LFOs.
         var modulators: [ModulatorRuntime] = []
@@ -765,11 +801,24 @@ final class Engine {
             effects.append(runtime)
         }
 
-        let colors = file.palette.colors.compactMap(parseHexColor)
-        let paletteBank = ParamBank(defs: PaletteParams.defs, values: file.palette.params ?? [:], reuse: reuse?.palette.bank)
-        let palette = PaletteModel(colors.count >= 2 ? colors : Tools.defaultPalette.compactMap(parseHexColor),
-                                   bank: paletteBank, gpu: reuse?.palette.gpu ?? renderer.makePaletteTextures())
-        let paletteLabel = presetName(.palette, "palette", file.palette.preset) ?? "Custom"
+        let palette: PaletteModel?
+        let paletteBank: ParamBank?
+        let palettePreset: String?
+        let paletteLabel: String?
+        if let palSlot = file.palette {
+            let colors = palSlot.colors.compactMap(parseHexColor)
+            let pBank = ParamBank(defs: PaletteParams.defs, values: palSlot.params ?? [:], reuse: reuse?.palette?.bank)
+            palette = PaletteModel(colors.count >= 2 ? colors : Tools.defaultPalette.compactMap(parseHexColor),
+                                   bank: pBank, gpu: reuse?.palette?.gpu ?? renderer.makePaletteTextures())
+            paletteBank = pBank
+            palettePreset = palSlot.preset
+            paletteLabel = presetName(.palette, "palette", palSlot.preset) ?? "Custom"
+        } else {
+            palette = nil
+            paletteBank = nil
+            palettePreset = nil
+            paletteLabel = nil
+        }
 
         // Inputs: one Audio In and one Clock at most, any number of MIDI inputs.
         var inputs: [InputDevice] = []
@@ -812,12 +861,16 @@ final class Engine {
                 errors["input"] = "unknown input \(spec.type)"
             }
         }
-        outputs += Outputs.camera(cameraMotion)
+        if let cameraMotion {
+            outputs += Outputs.camera(cameraMotion)
+        }
         outputs += modulators.map(\.output)
 
         // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
         // until it is, so removing and re-adding a device keeps its mappings.
-        var banks: [String: ParamBank] = ["camera": camera, "palette": paletteBank]
+        var banks: [String: ParamBank] = [:]
+        if let camera { banks["camera"] = camera }
+        if let paletteBank { banks["palette"] = paletteBank }
         for gen in generators { banks[gen.key] = gen.bank }
         if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
         for fx in effects { banks["post.\(fx.id)"] = fx.bank }
@@ -840,7 +893,9 @@ final class Engine {
             default: break
             }
         }
-        streamOutputs.append(.palette())
+        if palette != nil {
+            streamOutputs.append(.palette())
+        }
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
         if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .audio) }
@@ -861,6 +916,8 @@ final class Engine {
             let device = devicePath(source)
             if source.hasPrefix("audio.") { return "Needs Audio In in the chain" }
             if source.hasPrefix("clock.") { return "Needs Clock in the chain" }
+            if source.hasPrefix("camera.") { return "Needs Camera in the chain" }
+            if source.hasPrefix("palette.") { return "Needs Palette in the chain" }
             if source.hasPrefix("mod.") { return "\(device.dropFirst(4)) isn't in this scene" }
             if source.hasPrefix("webcam.") { return "Needs its Webcam in the chain" }
             if source.hasPrefix("midi.") {
@@ -942,8 +999,8 @@ final class Engine {
 
         return RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
                            streamOutputs: streamOutputs, streamBindings: streamBindings,
-                           camera: camera, cameraMotion: cameraMotion, cameraPreset: file.camera.preset, cameraLabel: cameraLabel,
-                           effects: effects, palettePreset: file.palette.preset,
+                           camera: camera, cameraMotion: cameraMotion, cameraPreset: cameraPreset, cameraLabel: cameraLabel,
+                           effects: effects, palettePreset: palettePreset,
                            palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
                            banksByPath: banks)
     }
@@ -997,7 +1054,9 @@ final class Engine {
             }
         }
         file.allGenerators = gens
-        file.camera.params = scene.camera.baseValues
+        if let cam = scene.camera {
+            file.camera?.params = cam.baseValues
+        }
         for i in file.modulators.indices {
             guard let m = scene.modulators.first(where: { $0.id == file.modulators[i].id }) else { continue }
             file.modulators[i].params = m.bank.baseValues
@@ -1021,10 +1080,12 @@ final class Engine {
             file.effects[i].params = fx.bank.baseValues
             file.effects[i].enabled = fx.enabled ? nil : false
         }
-        let colors = scene.palette.colors.map(hexString)
-        // Edited colors no longer match the preset they came from.
-        if colors != file.palette.colors { file.palette = PaletteSlot(preset: nil, colors: colors) }
-        file.palette.params = scene.palette.bank.baseValues
+        if let pal = scene.palette {
+            let colors = pal.colors.map(hexString)
+            // Edited colors no longer match the preset they came from.
+            if colors != file.palette?.colors { file.palette = PaletteSlot(preset: nil, colors: colors) }
+            file.palette?.params = pal.bank.baseValues
+        }
     }
 
     /// Rebuilds the current scene after a shader or preset change, keeping unsaved knob values.
