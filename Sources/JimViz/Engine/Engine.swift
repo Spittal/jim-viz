@@ -358,8 +358,34 @@ final class Engine {
             edit("Palette: \(label)") { $0.palette = slot }
         case .generator:
             let p = preset.flatMap { store.preset(.generator, tool, $0) }
-            let slot = GeneratorSlot(type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
-            edit("Generator: \(label)") { $0.generator = slot }
+            var key = "generator"
+            edit("Generator: \(label)") { file in
+                var list = file.allGenerators
+                if list.isEmpty {
+                    let slot = GeneratorSlot(id: nil, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
+                    list.append(slot)
+                    key = "generator"
+                } else if let selected = self.selectedDevice, selected.hasPrefix("generator"),
+                          let idx = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == selected }) {
+                    var slot = list[idx]
+                    slot.type = tool
+                    slot.preset = preset
+                    slot.shape = p?.shape
+                    slot.detail = p?.detail
+                    slot.params = p?.params
+                    list[idx] = slot
+                    key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
+                } else {
+                    let taken = Set(list.compactMap(\.id))
+                    let id = Self.uniqueID(tool, taken: taken)
+                    let slot = GeneratorSlot(id: id, type: tool, preset: preset, shape: p?.shape, detail: p?.detail, params: p?.params)
+                    let i = min(max(index ?? list.count, 0), list.count)
+                    list.insert(slot, at: i)
+                    key = "generator.\(id)"
+                }
+                file.allGenerators = list
+            }
+            selectDevice(key)
         case .modulation:
             let params = preset.flatMap { store.preset(.modulation, tool, $0)?.params }
             var key = ""
@@ -410,7 +436,23 @@ final class Engine {
         }
     }
 
-    func removeGenerator() { edit("Removed generator") { $0.generator = nil } }
+    func removeGenerator(key: String = "generator") {
+        edit("Removed generator") { file in
+            var list = file.allGenerators
+            list.removeAll { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }
+            file.allGenerators = list
+        }
+    }
+
+    func moveGenerator(key: String, by offset: Int) {
+        edit("Moved generator") { file in
+            var list = file.allGenerators
+            guard let from = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }) else { return }
+            let to = min(max(from + offset, 0), list.count - 1)
+            list.swapAt(from, to)
+            file.allGenerators = list
+        }
+    }
 
     func removeEffect(id: String) {
         edit("Removed \(id)") { $0.effects.removeAll { ($0.id ?? $0.effect) == id } }
@@ -637,6 +679,8 @@ final class Engine {
         case "camera": return "Camera"
         case "palette": return "Palette"
         case "generator": return current?.generatorLabel ?? "Generator"
+        case _ where key.hasPrefix("generator."):
+            return current?.generators.first { $0.key == key }?.label ?? "Generator"
         case _ where key.hasPrefix("webcam."):
             return current?.webcams.first { $0.key == key }.map { "Webcam · \($0.device ?? "Default camera")" } ?? "Webcam"
         case _ where key.hasPrefix("midi."):
@@ -648,11 +692,12 @@ final class Engine {
     // MARK: Building
 
     func build(_ file: SceneFile, reuse: RenderScene?) -> RenderScene? {
-        // Generator, from the scene's copy of its tool and preset values.
-        var generator: GeneratorRuntime?
+        // Generators, from the scene's copy of their tool and preset values.
+        var generators: [GeneratorRuntime] = []
         errors["generator"] = nil
-        if let slot = file.generator {
-            // If the generator shader fails to compile, the previous scene stays on screen.
+        for slot in file.allGenerators {
+            let slotKey = slot.id == nil ? "generator" : "generator.\(slot.id!)"
+            let slotId = slot.id ?? "generator"
             guard case let .generator(shader, meshPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
                 return nil
             }
@@ -660,17 +705,18 @@ final class Engine {
             if let s = slot.shape, MeshShape(rawValue: s) == nil { errors["generator"] = "unknown shape \(s), using icosphere" }
             let detail = slot.detail ?? 2
             let (buffer, count): (MTLBuffer, Int)
-            if let old = reuse?.generator, old.shape == shape, old.detail == detail {
+            if let old = reuse?.generators.first(where: { $0.key == slotKey }), old.shape == shape, old.detail == detail {
                 (buffer, count) = (old.vertexBuffer, old.vertexCount)
             } else {
                 (buffer, count) = renderer.makeMesh(shape, detail: detail)
             }
-            // Only keep knob objects for the same tool and preset, so a new preset starts from its own values.
-            let same = reuse?.generator?.type == slot.type && reuse?.generatorPreset == slot.preset
-            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? reuse?.generator?.bank : nil)
-            generator = GeneratorRuntime(type: slot.type, shape: shape, detail: detail, bank: bank,
-                                         meshPipeline: meshPipe, backgroundPipeline: bgPipe,
-                                         vertexBuffer: buffer, vertexCount: count, inputs: shader.inputs)
+            let same = reuse?.generators.first(where: { $0.key == slotKey })?.type == slot.type && reuse?.generators.first(where: { $0.key == slotKey })?.preset == slot.preset
+            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? reuse?.generators.first(where: { $0.key == slotKey })?.bank : nil)
+            let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
+            generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
+                                               shape: shape, detail: detail, bank: bank,
+                                               meshPipeline: meshPipe, backgroundPipeline: bgPipe,
+                                               vertexBuffer: buffer, vertexCount: count, inputs: shader.inputs))
         }
 
         // Camera. Only the orbit rig exists; other types fall back to it.
@@ -772,7 +818,8 @@ final class Engine {
         // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
         // until it is, so removing and re-adding a device keeps its mappings.
         var banks: [String: ParamBank] = ["camera": camera, "palette": paletteBank]
-        if let generator { banks["generator"] = generator.bank }
+        for gen in generators { banks[gen.key] = gen.bank }
+        if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
         for fx in effects { banks["post.\(fx.id)"] = fx.bank }
         for m in modulators { banks["mod.\(m.id)"] = m.bank }
         for case .webcam(let w) in inputs { banks[w.key] = w.bank }
@@ -788,6 +835,7 @@ final class Engine {
         for input in inputs {
             switch input {
             case .audio: streamOutputs += [.spectrum(), .onsets()]
+            case .clock: streamOutputs.append(.clockSync())
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
             default: break
             }
@@ -796,7 +844,15 @@ final class Engine {
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
         if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .onsets) }
-        for v in generator?.inputs ?? [] { streamInputs["generator.\(v.name)"] = ("\(generatorLabel ?? "Generator") · \(v.label)", v.kind) }
+        for mod in modulators { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
+        for gen in generators {
+            for v in gen.inputs {
+                streamInputs["\(gen.key).\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)
+                if gen.key != "generator" && gen === generators.first {
+                    streamInputs["generator.\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)
+                }
+            }
+        }
         for fx in effects { for v in fx.inputs { streamInputs["post.\(fx.id).\(v.name)"] = ("\(fx.id) · \(v.label)", v.kind) } }
         var streamBindings: [String: StreamOutput] = [:]
 
@@ -834,6 +890,7 @@ final class Engine {
                 case .spectrum: fallbackLabel = "Audio In · Spectrum"
                 case .palette: fallbackLabel = "Palette · Colours"
                 case .onsets: fallbackLabel = "Audio In · Onsets"
+                case .clock: fallbackLabel = "Clock · Sync"
                 default: fallbackLabel = spec.source.hasSuffix(".depth") ? "Webcam · Depth" : "Webcam · Video"
                 }
                 mappings.append(MappingRuntime(
@@ -878,8 +935,12 @@ final class Engine {
         let boundVideo = Set(streamBindings.values.map(\.key))
         for case .webcam(let w) in inputs { w.depthMapped = boundVideo.contains(w.depthVideo.key) }
 
-        return RenderScene(name: file.name, generatorPreset: file.generator?.preset, generatorLabel: generatorLabel,
-                           generator: generator, inputs: inputs, modulators: modulators,
+        // LFOs are synced to clock only when their sync socket is mapped from Clock.
+        for mod in modulators {
+            mod.isSynced = streamBindings["mod.\(mod.id).sync"] != nil
+        }
+
+        return RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
                            streamOutputs: streamOutputs, streamBindings: streamBindings,
                            camera: camera, cameraMotion: cameraMotion, cameraPreset: file.camera.preset, cameraLabel: cameraLabel,
                            effects: effects, palettePreset: file.palette.preset,
@@ -929,9 +990,13 @@ final class Engine {
 
     /// Copies live knob values, effect on/off state and palette edits back into the file.
     private func syncValues(from scene: RenderScene, into file: inout SceneFile) {
-        if let gen = scene.generator, file.generator != nil {
-            file.generator?.params = gen.bank.baseValues
+        var gens = file.allGenerators
+        for (i, gen) in scene.generators.enumerated() {
+            if i < gens.count {
+                gens[i].params = gen.bank.baseValues
+            }
         }
+        file.allGenerators = gens
         file.camera.params = scene.camera.baseValues
         for i in file.modulators.indices {
             guard let m = scene.modulators.first(where: { $0.id == file.modulators[i].id }) else { continue }

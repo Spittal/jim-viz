@@ -306,7 +306,7 @@ enum SelfCheck {
             return "clock not restored after Audio In"
         }
 
-        // LFOs: unique ids, synced output, mappable knobs.
+        // LFOs: unique ids, starts free, syncs only with Clock mapping, bipolar output, mappable knobs.
         engine.apply(.modulation, "lfo", preset: "bar-saw")
         guard let lfo2 = engine.current?.modulators.first(where: { $0.id == "lfo2" }), lfo2.id == "lfo2", lfo2.presetLabel == "Bar Saw" else {
             return "LFO preset not added as lfo2"
@@ -315,6 +315,7 @@ enum SelfCheck {
               engine.current?.effects.contains(where: { $0.id == "lfo2" }) == false else {
             return "LFO not added to the Modulation section"
         }
+        guard lfo2.isSynced == false else { return "LFO starts synced without a mapping" }
         engine.moveModulator(id: "lfo2", by: -1)
         guard engine.current?.modulators.map(\.id) == ["lfo2", "lfo"] else { return "LFO not moved" }
         // Adding a device selects it; clicks while mapping don't move the selection.
@@ -325,14 +326,34 @@ enum SelfCheck {
         engine.mapSource = nil
         engine.addMapping(source: "mod.lfo2.out", target: "generator.spin")
         engine.addMapping(source: "mod.lfo.out", target: "mod.lfo2.depth")
-        guard let s2 = engine.current, s2.mappings.filter({ $0.source.hasPrefix("mod.") }).allSatisfy(\.isActive) else {
+        // Sync via mapping only: typed stream mapping.
+        let mapCount = engine.current?.mappings.count ?? 0
+        engine.addMapping(source: "audio.kick", target: "mod.lfo2.sync")
+        guard engine.current?.mappings.count == mapCount else { return "value mapped into clock sync input" }
+        engine.addMapping(source: StreamOutput.clockSyncKey, target: "mod.lfo2.sync")
+        guard let s2 = engine.current, s2.modulators.first(where: { $0.id == "lfo2" })?.isSynced == true else {
+            return "LFO not synced after clock mapping"
+        }
+        guard s2.mappings.filter({ $0.source.hasPrefix("mod.") }).allSatisfy(\.isActive) else {
             return "LFO mappings inactive"
         }
-        f.beat = 2  // halfway through a one-bar saw
+        let depth = s2.modulators.first { $0.id == "lfo2" }!.bank["depth"]!.live
+        // Synced 1-bar saw up: at beat 3 (3/4 cycle), bipolar output is +0.5 * depth.
+        f.beat = 3
         s2.modulate(f)
         s2.modulate(f)
         guard let out = s2.outputs.first(where: { $0.key == "mod.lfo2.out" }),
-              abs(out.value - 0.5 * (s2.modulators.first { $0.id == "lfo2" }!.bank["depth"]!.live)) < 0.02 else { return "LFO output wrong" }
+              abs(out.value - 0.5 * depth) < 0.02 else { return "LFO positive output wrong" }
+        // At beat 1 (1/4 cycle), bipolar output is -0.5 * depth (negative swing).
+        f.beat = 1
+        s2.modulate(f)
+        s2.modulate(f)
+        guard abs(out.value - (-0.5 * depth)) < 0.02 else { return "LFO negative bipolar output wrong" }
+        // Removing clock mapping reverts LFO to free running.
+        engine.removeMappings(target: "mod.lfo2.sync")
+        guard engine.current?.modulators.first(where: { $0.id == "lfo2" })?.isSynced == false else {
+            return "LFO still synced after sync mapping removed"
+        }
         engine.removeModulator(id: "lfo2")
         guard engine.current?.mappings.first(where: { $0.source == "mod.lfo2.out" })?.isActive == false else {
             return "mapping from removed LFO still active"
@@ -381,7 +402,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.onsets", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.onsets", "clock.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -421,7 +442,7 @@ enum SelfCheck {
         engine.removeMappings(target: "generator.pal")
         engine.removeMappings(target: "generator.spec")
         engine.apply(.generator, "lowpoly")
-        guard engine.current?.streamBindings.isEmpty == true else { return "new generator connected itself" }
+        guard engine.current?.streamBindings.filter({ $0.key.hasPrefix("generator.") }).isEmpty == true else { return "new generator connected itself" }
         return nil
     }
 
@@ -555,6 +576,16 @@ enum SelfCheck {
         engine.apply(.generator, "lowpoly", preset: "torus-swarm")
         guard engine.current?.generatorPreset == "torus-swarm", engine.current?.generator?.shape == .torus,
               engine.current?.generator?.bank["instances"]?.base == 36 else { return "generator preset not loaded" }
+
+        // Multiple generators: adding a second generator, moving it, and removing it.
+        engine.selectDevice("camera")
+        engine.apply(.generator, "lowpoly", preset: "depth-field")
+        guard engine.current?.generators.count == 2 else { return "second generator not added" }
+        guard let secondGen = engine.current?.generators[1], secondGen.preset == "depth-field" else { return "second generator preset mismatch" }
+        engine.moveGenerator(key: secondGen.key, by: -1)
+        guard engine.current?.generators.first?.key == secondGen.key else { return "generator not moved left" }
+        engine.removeGenerator(key: secondGen.key)
+        guard engine.current?.generators.count == 1 else { return "second generator not removed" }
         engine.apply(.effect, "glow", preset: "bloom", at: 0)
         guard let added = engine.current?.effects.first, added.effect == "glow", added.id != "glow",
               added.bank["amount"]?.base == 1.4, added.presetLabel == "Bloom",
@@ -590,22 +621,21 @@ enum SelfCheck {
         guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("webcam.") }) == false else {
             return "new webcam mapped itself"
         }
-        engine.addMapping(source: "webcam.webcam.video", target: "generator.bgVideo")
+        engine.addMapping(source: "webcam.webcam.video", target: "generator.texVideo")
         guard let added = engine.current, let first = added.webcams.first, first.key == "webcam.webcam",
-              added.streamBindings["generator.bgVideo"] === first.video, engine.selectedDevice == "webcam.webcam",
+              added.streamBindings["generator.texVideo"] === first.video, engine.selectedDevice == "webcam.webcam",
               added.mappings.first(where: { $0.source == "webcam.webcam.video" })?.kind == .video else {
-            return "webcam video not mapped into the generator's Background"
+            return "webcam video not mapped into the generator's Texture"
         }
         // Typed IO: video only into video inputs, values only into knobs.
         let count = added.mappings.count
         engine.addMapping(source: "webcam.webcam.video", target: "generator.spin")
         engine.addMapping(source: "audio.kick", target: "generator.texVideo")
         guard engine.current?.mappings.count == count else { return "mapped across kinds (video ↔ value)" }
-        engine.addMapping(source: "webcam.webcam.video", target: "generator.texVideo")
         guard let scene = engine.current, let cam = scene.webcams.first,
               scene.streamBindings["generator.texVideo"] === cam.video,
-              scene.streamInputs.map(\.label) == ["Audio", "Palette", "Spectrum", "Background", "Texture", "Depth"] else { return "video not mapped into Texture" }
-        guard cam.pipeline != nil, cam.bank["zoom"] != nil, cam.bank["mirror"]?.def.labels == ["Off", "Flip", "Fold", "Quad"] else {
+              scene.streamInputs.map(\.label) == ["Audio", "Sync", "Palette", "Spectrum", "Texture", "Depth"] else { return "stream inputs missing Texture or Depth" }
+        guard cam.pipeline != nil, cam.bank["zoom"] != nil, cam.bank["bg"] != nil, cam.bank["mirror"]?.def.labels == ["Off", "Flip", "Fold", "Quad"] else {
             return "webcam shader not compiled or its knobs missing: \(engine.errors)"
         }
         guard scene.outputs.contains(where: { $0.key == "webcam.webcam.motion" }) else { return "webcam outputs missing" }
@@ -618,8 +648,8 @@ enum SelfCheck {
         red.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0, withBytes: px.map(UInt8.init), bytesPerRow: 64 * 4)
         cam.feed.inject(red)
 
-        guard let gen = scene.generator, let bg = gen.bank["videoBg"], let tex = gen.bank["videoTex"] else {
-            return "generator has no video knobs"
+        guard let gen = scene.generator, let bg = cam.bank["bg"], let tex = gen.bank["videoTex"] else {
+            return "webcam or generator has no video knobs"
         }
         bg.setBase(0); tex.setBase(0)
         _ = engine.renderOffscreen(scene, frames: 3, snapshot: nil)
@@ -661,7 +691,7 @@ enum SelfCheck {
         }
         engine.removeInput("webcam.webcam")
         guard engine.current?.streamBindings.values.contains(where: { $0.kind == .video }) == false,
-              engine.current?.mappings.first(where: { $0.target == "generator.bgVideo" })?.problem == "Needs its Webcam in the chain",
+              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Webcam in the chain",
               engine.current?.mappings.first(where: { $0.source == "webcam.webcam.motion" })?.problem == "Needs its Webcam in the chain" else {
             return "removing the webcam left its video or mapping active"
         }

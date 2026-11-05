@@ -11,6 +11,10 @@ struct ParamDef: Hashable {
     let isInt: Bool
     /// Names for each step of an int param (`shape`: Sine, Triangle…), shown instead of the number.
     var labels: [String] = []
+    /// Category / group name for organizing knobs with visual separation.
+    var group: String? = nil
+    /// Stream input key required for this param to be relevant (e.g. `texVideo`, `spec`).
+    var requiresInput: String? = nil
 
     var span: Float { max - min }
 
@@ -22,8 +26,16 @@ struct ParamDef: Hashable {
     /// Parses `// @param name default min max [int [Label,Label,…]]` lines from shader source.
     static func parse(shaderSource: String) -> [ParamDef] {
         var defs: [ParamDef] = []
+        var currentGroup: String? = nil
+        var currentRequiresInput: String? = nil
         for raw in shaderSource.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("// @group ") {
+                let parts = line.dropFirst("// @group ".count).split(separator: " ").map(String.init)
+                currentGroup = parts.first
+                currentRequiresInput = parts.count > 1 ? parts[1] : nil
+                continue
+            }
             guard line.hasPrefix("// @param ") else { continue }
             let parts = line.dropFirst("// @param ".count).split(separator: " ").map(String.init)
             guard parts.count >= 4,
@@ -35,7 +47,8 @@ struct ParamDef: Hashable {
             // Optional step names after `int`: `// @param mode 0 0 2 int Screen,Faces,Sphere`.
             let labels = isInt && parts.count > 5 ? parts[5].split(separator: ",").map { $0.replacingOccurrences(of: "_", with: " ") } : []
             defs.append(ParamDef(name: name, defaultValue: d, min: lo, max: hi, isInt: isInt,
-                                 labels: labels.count == Int(hi - lo) + 1 ? labels : []))
+                                 labels: labels.count == Int(hi - lo) + 1 ? labels : [],
+                                 group: currentGroup, requiresInput: currentRequiresInput))
         }
         return defs
     }

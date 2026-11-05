@@ -1,49 +1,106 @@
 import SwiftUI
 
 /// An LFO, in the Modulation section. Its output (in the inspector) drives other knobs, and its
-/// own knobs can be mapped, so LFOs can modulate each other.
+/// own knobs can be mapped, so LFOs can modulate each other. It syncs to clock only when
+/// mapped from Clock (Clock · Sync → mod.<id>.sync); otherwise it runs free.
 struct LFODevice: View {
     @Environment(Engine.self) private var engine
     @Bindable var mod: ModulatorRuntime
 
     var body: some View {
-        DevicePanel(title: mod.id, subtitle: mod.presetLabel ?? Tools.label(.modulation, mod.type), isOn: $mod.enabled,
+        let isSyncWaiting = engine.mapSource.map { engine.kind(of: $0) == .clock } ?? false
+        let subtitle = mod.presetLabel.map { "\($0) · \(mod.isSynced ? "Sync" : "Free")" } ?? (mod.isSynced ? "Sync" : "Free")
+        DevicePanel(title: mod.id, subtitle: subtitle, isOn: $mod.enabled,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
-            HStack(alignment: .top, spacing: 6) {
-                WaveScope(mod: mod).frame(width: 96, height: 44)
-                KnobGrid(params: mod.bank.params, prefix: "mod.\(mod.id)")
+            VStack(alignment: .leading, spacing: 6) {
+                if let scene = engine.current, let socket = scene.streamInputs.first(where: { $0.key == "mod.\(mod.id).sync" }) {
+                    if isSyncWaiting || mod.isSynced {
+                        HStack(spacing: 4) {
+                            StreamSocket(scene: scene, input: socket)
+                            Spacer()
+                        }
+                    }
+                }
+                HStack(alignment: .top, spacing: 6) {
+                    WaveScope(mod: mod).frame(width: 96, height: 58)
+                    let visibleParams = mod.bank.params.filter { p in
+                        mod.isSynced ? p.def.name != "hz" : p.def.name != "rate"
+                    }
+                    KnobGrid(params: visibleParams, prefix: "mod.\(mod.id)")
+                }
             }
         }
     }
 }
 
-/// The LFO's current shape over two cycles, with a line at its live output.
+/// The LFO's current shape and live output, animated in real time.
 private struct WaveScope: View {
     let mod: ModulatorRuntime
 
     var body: some View {
         let shape = Int((mod.bank["shape"]?.display ?? 0).rounded())
-        let depth = mod.bank["depth"]?.display ?? 1
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+        let depth = CGFloat(mod.bank["depth"]?.display ?? 1)
+        TimelineView(.animation(minimumInterval: 1.0 / 60)) { _ in
             Canvas { ctx, size in
+                let w = size.width
+                let h = size.height
+                let midY = h / 2
+
+                // Background
                 ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.1)))
-                var path = Path()
-                let n = 96
-                for i in 0...n {
-                    let x = Double(i) / Double(n) * 2
-                    // Fixed seed so random shapes don't flicker.
-                    let y = CGFloat(Wave.lfo(shape: shape, x + 0.37) * depth)
-                    let p = CGPoint(x: CGFloat(i) / CGFloat(n) * size.width, y: (1 - y) * (size.height - 4) + 2)
-                    if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
-                }
-                ctx.stroke(path, with: .color(Theme.modulation.opacity(0.8)), lineWidth: 1.2)
+
+                // Center zero line for bipolar display
+                var centerLine = Path()
+                centerLine.move(to: CGPoint(x: 0, y: midY))
+                centerLine.addLine(to: CGPoint(x: w, y: midY))
+                ctx.stroke(centerLine, with: .color(Color.white.opacity(0.15)),
+                           style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+
                 let v = CGFloat(mod.output.value)
-                let y = (1 - v) * (size.height - 4) + 2
-                ctx.fill(Path(CGRect(x: 0, y: y - 0.5, width: size.width, height: 1)), with: .color(Theme.accent.opacity(0.7)))
-                ctx.fill(Path(ellipseIn: CGRect(x: size.width - 6, y: y - 3, width: 6, height: 6)), with: .color(Theme.accent))
+                let phase = Double(mod.currentPhase)
+
+                // Animated waveform: draws 1.5 cycles, scrolling smoothly with the LFO's phase
+                let n = 96
+                var wavePath = Path()
+                for i in 0...n {
+                    let progress = Double(i) / Double(n) * 1.5
+                    let cycle = progress + phase
+                    let val = CGFloat(Wave.lfo(shape: shape, cycle)) * depth
+                    let y = midY - val * (midY - 4)
+                    let p = CGPoint(x: CGFloat(i) / CGFloat(n) * w, y: y)
+                    if i == 0 { wavePath.move(to: p) } else { wavePath.addLine(to: p) }
+                }
+                ctx.stroke(wavePath, with: .color(Theme.modulation.opacity(0.75)), lineWidth: 1.2)
+
+                // Current output level indicator: horizontal dashed line
+                let liveY = midY - v * (midY - 4)
+                var levelLine = Path()
+                levelLine.move(to: CGPoint(x: 0, y: liveY))
+                levelLine.addLine(to: CGPoint(x: w, y: liveY))
+                ctx.stroke(levelLine, with: .color(Theme.accent.opacity(0.3)),
+                           style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+
+                // Glowing cursor at current value on the right edge
+                let dotX = w - 6
+                let halo = CGRect(x: dotX - 4, y: liveY - 4, width: 8, height: 8)
+                let dot = CGRect(x: dotX - 2.5, y: liveY - 2.5, width: 5, height: 5)
+                ctx.fill(Path(ellipseIn: halo), with: .color(Theme.accent.opacity(0.35)))
+                ctx.fill(Path(ellipseIn: dot), with: .color(Theme.accent))
+            }
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: 3) {
+                    Text(mod.isSynced ? "SYNC" : "FREE")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(mod.isSynced ? Theme.accent : Theme.textDim)
+                    Text(String(format: "%+.2f", mod.output.value))
+                        .font(.system(size: 8, weight: .medium).monospacedDigit())
+                        .foregroundStyle(Theme.textDim)
+                }
+                .padding(3)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 2))
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.08), lineWidth: 1))
         .opacity(mod.enabled ? 1 : 0.4)
     }
 }
@@ -82,23 +139,25 @@ struct OutputRow: View {
     }
 }
 
-/// A horizontal bar showing a live 0...1 value, redrawn at 30 fps while visible.
+/// A horizontal bar showing a live value (0...1 for unipolar, -1...1 for bipolar), redrawn at 30 fps while visible.
 /// Values are read from render-thread fields that SwiftUI doesn't observe, so the value is
 /// read in the timeline's closure each tick and passed down: a read inside a GeometryReader
 /// would only happen on layout, leaving the bar frozen.
 struct LiveMeter: View {
     var color: Color = Theme.modulation
+    var isBipolar: Bool = false
     let value: () -> Float
 
-    init(color: Color = Theme.modulation, value: @escaping () -> Float) {
-        self.color = color; self.value = value
+    init(color: Color = Theme.modulation, isBipolar: Bool = false, value: @escaping () -> Float) {
+        self.color = color; self.isBipolar = isBipolar; self.value = value
     }
 
-    init(output: OutputSignal) { self.init { output.value } }
+    init(output: OutputSignal) { self.init(isBipolar: output.isBipolar) { output.value } }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
-            MeterBar(value: CGFloat(min(max(value(), 0), 1)), color: color)
+            let v = CGFloat(isBipolar ? min(max(value(), -1), 1) : min(max(value(), 0), 1))
+            MeterBar(value: v, color: color, isBipolar: isBipolar)
         }
     }
 }
@@ -106,12 +165,21 @@ struct LiveMeter: View {
 private struct MeterBar: View {
     let value: CGFloat
     let color: Color
+    var isBipolar: Bool = false
 
     var body: some View {
         Canvas { ctx, size in
             ctx.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 1), with: .color(Color(white: 0.1)))
-            ctx.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: size.width * value, height: size.height), cornerRadius: 1),
-                     with: .color(color))
+            if isBipolar {
+                let mid = size.width / 2
+                let w = value * mid
+                ctx.fill(Path(CGRect(x: min(mid, mid + w), y: 0, width: max(1, abs(w)), height: size.height)),
+                         with: .color(color))
+                ctx.fill(Path(CGRect(x: mid - 0.5, y: 0, width: 1, height: size.height)), with: .color(Color.white.opacity(0.35)))
+            } else {
+                ctx.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: size.width * value, height: size.height), cornerRadius: 1),
+                         with: .color(color))
+            }
         }
     }
 }

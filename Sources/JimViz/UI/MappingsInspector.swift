@@ -179,7 +179,7 @@ private struct DeviceInspector: View {
         if !sockets.isEmpty {
             InspectorSection("Inputs", key: "video-in") {
                 ForEach(sockets) { StreamSocket(scene: scene, input: $0) }
-                empty("Each takes one output of its kind: video from a Webcam, Spectrum or Onsets from Audio In, Colours from the Palette. Unmapped, video and spectrum are off, the palette is grey and the Clock doesn't follow the audio.")
+                empty("Each takes one output of its kind: video from a Webcam, Spectrum or Onsets from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs run free, and the Clock doesn't follow the audio.")
             }
         }
         InspectorSection("Mapped Into \(engine.deviceName(key))", key: "incoming") {

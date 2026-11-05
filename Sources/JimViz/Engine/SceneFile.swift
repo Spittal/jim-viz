@@ -32,8 +32,26 @@ struct SceneFile: Codable {
     var camera: CameraSlot
     var palette: PaletteSlot
     var generator: GeneratorSlot?
+    var generators: [GeneratorSlot]?
     var effects: [EffectSpec]
     var mappings: [MappingSpec]?
+
+    var allGenerators: [GeneratorSlot] {
+        get {
+            if let list = generators, !list.isEmpty { return list }
+            if let single = generator { return [single] }
+            return []
+        }
+        set {
+            if newValue.count <= 1 {
+                generator = newValue.first
+                generators = nil
+            } else {
+                generator = newValue.first
+                generators = newValue
+            }
+        }
+    }
 
     static func load(_ url: URL) throws -> SceneFile {
         try JSONDecoder().decode(SceneFile.self, from: Data(contentsOf: url))
@@ -53,6 +71,7 @@ extension SceneFile {
         camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera) ?? CameraSlot(type: "orbit")
         palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette) ?? PaletteSlot(colors: [])
         generator = try c.decodeIfPresent(GeneratorSlot.self, forKey: .generator)
+        generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators)
         effects = try c.decodeIfPresent([EffectSpec].self, forKey: .effects) ?? []
         mappings = try c.decodeIfPresent([MappingSpec].self, forKey: .mappings)
     }
@@ -103,7 +122,9 @@ struct PaletteSlot: Codable {
     var params: [String: Float]?
 }
 
-struct GeneratorSlot: Codable {
+struct GeneratorSlot: Codable, Identifiable {
+    /// Unique id within the scene, used in mapping targets when multiple are present.
+    var id: String?
     /// Generator tool: a shader in Shaders/generators, without extension.
     var type: String
     /// Preset it was loaded from, for display.

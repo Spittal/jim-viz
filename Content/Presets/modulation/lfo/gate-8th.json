@@ -1,4 +1,4 @@
 {
   "name": "Gate 1/8",
-  "params": { "shape": 4, "sync": 1, "rate": 1 }
+  "params": { "shape": 4, "rate": 6 }
 }

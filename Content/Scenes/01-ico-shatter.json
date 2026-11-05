@@ -92,6 +92,10 @@
       "target": "generator.twist"
     },
     {
+      "source": "clock.sync",
+      "target": "mod.lfo.sync"
+    },
+    {
       "amount": 0.25,
       "source": "clock.bar",
       "target": "generator.colorShift"
@@ -109,9 +113,8 @@
     {
       "id": "lfo",
       "params": {
-        "rate": 6,
-        "shape": 0,
-        "sync": 1
+        "rate": 18,
+        "shape": 0
       },
       "type": "lfo"
     }

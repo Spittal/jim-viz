@@ -108,15 +108,18 @@
     {
       "source": "audio.spectrum",
       "target": "generator.spec"
+    },
+    {
+      "source": "clock.sync",
+      "target": "mod.lfo.sync"
     }
   ],
   "modulators": [
     {
       "id": "lfo",
       "params": {
-        "rate": 7,
-        "shape": 2,
-        "sync": 1
+        "rate": 20,
+        "shape": 2
       },
       "type": "lfo"
     }

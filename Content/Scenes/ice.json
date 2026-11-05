@@ -92,7 +92,6 @@
       "stretch": 0.73977053,
       "tumble": 0.8911133,
       "twist": 0,
-      "videoBg": 0.07380371,
       "videoMap": 0,
       "videoScale": 1,
       "videoScatter": 0,
@@ -114,6 +113,7 @@
     {
       "id": "webcam",
       "params": {
+        "bg": 0.07380371,
         "contrast": 1,
         "edges": 0.14802241,
         "exposure": 0.39804688,
@@ -179,17 +179,13 @@
     },
     {
       "source": "webcam.webcam.video",
-      "target": "generator.bgVideo"
-    },
-    {
-      "source": "webcam.webcam.video",
       "target": "generator.texVideo"
     },
     {
       "amount": 0.3557055,
       "smooth": 0.70676494,
       "source": "mod.lfo.out",
-      "target": "generator.videoBg"
+      "target": "webcam.webcam.bg"
     },
     {
       "amount": 0.12855113,
@@ -209,6 +205,10 @@
     {
       "source": "audio.spectrum",
       "target": "generator.spec"
+    },
+    {
+      "source": "clock.sync",
+      "target": "mod.lfo.sync"
     }
   ],
   "modulators": [
@@ -218,9 +218,8 @@
         "depth": 1,
         "hz": 1.8746005,
         "phase": 0,
-        "rate": 4,
-        "shape": 0,
-        "sync": 1
+        "rate": 14,
+        "shape": 0
       },
       "type": "lfo"
     }

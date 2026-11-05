@@ -73,19 +73,19 @@ enum Wave {
         return Float(s - floor(s))
     }
 
-    /// `x` is in cycles; shapes follow `LFOParams.shapes`.
+    /// `x` is in cycles; shapes follow `LFOParams.shapes`. Returns -1...1 (bipolar).
     static func lfo(shape: Int, _ x: Double) -> Float {
         let ph = x - floor(x)
         switch shape {
-        case 0: return Float(0.5 - 0.5 * cos(ph * 2 * .pi))           // sine
-        case 1: return Float(ph < 0.5 ? ph * 2 : 2 - ph * 2)          // triangle
-        case 2: return Float(ph)                                       // saw up
-        case 3: return Float(1 - ph)                                   // saw down
-        case 4: return ph < 0.5 ? 1 : 0                                // square
-        case 5: return hash(floor(x))                                  // random, held per cycle
+        case 0: return Float(sin(ph * 2 * .pi))                        // sine
+        case 1: return Float(ph < 0.25 ? ph * 4 : (ph < 0.75 ? 2 - ph * 4 : ph * 4 - 4)) // triangle
+        case 2: return Float(ph * 2 - 1)                               // saw up
+        case 3: return Float(1 - ph * 2)                               // saw down
+        case 4: return ph < 0.5 ? 1 : -1                               // square
+        case 5: return hash(floor(x)) * 2 - 1                          // random, held per cycle
         default:                                                       // smooth noise
             let i = floor(x), t = Float(x - i)
-            let a = hash(i), b = hash(i + 1)
+            let a = hash(i) * 2 - 1, b = hash(i + 1) * 2 - 1
             return a + (b - a) * t * t * (3 - 2 * t)
         }
     }
@@ -93,7 +93,8 @@ enum Wave {
 
 // MARK: - Outputs
 
-/// A signal a tool produces, 0...1, that mappings can route to any knob in the scene.
+/// A signal a tool produces (0...1 for unipolar, -1...1 for bipolar), that mappings
+/// can route to any knob in the scene.
 /// Keys: `audio.bass`, `clock.pulse`, `mod.lfo.out`, `camera.angle`.
 /// `compute` runs on the render thread once per frame; `value` is read by the UI meters.
 final class OutputSignal: Identifiable {
@@ -101,16 +102,20 @@ final class OutputSignal: Identifiable {
     let name: String
     /// The device it belongs to, for grouping ("Audio In", "Clock", "lfo2").
     let device: String
+    let isBipolar: Bool
     var id: String { key }
     private let compute: (SignalFrame) -> Float
     /// Latest value. Written on the render thread, read by the UI.
     var value: Float = 0
 
-    init(_ key: String, _ name: String, device: String, compute: @escaping (SignalFrame) -> Float) {
-        self.key = key; self.name = name; self.device = device; self.compute = compute
+    init(_ key: String, _ name: String, device: String, isBipolar: Bool = false, compute: @escaping (SignalFrame) -> Float) {
+        self.key = key; self.name = name; self.device = device; self.isBipolar = isBipolar; self.compute = compute
     }
 
-    func update(_ f: SignalFrame) { value = min(max(compute(f), 0), 1) }
+    func update(_ f: SignalFrame) {
+        let raw = compute(f)
+        value = isBipolar ? min(max(raw, -1), 1) : min(max(raw, 0), 1)
+    }
 
     /// The device it belongs to, as a chain key: `audio`, `clock`, `mod.lfo`, `camera`.
     var deviceKey: String { devicePath(key) }
@@ -351,7 +356,10 @@ final class MappingRuntime: Identifiable {
     func modulate(_ dt: Float) {
         guard rEnabled, let output, let param else { contribution = 0; return }
         var v = output.value
-        if rCurve != 1 { v = pow(v, rCurve) }
+        if rCurve != 1 {
+            let s: Float = v < 0 ? -1 : 1
+            v = s * pow(abs(v), rCurve)
+        }
         if rSmooth > 0 {
             state += (v - state) * (1 - exp(-dt / rSmooth))
             v = state

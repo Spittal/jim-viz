@@ -107,24 +107,30 @@
     {
       "source": "palette.colors",
       "target": "post.palettemap.pal"
+    },
+    {
+      "source": "clock.sync",
+      "target": "mod.lfo.sync"
+    },
+    {
+      "source": "clock.sync",
+      "target": "mod.lfo2.sync"
     }
   ],
   "modulators": [
     {
       "id": "lfo",
       "params": {
-        "rate": 5,
-        "shape": 4,
-        "sync": 1
+        "rate": 16,
+        "shape": 4
       },
       "type": "lfo"
     },
     {
       "id": "lfo2",
       "params": {
-        "rate": 7,
-        "shape": 1,
-        "sync": 1
+        "rate": 20,
+        "shape": 1
       },
       "type": "lfo"
     }

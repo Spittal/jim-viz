@@ -78,7 +78,6 @@
       "stretch" : 1,
       "tumble" : 0,
       "twist" : -0.23876953,
-      "videoBg" : 1,
       "videoMap" : 0,
       "videoScale" : 0.6288452,
       "videoScatter" : 0,
@@ -100,6 +99,7 @@
     {
       "id" : "webcam",
       "params" : {
+        "bg" : 1,
         "contrast" : 0.87128925,
         "depthContrast" : 1.3,
         "depthFloor" : 0.2412622,
@@ -125,10 +125,6 @@
       "amount" : 0.048532248,
       "source" : "audio.bass",
       "target" : "generator.scale"
-    },
-    {
-      "source" : "webcam.webcam.video",
-      "target" : "generator.bgVideo"
     },
     {
       "source" : "webcam.webcam.video",

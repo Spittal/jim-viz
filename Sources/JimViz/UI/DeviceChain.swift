@@ -53,18 +53,24 @@ struct DeviceChain: View {
                             KnobGrid(params: scene.palette.bank.params, prefix: "palette")
                         }
                     }
-                    if let gen = scene.generator {
-                        DevicePanel(title: "Generator", subtitle: "\(scene.generatorLabel ?? gen.type) · \(gen.shape.rawValue) \(gen.detail)",
-                                    accent: slotColor(.generator), select: "generator", onClose: { engine.removeGenerator() }) {
+                    ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
+                        DevicePanel(title: "Generator", subtitle: "\(gen.label ?? gen.type) · \(gen.shape.rawValue) \(gen.detail)",
+                                    accent: slotColor(.generator), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 // Stream sockets only show while a stream of their kind is waiting to be mapped.
                                 let waiting = engine.mapSource.map { engine.kind(of: $0) }
-                                let sockets = scene.streamInputs.filter { $0.deviceKey == "generator" && $0.kind == waiting }
+                                let sockets = scene.streamInputs.filter { $0.deviceKey == gen.key && $0.kind == waiting }
                                 if !sockets.isEmpty {
                                     HStack(spacing: 4) { ForEach(sockets) { StreamSocket(scene: scene, input: $0) } }
                                 }
-                                KnobGrid(params: gen.bank.params, prefix: "generator")
+                                KnobGrid(params: gen.bank.params, prefix: gen.key)
                             }
+                        }
+                        .contextMenu {
+                            Button("Move Left") { engine.moveGenerator(key: gen.key, by: -1) }.disabled(index == 0)
+                            Button("Move Right") { engine.moveGenerator(key: gen.key, by: 1) }.disabled(index == scene.generators.count - 1)
+                            Divider()
+                            Button("Remove", role: .destructive) { engine.removeGenerator(key: gen.key) }
                         }
                     }
 
@@ -148,25 +154,81 @@ private struct EffectDevice: View {
     }
 }
 
-/// Knobs laid out in columns of three, like an Ableton device.
+/// Knobs laid out in columns of three, like an Ableton device, optionally grouped into
+/// categories with visual separators and conditional on active stream mappings.
 struct KnobGrid: View {
+    @Environment(Engine.self) private var engine
     let params: [Param]
     var prefix: String = ""
     private let rows = 3
 
     var body: some View {
-        HStack(alignment: .top, spacing: 2) {
-            ForEach(0..<columnCount, id: \.self) { col in
-                VStack(spacing: 4) {
-                    ForEach(params[col * rows ..< min(params.count, (col + 1) * rows)]) { p in
-                        Knob(param: p, targetPath: prefix.isEmpty ? nil : "\(prefix).\(p.def.name)")
+        let visibleParams = filterVisible(params)
+        let groups = groupParams(visibleParams)
+
+        HStack(alignment: .top, spacing: 6) {
+            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: 1)
+                        .padding(.vertical, 4)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    if let title = group.title {
+                        Text(title.uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 2)
+                    }
+                    HStack(alignment: .top, spacing: 2) {
+                        let count = (group.params.count + rows - 1) / rows
+                        ForEach(0..<count, id: \.self) { col in
+                            VStack(spacing: 4) {
+                                ForEach(group.params[col * rows ..< min(group.params.count, (col + 1) * rows)]) { p in
+                                    Knob(param: p, targetPath: prefix.isEmpty ? nil : "\(prefix).\(p.def.name)")
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    private var columnCount: Int { (params.count + rows - 1) / rows }
+    private func filterVisible(_ list: [Param]) -> [Param] {
+        guard let scene = engine.current, !prefix.isEmpty else { return list }
+        return list.filter { p in
+            guard let req = p.def.requiresInput else { return true }
+            return scene.streamBindings["\(prefix).\(req)"] != nil
+        }
+    }
+
+    private struct ParamGroup {
+        let title: String?
+        let params: [Param]
+    }
+
+    private func groupParams(_ list: [Param]) -> [ParamGroup] {
+        var groups: [ParamGroup] = []
+        var currentTitle: String? = nil
+        var currentParams: [Param] = []
+
+        for p in list {
+            if p.def.group != currentTitle {
+                if !currentParams.isEmpty {
+                    groups.append(ParamGroup(title: currentTitle, params: currentParams))
+                    currentParams = []
+                }
+                currentTitle = p.def.group
+            }
+            currentParams.append(p)
+        }
+        if !currentParams.isEmpty {
+            groups.append(ParamGroup(title: currentTitle, params: currentParams))
+        }
+        return groups
+    }
 }
 
 struct DevicePanel<Content: View>: View {

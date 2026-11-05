@@ -1,7 +1,7 @@
 {
   "camera" : {
     "params" : {
-      "distance" : 6.806201,
+      "distance" : 5.09447,
       "fov" : 121.68115,
       "height" : 1.2,
       "lookY" : 2.3330078,
@@ -9,7 +9,8 @@
       "roll" : 8.630859,
       "rollSpeed" : 0.6225586,
       "shake" : 0.09746094,
-      "sway" : 0.2
+      "sway" : 0.2,
+      "swing" : 0
     },
     "preset" : "orbit",
     "type" : "orbit"
@@ -59,41 +60,40 @@
     }
   ],
   "generator" : {
-    "detail" : 2,
+    "detail" : 3,
     "params" : {
-      "bands" : 5,
+      "bands" : 4,
       "bgGlow" : 0.5,
       "colorShift" : 0,
       "colorSpeed" : 0,
       "depth" : 2,
       "depthCut" : 0.5,
-      "explode" : 0.1,
-      "fill" : 1,
-      "fog" : 0.04,
+      "explode" : 0,
+      "fill" : 0.25,
+      "fog" : 0.08,
       "instances" : 1,
       "light" : 1.1,
-      "noiseAmount" : 0.25,
-      "noiseScale" : 1.4,
-      "noiseSpeed" : 0.25,
-      "scale" : 0.81814206,
-      "spectrum" : 0.35,
-      "spectrumMode" : 1,
-      "spikes" : 0.4286865,
-      "spin" : 2.5482423,
+      "noiseAmount" : 0.6,
+      "noiseScale" : 0.6,
+      "noiseSpeed" : 0.4,
+      "scale" : 1.6,
+      "spectrum" : 1.4,
+      "spectrumMode" : 3,
+      "spikes" : 0.3,
+      "spin" : 0,
       "spread" : 3,
-      "stretch" : 1.2339746,
-      "tumble" : 0.5013672,
+      "stretch" : 1,
+      "tumble" : 0,
       "twist" : 0,
-      "videoBg" : 1,
       "videoMap" : 0,
       "videoScale" : 1,
       "videoScatter" : 0,
       "videoTex" : 0.8,
       "videoTint" : 0,
-      "wire" : 0.6
+      "wire" : 1
     },
-    "preset" : "ico-shatter",
-    "shape" : "icosphere",
+    "preset" : "terrain-scan",
+    "shape" : "plane",
     "type" : "lowpoly"
   },
   "inputs" : [
@@ -101,33 +101,10 @@
       "type" : "audio"
     },
     {
-      "type" : "clock"
-    },
-    {
+      "device" : "Opal C1",
       "id" : "webcam",
       "params" : {
-        "contrast" : 1,
-        "depthContrast" : 1.3,
-        "depthFloor" : 0.1,
-        "depthSmooth" : 0.7,
-        "edges" : 0.4230469,
-        "exposure" : 0,
-        "mirror" : 1,
-        "panX" : -0.037402343,
-        "panY" : -0.16875,
-        "posterize" : 0.5581543,
-        "rotate" : 91.2832,
-        "saturation" : 1,
-        "warp" : 0,
-        "warpScale" : 3,
-        "warpSpeed" : 0.5,
-        "zoom" : 2.535779
-      },
-      "type" : "webcam"
-    },
-    {
-      "id" : "webcam2",
-      "params" : {
+        "bg" : 0.80600584,
         "contrast" : 1,
         "depthContrast" : 2.64729,
         "depthFloor" : 0,
@@ -150,28 +127,9 @@
   ],
   "mappings" : [
     {
-      "source" : "webcam.webcam.video",
-      "target" : "generator.texVideo"
-    },
-    {
-      "amount" : 0.085345626,
-      "smooth" : 0.19643703,
-      "source" : "audio.kick",
-      "target" : "generator.scale"
-    },
-    {
-      "amount" : 0.25,
-      "source" : "audio.intensity",
-      "target" : "generator.stretch"
-    },
-    {
       "amount" : 0.25,
       "source" : "audio.mid",
       "target" : "camera.lookY"
-    },
-    {
-      "source" : "webcam.webcam2.video",
-      "target" : "generator.bgVideo"
     },
     {
       "amount" : 0.15273261,
@@ -182,15 +140,11 @@
     {
       "amount" : 0.25,
       "source" : "audio.kick",
-      "target" : "webcam.webcam2.zoom"
+      "target" : "webcam.webcam.zoom"
     },
     {
       "source" : "palette.colors",
       "target" : "generator.pal"
-    },
-    {
-      "source" : "audio.spectrum",
-      "target" : "generator.spec"
     }
   ],
   "modulators" : [
@@ -200,9 +154,8 @@
         "depth" : 1,
         "hz" : 0.01,
         "phase" : 0,
-        "rate" : 4,
-        "shape" : 0,
-        "sync" : 0
+        "rate" : 14,
+        "shape" : 0
       },
       "type" : "lfo"
     }

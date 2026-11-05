@@ -6,7 +6,7 @@
 // @palette pal Palette
 // @spectrum spec Spectrum
 
-// Shape
+// @group Shape
 // @param scale 1.2 0.1 4
 // @param noiseAmount 0.35 0 2
 // @param noiseScale 1.4 0.1 8
@@ -15,17 +15,14 @@
 // @param twist 0 -6 6
 // @param explode 0 0 4
 // @param stretch 1 0.2 4
-// Audio: push vertices out by the Spectrum input. spectrumMode picks how a vertex maps to a frequency:
-// 0 = height (bass at the bottom), 1 = random per face, 2 = angle around the center,
-// 3 = distance from the center (rings on a plane).
-// @param spectrum 0 0 2
-// @param spectrumMode 0 0 3 int
-// Instances
+
+// @group Instances
 // @param instances 1 1 96 int
 // @param spread 3 0 20
 // @param spin 0.2 -4 4
 // @param tumble 0.3 0 4
-// Look
+
+// @group Look
 // @param wire 0 0 1
 // @param fill 1 0 1
 // @param bands 6 1 16 int
@@ -34,8 +31,16 @@
 // @param light 1.1 0 3
 // @param fog 0.04 0 0.5
 // @param bgGlow 0.5 0 2
-// Video inputs: map a video output (a Webcam) into Background to put it behind the mesh, or into
-// Texture to paint it onto the faces. videoBg and videoTex are how much of each shows.
+
+// Audio: push vertices out by the Spectrum input. spectrumMode picks how a vertex maps to a frequency:
+// 0 = height (bass at the bottom), 1 = random per face, 2 = angle around the center,
+// 3 = distance from the center (rings on a plane).
+// @group Audio spec
+// @param spectrum 0 0 2
+// @param spectrumMode 0 0 3 int
+
+// Video inputs: map a video output (a Webcam) into Texture to paint it onto the faces.
+// videoTex is how much shows.
 // videoMap picks how faces pick up the texture: Faces (every polygon shows the whole video,
 // sliced onto it), Screen (as seen from the camera, so the mesh becomes a window onto the
 // video), Shards (every face shows its own patch of the screen view), Sphere (wrapped around
@@ -44,20 +49,21 @@
 // field shape). videoScatter turns and shifts each face's copy by a random amount in Faces
 // mode, so the facets don't all match.
 // videoTint recolours the video through the palette by brightness.
-// @video bgVideo Background
 // @video texVideo Texture
-// @param videoBg 1 0 1
+// @group Video texVideo
 // @param videoTex 0.8 0 1
 // @param videoMap 0 0 5 int Faces,Screen,Shards,Sphere,Normal,Front
 // @param videoScale 1 0.25 4
 // @param videoScatter 0 0 1
 // @param videoTint 0 0 1
+
 // Depth: map a Webcam's Depth output into Depth to raise the mesh where things are near the
 // camera, along each vertex's normal. It's projected flat from the front: the field shape
 // (a 16:9 sheet) lines up with it exactly. depth is how far near things rise; depthCut hides
 // faces stretched across a depth edge, so a person stands free of the wall behind instead
 // of being joined to it by a skirt.
 // @video depthVideo Depth
+// @group Depth depthVideo
 // @param depth 2 0 6
 // @param depthCut 0.5 0 1
 
@@ -106,7 +112,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
                          constant Params& p [[buffer(2)]],
                          constant Camera& cam [[buffer(3)]],
                          texture2d<float> spec [[texture(1)]],
-                         texture2d<float> depthVid [[texture(4)]]) {
+                         texture2d<float> depthVid [[texture(3)]]) {
     MeshVertex v = verts[vid];
     float ir = hash11(float(iid) * 17.13 + 1.7);
     float t = f.time * p.noiseSpeed;
@@ -114,7 +120,7 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
     float2 fuv = frontUV(pos);
 
     // Depth: near things (white) rise toward the camera.
-    if (hasInput(f, 4) && p.depth > 0) {
+    if (hasInput(f, 3) && p.depth > 0) {
         float d = luma(depthVid.sample(linearClamp, fuv, level(0)).rgb);
         pos += v.smoothNormal.xyz * d * p.depth;
     }
@@ -170,13 +176,13 @@ vertex GenOut gen_vertex(uint vid [[vertex_id]],
 
 fragment float4 gen_fragment(GenOut in [[stage_in]],
                              texture2d<float> pal [[texture(0)]],
-                             texture2d<float> vid [[texture(3)]],
+                             texture2d<float> vid [[texture(2)]],
                              constant Frame& f [[buffer(0)]],
                              constant Params& p [[buffer(1)]],
                              constant Camera& cam [[buffer(2)]]) {
     // Depth edges: a face the depth stood up on its side spans a jump (a person's outline
     // against the wall), so drop it. Compares the face as moved by depth with how it was.
-    if (p.depthCut > 0 && hasInput(f, 4)) {
+    if (p.depthCut > 0 && hasInput(f, 3)) {
         float3 dn = cross(dfdy(in.depthPos), dfdx(in.depthPos));
         if (abs(dot(normalize(dn), in.faceN)) < p.depthCut * 0.7) discard_fragment();
     }
@@ -196,7 +202,7 @@ fragment float4 gen_fragment(GenOut in [[stage_in]],
     float t = 0.15 + 0.85 * shade + p.colorShift + f.time * p.colorSpeed + in.inst * 0.1;
     float3 col = palette(pal, t) * p.fill;
 
-    if (hasInput(f, 3) && p.videoTex > 0) {
+    if (hasInput(f, 2) && p.videoTex > 0) {
         float2 uv;
         int mode = int(p.videoMap + 0.5);
         float2 screen = in.position.xy / f.resolution;
@@ -243,7 +249,6 @@ fragment float4 gen_fragment(GenOut in [[stage_in]],
 // Drawn behind the mesh. Alpha 0 marks background so feedback can trail behind geometry.
 fragment float4 gen_background(FXOut in [[stage_in]],
                                texture2d<float> pal [[texture(0)]],
-                               texture2d<float> vid [[texture(2)]],
                                constant Frame& f [[buffer(0)]],
                                constant Params& p [[buffer(1)]]) {
     float2 c = in.uv - 0.5;
@@ -251,8 +256,5 @@ fragment float4 gen_background(FXOut in [[stage_in]],
     float g = saturate(1 - length(c) * 1.1);
     float n = fbm3(float3(c * 2.5, f.time * 0.05));
     float3 col = paletteClamp(pal, 0.04 + 0.12 * (n * 0.5 + 0.5)) * p.bgGlow * (0.15 + 0.6 * g * g);
-    if (hasInput(f, 2) && p.videoBg > 0) {
-        col = mix(col, videoColor(vid, pal, in.uv, p.videoTint), p.videoBg);
-    }
     return float4(col, 0);
 }

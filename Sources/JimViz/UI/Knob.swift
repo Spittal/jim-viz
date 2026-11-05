@@ -148,6 +148,11 @@ struct Knob: View {
             let i = Int(v.rounded()) - Int(def.min)
             return def.labels.indices.contains(i) ? def.labels[i] : String(Int(v.rounded()))
         }
+        if def.name == "hz" {
+            if v < 0.1 { return String(format: "%.3f Hz", v) }
+            if v < 10 { return String(format: "%.2f Hz", v) }
+            return String(format: "%.1f Hz", v)
+        }
         let span = def.span
         if span >= 100 { return String(format: "%.0f", v) }
         if span >= 10 { return String(format: "%.1f", v) }

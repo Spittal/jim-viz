@@ -6,25 +6,29 @@
 // framed by the same Frame and Warp knobs so it lines up with the video. It only runs while
 // Depth is mapped somewhere.
 
-// Frame
+// @group Frame
 // @param zoom 1 0.5 4
 // @param rotate 0 -180 180
 // @param panX 0 -1 1
 // @param panY 0 -1 1
 // @param mirror 1 0 3 int Off,Flip,Fold,Quad
-// Warp
+
+// @group Warp
 // @param warp 0 0 1
 // @param warpScale 3 0.5 12
 // @param warpSpeed 0.5 0 4
-// Color
+
+// @group Color
 // @param exposure 0 -2 2
 // @param contrast 1 0 3
 // @param saturation 1 0 2
 // @param edges 0 0 1
 // @param posterize 0 0 1
-// Depth: smoothing eases out the model's flicker (higher = calmer but laggier), contrast
-// bends the range (above 1 pushes the background back), floor flattens everything farther
-// than it to zero, so only near things rise.
+
+// @group Output
+// @param bg 0 0 1
+
+// @group Depth
 // @param depthSmooth 0.7 0 0.97
 // @param depthContrast 1.3 0.25 4
 // @param depthFloor 0.1 0 0.9
