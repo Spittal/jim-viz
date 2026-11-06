@@ -12,6 +12,7 @@ final class ContentStore {
     var presetsDir: URL { root.appendingPathComponent("Presets") }
     var videosDir: URL { root.appendingPathComponent("Videos") }
     var picturesDir: URL { root.appendingPathComponent("Pictures") }
+    var mapsDir: URL { root.appendingPathComponent("Maps") }
 
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?

@@ -1023,6 +1023,12 @@ final class Engine {
                 errors["generator"] = "\(slot.type).metal has no // @mesh line"
                 return nil
             }
+            if mesh == .globe {
+                do { try WorldMap.load(store.mapsDir.appendingPathComponent("world.json")) } catch {
+                    errors["generator"] = "Maps/world.json invalid: \(error.localizedDescription)"
+                    return nil
+                }
+            }
             let old = reuse?.generators.first { $0.key == slotKey }
             let same = old?.type == slot.type && old?.preset == slot.preset
             let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil)

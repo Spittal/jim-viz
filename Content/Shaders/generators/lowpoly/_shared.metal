@@ -95,6 +95,9 @@ struct GeoPoint {
     float2 frontUV;    // uv for the Front video mode
     float3 depthPos;   // the point moved only by the Plane's depth, for depthCut
     float cut;         // the Plane's depthCut while Depth is mapped; 0 elsewhere
+    float tone;        // shifts this face along the palette (the Globe's countries); 0 elsewhere
+    float faceLit;     // 1 lights the face by faceN, not by its own triangle, so a face of many
+                       // triangles (a Globe country) is lit as one; 0 elsewhere
 };
 
 inline GeoPoint geoPoint(float3 pos, float3 normal, float3 faceN, float specU) {
@@ -106,6 +109,8 @@ inline GeoPoint geoPoint(float3 pos, float3 normal, float3 faceN, float specU) {
     g.frontUV = float2(0.5 - pos.z * 0.35, 0.5 - pos.y * 0.35);
     g.depthPos = pos;
     g.cut = 0;
+    g.tone = 0;
+    g.faceLit = 0;
     return g;
 }
 
@@ -119,6 +124,9 @@ struct GenOut {
     float3 faceN [[flat]];
     float2 frontUV;
     float cut [[flat]];
+    float tone [[flat]];
+    float3 wireHide [[flat]];   // 1 for each edge (opposite bary x, y, z) the wireframe skips
+    float3 litN [[flat]];       // the normal to light the face by; 0 for the triangle's own
 };
 
 // The per-instance random a vertex's copy uses, 0..1.
@@ -168,7 +176,8 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
 
     // Each instance tumbles on its own random axis.
     float3 axis = normalize(float3(hash11(ir * 3.1) - 0.5, hash11(ir * 5.7) - 0.5, hash11(ir * 7.3) - 0.5) + 1e-3);
-    pos = rotAxis(axis, p.tumblePhase * (0.5 + ir)) * pos;
+    float3x3 tumble = rotAxis(axis, p.tumblePhase * (0.5 + ir));
+    pos = tumble * pos;
 
     pos += instanceOffset(float(iid), p);
 
@@ -180,17 +189,23 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     }
 
     pos.xz = rot2(p.spinPhase) * pos.xz;
+    float3 litN = tumble * g.faceN * g.faceLit;
+    litN.xz = rot2(p.spinPhase) * litN.xz;
 
     GenOut o;
     o.world = pos;
     o.position = cam.viewProj * float4(pos, 1);
     o.bary = v.bary.xyz;
+    int hide = int(v.bary.w + 0.5);
+    o.wireHide = float3(hide & 1, (hide >> 1) & 1, (hide >> 2) & 1);
     o.faceRand = v.position.w;
     o.inst = ir;
     o.depthPos = g.depthPos;
     o.faceN = g.faceN;
     o.frontUV = g.frontUV;
     o.cut = g.cut;
+    o.tone = g.tone;
+    o.litN = litN;
     return o;
 }
 
@@ -211,7 +226,7 @@ inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid
     }
 
     // Flat normal from screen-space derivatives: the low-poly look.
-    float3 nrm = normalize(cross(dfdy(in.world), dfdx(in.world)));
+    float3 nrm = dot(in.litN, in.litN) > 0 ? normalize(in.litN) : normalize(cross(dfdy(in.world), dfdx(in.world)));
     float3 V = normalize(cam.position.xyz - in.world);
     if (dot(nrm, V) < 0) nrm = -nrm;
 
@@ -222,7 +237,7 @@ inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid
     float shade = saturate(diff * 0.65 + in.faceRand * 0.2 + rim * 0.35);
     float bands = max(p.bands, 1.0);
     shade = floor(shade * bands) / bands;
-    float t = 0.15 + 0.85 * shade + p.colorShift + p.colorSpeedPhase + in.inst * 0.1;
+    float t = 0.15 + 0.85 * shade + p.colorShift + p.colorSpeedPhase + in.inst * 0.1 + in.tone;
     float3 col = palette(pal, t) * p.fill;
 
     if (hasInput(f, 2) && p.videoTex > 0) {
@@ -255,7 +270,8 @@ inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid
     }
 
     // Wireframe from barycentrics.
-    float e = min(min(in.bary.x, in.bary.y), in.bary.z);
+    float3 edge = in.bary + in.wireHide;
+    float e = min(min(edge.x, edge.y), edge.z);
     float w = 1 - smoothstep(0.0, fwidth(e) * 1.5, e);
     float3 wireColor = paletteClamp(pal, 1.0) * 1.4;
     col = mix(col, wireColor, w * p.wire);

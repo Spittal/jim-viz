@@ -10,7 +10,8 @@ struct MeshVertex {
     var faceNormal: SIMD4<Float>
     /// Smooth normal, used as the displacement direction so faces stay connected.
     var smoothNormal: SIMD4<Float>
-    /// Barycentric coordinate, for wireframes.
+    /// Barycentric coordinate, for wireframes. w = the edges the wireframe skips: bits 0, 1, 2
+    /// for the edge opposite the triangle's first, second and third vertex.
     var bary: SIMD4<Float>
     /// Shape coordinates the geo's vertex shader rebuilds the position from, so its shape
     /// knobs (torus thickness, wheel pitch…) move live. Meaning depends on the mesh; see each builder.
@@ -20,7 +21,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel
+    case sphere, torus, plane, cube, shards, wheel, globe
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -31,12 +32,13 @@ enum MeshShape: String, CaseIterable {
         case .cube: return ["divisions"]
         case .shards: return ["count"]
         case .wheel: return ["blades", "segments"]
+        case .globe: return ["detail", "facets"]
         }
     }
 }
 
 struct MeshBuilder {
-    private(set) var vertices: [MeshVertex] = []
+    var vertices: [MeshVertex] = []
     private var rng = SplitMix(seed: 0x5EED)
 
     mutating func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>,
@@ -67,6 +69,7 @@ struct MeshBuilder {
         case .cube: return [min(max(i("divisions"), 1), 32)]
         case .shards: return [min(max(i("count"), 1), 4000)]
         case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
+        case .globe: return [min(max(i("detail"), 0), WorldMap.tolerances.count - 1), min(max(i("facets"), 0), 5)]
         }
     }
 
@@ -79,12 +82,13 @@ struct MeshBuilder {
         case .cube: b.cube(t[0])
         case .shards: b.shards(t[0])
         case .wheel: b.wheel(blades: t[0], segments: t[1])
+        case .globe: b.globe(detail: t[0], facets: t[1])
         }
         return b.vertices
     }
 
     /// Icosphere of radius 1. shape is unused.
-    private mutating func sphere(_ detail: Int) {
+    mutating func sphere(_ detail: Int) {
         let t: Float = (1 + Float(5).squareRoot()) / 2
         var v: [SIMD3<Float>] = [
             [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],

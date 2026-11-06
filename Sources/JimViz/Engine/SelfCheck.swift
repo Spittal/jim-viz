@@ -789,7 +789,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "globe"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -801,7 +801,7 @@ enum SelfCheck {
         }
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
-                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch"]
+                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch", "globe": "ocean"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
