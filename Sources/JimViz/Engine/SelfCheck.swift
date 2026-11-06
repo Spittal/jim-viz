@@ -65,6 +65,7 @@ enum SelfCheck {
         var detected: [String: [Double]] = ["kick": [], "snare": [], "hat": []]
         var prev = AudioFeatures()
         var sums = (bass: Float(0), mid: Float(0), high: Float(0)), count = 0
+        var splitLog: [(t: Double, harmonic: Float, percussive: Float)] = []
         var pos = 0
         while pos < frames {
             let n = min(chunk, frames - pos)
@@ -77,6 +78,7 @@ enum SelfCheck {
             analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
+            splitLog.append((t, f.harmonic, f.percussive))
             if analyzer.fresh { tempo.feed(strength: analyzer.onsetStrength, active: f.active, time: t) }
             tempo.update(now: t)
             if let rd = tempo.reading(at: t) { beatAt.append((t, rd.beat)) }
@@ -103,6 +105,16 @@ enum SelfCheck {
             }
         }
         var ok = true
+        // The split: how the Percussive level stands just after hits, against the rest.
+        let hitTimes = (truth["kick"] ?? []) + (truth["snare"] ?? []) + (truth["hat"] ?? [])
+        if !hitTimes.isEmpty {
+            func near(_ t: Double) -> Bool { hitTimes.contains { t >= $0 && t < $0 + 0.05 } }
+            let at = splitLog.filter { near($0.t) }, off = splitLog.filter { !near($0.t) }
+            func mean(_ xs: [Float]) -> Float { xs.isEmpty ? 0 : xs.reduce(0, +) / Float(xs.count) }
+            print(String(format: "split: percussive %.2f within 50 ms of hits, %.2f elsewhere · harmonic %.2f / %.2f",
+                         mean(at.map(\.percussive)), mean(off.map(\.percussive)),
+                         mean(at.map(\.harmonic)), mean(off.map(\.harmonic))))
+        }
         // Phase check: at each true kick (once the estimate is usable), the beat should be whole.
         if let kicks = truth["kick"], !beatAt.isEmpty {
             var errs: [Double] = []
@@ -522,7 +534,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "clock.sync", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum", "clock.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -789,7 +801,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -801,7 +813,8 @@ enum SelfCheck {
         }
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
-                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch"]
+                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
+                                     "hand": "pinkyCurl", "face": "vowel"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -854,6 +867,13 @@ enum SelfCheck {
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
                 w.reset(); l.reset()
             }
+            if geo == "hand" {
+                guard let w = gen.bank["fingerWidth"], w.def.min == 0,
+                      let l = gen.bank["pinkyLength"], l.def.min == 0 else { return "hand fingerWidth/pinkyLength min should be 0" }
+                w.setBase(0); l.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                w.reset(); l.reset()
+            }
             if geo == "torus" {
                 guard let t = gen.bank["thickness"], t.def.min == 0 else { return "torus thickness min should be 0" }
                 t.setBase(0)
@@ -880,6 +900,88 @@ enum SelfCheck {
         return nil
     }
 
+    /// Face, on a scene built in memory (a static camera, nothing mapped): the head is a few
+    /// flat planes, it draws from the front, the side and three-quarters, open drops the jaw,
+    /// every vowel draws, and sing does nothing while the Spectrum input is unmapped.
+    private static func checkFace(engine: Engine, snapshotDir: URL?) -> String? {
+        let front = SIMD3<Float>(4, 0, 0), side = SIMD3<Float>(0.4, 0, 4), threeQuarter = SIMD3<Float>(3, 0.5, 2.6)
+        func render(_ params: [String: Float], from eye: SIMD3<Float>, _ name: String?) -> (fraction: Float, centroid: SIMD2<Float>, vertices: Int)? {
+            let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
+            let file = SceneFile(name: "face", inputs: [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": eye.x, "y": eye.y, "z": eye.z, "fov": 55]),
+                                 palette: nil,
+                                 generator: GeneratorSlot(id: nil, type: "face", preset: nil, params: base.merging(params) { $1 }),
+                                 effects: [], mappings: [])
+            guard let s = engine.build(file, reuse: nil), let gen = s.generator, s.mappings.isEmpty, s.streamBindings.isEmpty else { return nil }
+            _ = engine.renderOffscreen(s, frames: 2, snapshot: name.flatMap { snapshotDir?.appendingPathComponent($0) })
+            let c = engine.coverage(engine.renderer.history)
+            return (c.fraction, c.centroid, gen.vertexCount)
+        }
+        guard let shut = render(["open": 0], from: front, "face-shut.png") else { return "didn't build or connected itself: \(engine.errorSummary ?? "")" }
+        guard shut.fraction > 0.05, shut.fraction < 0.6 else { return "drew \(shut.fraction) of the frame" }
+        guard shut.vertices < 1000 else { return "\(shut.vertices) vertices at detail 0: not a few flat planes" }
+        guard let sideShut = render(["open": 0], from: side, "face-side.png"),
+              let sideOpen = render(["open": 1], from: side, "face-side-open.png") else { return "didn't build from the side" }
+        let moved = simd_length(sideOpen.centroid - sideShut.centroid) + abs(sideOpen.fraction - sideShut.fraction)
+        guard moved > 0.002 else { return "open didn't drop the jaw: \(moved)" }
+        for (name, params) in [("open", ["open": 1]), ("oo", ["open": 0.8, "vowel": -1]), ("ee", ["open": 0.8, "vowel": 1]),
+                               ("wire", ["open": 0.5, "wire": 1, "fill": 0.3]), ("detail", ["open": 0.5, "detail": 3, "noiseAmount": 0.3])] as [(String, [String: Float])] {
+            guard let c = render(params, from: name == "open" ? front : threeQuarter, "face-\(name).png"), c.fraction > 0.05 else { return "\(name) didn't draw" }
+        }
+        guard let silent = render(["open": 0, "sing": 3, "singVowel": 2], from: front, nil),
+              abs(silent.fraction - shut.fraction) < 1e-4 else { return "sang with the Spectrum unmapped" }
+        return nil
+    }
+
+    /// Drive, the Retro generator: its own category, starts unmapped, and on a scene built in
+    /// memory (a chase camera, a palette) draws over most of the frame, rebuilds its mesh when
+    /// segments or palms change, and keeps drawing with the road moving and bending.
+    private static func checkDrive(engine: Engine, snapshotDir: URL?) -> String? {
+        let listed = engine.tools.filter { $0.kind == .generator && $0.category == "retro" }.map(\.name)
+        guard listed == ["drive"] else { return "Retro lists \(listed), expected [drive]" }
+        let file = SceneFile(name: "drive", inputs: [], modulators: [],
+                             camera: CameraSlot(type: "static", preset: nil,
+                                                params: ["x": 8, "y": 2.2, "z": 0, "lookX": -6, "lookY": 0.6, "fov": 50]),
+                             palette: PaletteSlot(colors: ["#12002A", "#FF2E88", "#FFD23F"]),
+                             generator: GeneratorSlot(id: nil, type: "drive", preset: nil, params: [:]),
+                             effects: [], mappings: [])
+        guard let scene = engine.build(file, reuse: nil), let gen = scene.generator else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.mesh == .drive, gen.vertexCount > 0 else { return "built an empty mesh" }
+        guard scene.mappings.isEmpty, scene.streamBindings.isEmpty else { return "connected itself" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+        let meshKnobs = gen.bank.params.filter(\.def.rebuildsMesh)
+        guard meshKnobs.map(\.def.name).sorted() == ["palms", "segments"] else { return "mesh knobs mismatch" }
+        for knob in meshKnobs {
+            let before = gen.vertexCount
+            knob.live = knob.def.clamp(knob.base + knob.def.span * 0.25)
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount > before else { return "mesh didn't grow with \(knob.def.name)" }
+            knob.live = knob.base
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount == before else { return "mesh didn't return when \(knob.def.name) went back" }
+        }
+        // Coloured through a mapped palette from here on.
+        var coloured = file
+        coloured.mappings = [MappingSpec(source: "palette.colors", target: "generator.pal")]
+        guard let scene = engine.build(coloured, reuse: nil), let gen = scene.generator else { return "didn't build with a palette" }
+        let ms = engine.renderOffscreen(scene, frames: 30, snapshot: snapshotDir?.appendingPathComponent("drive.png"))
+        let drawn = engine.coverage(engine.renderer.history)
+        // The road and ground fill the bottom of the frame, the sky the top.
+        guard drawn.fraction > 0.3, drawn.fraction < 0.95, drawn.centroid.y > 0.5 else {
+            return "drew \(drawn.fraction) of the frame, centred at \(drawn.centroid)"
+        }
+        // Fast, bendy and hilly, shattered and wired: still draws.
+        for (name, value) in [("speed", 8), ("curves", 3), ("hills", 3), ("explode", 2), ("wire", 1), ("bounce", 1)] as [(String, Float)] {
+            gen.bank[name]?.setBase(value)
+        }
+        _ = engine.renderOffscreen(scene, frames: 10, snapshot: snapshotDir?.appendingPathComponent("drive-wild.png"))
+        guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn at full tilt" }
+        print(String(format: "     drive %.2f ms/frame GPU, %d vertices", ms, gen.vertexCount))
+        return nil
+    }
+
     /// Low Poly Instances layout (Grid, Cube), Brownian motion and Intersection blending, on a
     /// scene built in memory: a static camera on the front, one geo, nothing mapped.
     private static func checkInstancing(engine: Engine) -> String? {
@@ -893,7 +995,7 @@ enum SelfCheck {
             return engine.build(file, reuse: nil)
         }
         // Every geo gets the knobs, starting at Sphere, still and Comp, and the blend pipeline.
-        for geo in ["sphere", "torus", "plane", "cube", "shards", "wheel"] {
+        for geo in ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face"] {
             guard let s = scene(geo, [:]), let gen = s.generator else { return "\(geo) didn't build: \(engine.errorSummary ?? "")" }
             guard gen.bank["layout"]?.def.labels == ["Sphere", "Grid", "Cube"], gen.bank["layout"]?.base == 0,
                   gen.bank["columns"] != nil, gen.bank["brownian"]?.base == 0, gen.bank["brownianSpeed"]?.def.isRate == true,
@@ -1606,6 +1708,12 @@ enum SelfCheck {
             print("ok   video transport (in/out knobs unpacked, loops between in and out, jump lands inside, starts unmapped)")
         }
 
+        if let problem = checkSplit(engine: engine) {
+            print("FAIL split: \(problem)"); failures += 1
+        } else {
+            print("ok   split (tone harmonic, clicks percussive, outputs start unmapped, typed)")
+        }
+
         if let problem = checkStreams(engine: engine) {
             print("FAIL streams: \(problem)"); failures += 1
         } else {
@@ -1661,6 +1769,16 @@ enum SelfCheck {
         } else {
             print("ok   low poly geos")
         }
+        if let problem = checkFace(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL face: \(problem)"); failures += 1
+        } else {
+            print("ok   face (a few flat planes, open drops the jaw, every vowel draws, silent with Spectrum unmapped)")
+        }
+        if let problem = checkDrive(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL drive: \(problem)"); failures += 1
+        } else {
+            print("ok   drive (Retro category, starts unmapped, road, car, palms, sun and mountains drawn, mesh knobs rebuild)")
+        }
         if let problem = checkInstancing(engine: engine) {
             print("FAIL instancing: \(problem)"); failures += 1
         } else {
@@ -1694,6 +1812,78 @@ enum SelfCheck {
 }
 
 extension SelfCheck {
+    /// The harmonic/percussive split: a steady tone goes to Harmonic and clicks to Percussive,
+    /// on the frame they arrive. Audio In's split outputs start unmapped. (That hits are found in
+    /// the percussive part, so pads don't fire them, is scored by `check.sh` on a pad track.)
+    static func checkSplit(engine: Engine) -> String? {
+        let rate = 48000.0, frame = 800, clickEvery = 24000, clickLength = 240
+        let ring = SampleRing(capacity: 16384)
+        ring.setSampleRate(rate)
+        let analyzer = AudioAnalyzer()
+        var rng = SystemRandomNumberGenerator()
+        var pos = 0
+        let toneBin = Int((440 / (rate / Double(AudioAnalyzer.fftSize))).rounded())
+        let highBins = (AudioAnalyzer.fftSize * 2000 / 48000)..<(AudioAnalyzer.fftSize / 2)
+        var toneShares: [Float] = [], clickShares: [Float] = []
+        for _ in 0..<180 {
+            ring.write(frames: frame) { k in
+                let i = pos + k
+                let tone = 0.3 * sin(2 * Float.pi * 440 * Float(i) / Float(rate))
+                let click = i >= 12000 && (i - 12000) % clickEvery < clickLength ? Float.random(in: -0.8...0.8, using: &rng) : 0
+                return tone + click
+            }
+            pos += frame
+            analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
+            guard pos > 24000 else { continue }
+            let h = analyzer.split.harmonic, p = analyzer.split.percussive
+            let sinceClick = (pos - 12000) % clickEvery
+            if sinceClick >= 9600 && sinceClick < 20000 {
+                // Steady stretch: the tone's bin is harmonic.
+                toneShares.append(h[toneBin] / max(h[toneBin] + p[toneBin], 1e-12))
+            } else if sinceClick >= clickLength && sinceClick < frame + clickLength {
+                // First frame with the whole click in the window: the noise above 2 kHz is percussive.
+                let hs = highBins.reduce(Float(0)) { $0 + h[$1] }, ps = highBins.reduce(Float(0)) { $0 + p[$1] }
+                clickShares.append(ps / max(hs + ps, 1e-12))
+            }
+        }
+        guard !toneShares.isEmpty, !clickShares.isEmpty else { return "test signal produced no measurements" }
+        guard let tone = toneShares.min(), tone > 0.9 else { return "steady tone not harmonic: \(toneShares.min() ?? 0)" }
+        guard let click = clickShares.min(), click > 0.8 else { return "clicks not percussive on arrival: \(clickShares.min() ?? 0)" }
+
+        // In a scene: the outputs exist, start unmapped, and are typed.
+        guard let url = engine.sceneURLs.first(where: { url in
+            engine.load(url, animated: false)
+            return engine.current?.audioIn != nil && engine.current?.cameraMotion != nil
+        }) else { return "no scene with Audio In and a camera" }
+        defer { engine.load(url, animated: false) }
+        guard let scene = engine.current else { return "scene did not load" }
+        let splitKeys: Set = ["audio.harmonic", "audio.percussive", StreamOutput.harmonicSpectrumKey, StreamOutput.percussiveSpectrumKey]
+        let streamKeys = scene.streamOutputs.map(\.key)
+        guard scene.outputs.contains(where: { $0.key == "audio.harmonic" }), scene.outputs.contains(where: { $0.key == "audio.percussive" }),
+              streamKeys.contains(StreamOutput.harmonicSpectrumKey), streamKeys.contains(StreamOutput.percussiveSpectrumKey) else {
+            return "Audio In is missing split outputs"
+        }
+        guard !scene.mappings.contains(where: { splitKeys.contains($0.spec.source) }) else {
+            return "split outputs mapped in \(url.lastPathComponent)"
+        }
+        let count = scene.mappings.count
+        engine.addMapping(source: StreamOutput.percussiveSpectrumKey, target: "camera.fov")
+        guard engine.current?.mappings.count == count else { return "Percussive Spectrum mapped onto a knob" }
+        engine.addMapping(source: "audio.percussive", target: "camera.fov")
+        guard let mapped = engine.current, mapped.mappings.contains(where: { $0.spec.source == "audio.percussive" && $0.problem == nil }) else {
+            return "Percussive didn't map onto a knob"
+        }
+        mapped.audioIn?.capture.ring.reset()
+        let audioBefore = engine.offlineAudio
+        engine.offlineAudio = (samples: (0..<48000).map { i in i % 24000 < 240 ? Float.random(in: -0.8...0.8) : 0.3 * sin(2 * Float.pi * 440 * Float(i) / 48000) }, rate: 48000)
+        defer { engine.offlineAudio = audioBefore }
+        _ = engine.renderOffscreen(mapped, frames: 40, snapshot: nil)
+        guard let a = mapped.audioIn?.analyzer, a.harmonicSpectrum.bins.max()! > 0, a.percussiveSpectrum.bins.max()! > 0 else {
+            return "split spectra stayed empty"
+        }
+        return nil
+    }
+
     /// Speed knobs flagged `rate` hand the shader their integrated value, so turning one never
     /// jumps the motion; and no shader multiplies time by a knob, which would.
     static func checkRates(engine: Engine) -> String? {

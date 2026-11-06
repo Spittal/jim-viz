@@ -10,7 +10,8 @@ struct MeshVertex {
     var faceNormal: SIMD4<Float>
     /// Smooth normal, used as the displacement direction so faces stay connected.
     var smoothNormal: SIMD4<Float>
-    /// Barycentric coordinate, for wireframes.
+    /// Barycentric coordinate, for wireframes. w = the edges the wireframe skips: bits 0, 1, 2
+    /// for the edge opposite the triangle's first, second and third vertex.
     var bary: SIMD4<Float>
     /// Shape coordinates the geo's vertex shader rebuilds the position from, so its shape
     /// knobs (torus thickness, wheel pitch…) move live. Meaning depends on the mesh; see each builder.
@@ -20,7 +21,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel
+    case sphere, torus, plane, cube, shards, wheel, drive, hand, face
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -31,6 +32,9 @@ enum MeshShape: String, CaseIterable {
         case .cube: return ["divisions"]
         case .shards: return ["count"]
         case .wheel: return ["blades", "segments"]
+        case .drive: return ["segments", "palms"]
+        case .hand: return ["sides", "segments"]
+        case .face: return ["detail"]
         }
     }
 }
@@ -39,17 +43,20 @@ struct MeshBuilder {
     private(set) var vertices: [MeshVertex] = []
     private var rng = SplitMix(seed: 0x5EED)
 
+    /// One triangle. `rand` is its face random, when it shares one with its neighbours (a plane
+    /// of several triangles); `hide` is the edges the wireframe skips, as in `MeshVertex.bary`.
     mutating func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>,
                       _ na: SIMD3<Float>, _ nb: SIMD3<Float>, _ nc: SIMD3<Float>,
-                      shape: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero)) {
+                      shape: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero),
+                      rand: Float? = nil, hide: Int = 0) {
         var fn = simd_normalize(simd_cross(b - a, c - a))
         if !fn.x.isFinite { fn = simd_normalize(na + nb + nc) }
         if simd_dot(fn, na + nb + nc) < 0 { fn = -fn }
-        let r = rng.nextFloat()
+        let r = rand ?? rng.nextFloat()
         let bary: [SIMD3<Float>] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
         for (i, (p, n, s)) in [(a, na, shape.0), (b, nb, shape.1), (c, nc, shape.2)].enumerated() {
             vertices.append(MeshVertex(position: SIMD4(p, r), faceNormal: SIMD4(fn, 0),
-                                       smoothNormal: SIMD4(n, 0), bary: SIMD4(bary[i], 0), shape: s))
+                                       smoothNormal: SIMD4(n, 0), bary: SIMD4(bary[i], Float(hide)), shape: s))
         }
     }
 
@@ -67,6 +74,9 @@ struct MeshBuilder {
         case .cube: return [min(max(i("divisions"), 1), 32)]
         case .shards: return [min(max(i("count"), 1), 4000)]
         case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
+        case .drive: return [min(max(i("segments"), 8), 512), min(max(i("palms"), 0), 256)]
+        case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
+        case .face: return [min(max(i("detail"), 0), 4)]
         }
     }
 
@@ -79,6 +89,9 @@ struct MeshBuilder {
         case .cube: b.cube(t[0])
         case .shards: b.shards(t[0])
         case .wheel: b.wheel(blades: t[0], segments: t[1])
+        case .drive: b.drive(segments: t[0], palms: t[1])
+        case .hand: b.hand(sides: t[0], segments: t[1])
+        case .face: b.face(detail: t[0])
         }
         return b.vertices
     }
@@ -234,6 +247,92 @@ struct MeshBuilder {
                     tri(p(t0, s0), p(t1, s1), p(t0, s1), normal, normal, normal,
                         shape: (s(t0, s0, c2), s(t1, s1, c2), s(t0, s1, c2)))
                 }
+            }
+        }
+    }
+    /// Phalanx lengths (proximal, middle, distal) of the thumb, index, middle, ring and pinky.
+    /// Must match `handLen` in Shaders/generators/lowpoly/hand.metal.
+    static let handLengths: [SIMD3<Float>] = [
+        [0.40, 0.28, 0.26], [0.42, 0.25, 0.22], [0.46, 0.28, 0.23], [0.43, 0.26, 0.22], [0.36, 0.22, 0.20],
+    ]
+
+    /// A fist: a palm and wrist, and five fingers that are `sides`-sided tubes of three
+    /// phalanges, `segments` rings each, ending in a pointed tip. The shader bends the fingers.
+    /// Palm: shape.x = 5; position and normals are the hand's own, as drawn.
+    /// Fingers: shape.x = finger (0 thumb … 4 pinky) + 10 × the face's phalanx 0...2,
+    /// y = along the finger 0...3 (whole numbers are the joints, 3 the tip), zw = the vertex's
+    /// offset across the finger (sideways, toward the palm). position and faceNormal are in the
+    /// straight finger's own frame (along, toward the palm, sideways), so the shader can bend them.
+    private mutating func hand(sides n: Int, segments: Int) {
+        func ring(_ k: Int, phase: Float = 0) -> SIMD2<Float> {
+            let a = (Float(k) + phase) / Float(n) * 2 * .pi
+            return [cos(a), sin(a)]
+        }
+
+        // Palm and wrist: an elliptical tube up the y axis, capped at both ends.
+        // (y, sideways radius, front-to-back radius)
+        let palm: [SIMD3<Float>] = [[-1.05, 0.22, 0.17], [-0.6, 0.25, 0.19], [-0.42, 0.42, 0.2],
+                                    [0.15, 0.46, 0.21], [0.5, 0.44, 0.19]]
+        let palmShape = SIMD4<Float>(5, 0, 0, 0)
+        func pp(_ r: SIMD3<Float>, _ k: Int) -> (SIMD3<Float>, SIMD3<Float>) {
+            let c = ring(k, phase: 0.5)
+            return ([c.y * r.z, r.x, c.x * r.y], simd_normalize([c.y / r.z, 0, c.x / r.y]))
+        }
+        for i in 0..<palm.count - 1 {
+            for k in 0..<n {
+                let (a, na) = pp(palm[i], k), (b, nb) = pp(palm[i], k + 1)
+                let (c, nc) = pp(palm[i + 1], k + 1), (d, nd) = pp(palm[i + 1], k)
+                tri(a, b, c, na, nb, nc, shape: (palmShape, palmShape, palmShape))
+                tri(a, c, d, na, nc, nd, shape: (palmShape, palmShape, palmShape))
+            }
+        }
+        for (end, y, dir) in [(palm[0], palm[0].x - 0.04, Float(-1)), (palm[palm.count - 1], palm[palm.count - 1].x + 0.05, 1)] {
+            let centre = SIMD3<Float>(0, y, 0), up = SIMD3<Float>(0, dir, 0)
+            for k in 0..<n {
+                let (a, na) = pp(end, k), (b, nb) = pp(end, k + 1)
+                tri(a, b, centre, na, nb, up, shape: (palmShape, palmShape, palmShape))
+            }
+        }
+
+        // Fingers. Rings along each: `segments` per phalanx, the last one short of the tip.
+        let radius: [Float] = [0.115, 0.105, 0.11, 0.103, 0.09]
+        var along: [Float] = []
+        for j in 0..<3 {
+            for i in 0..<segments { along.append(Float(j) + Float(i) / Float(segments) * (j == 2 ? 0.85 : 1)) }
+        }
+        along.append(2.85)
+        for (finger, len) in MeshBuilder.handLengths.enumerated() {
+            // Distance along the straight finger at s.
+            func dist(_ s: Float) -> Float {
+                let j = min(Int(s), 2), t = s - Float(j)
+                var d: Float = 0
+                for i in 0..<j { d += len[i] }
+                return d + t * len[j]
+            }
+            func rad(_ s: Float) -> Float { radius[finger] * (1 - 0.07 * s) * (s > 2.8 ? 0.8 : 1) }
+            func vert(_ s: Float, _ k: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD2<Float>) {
+                let c = ring(k), off = c * rad(s)
+                return ([dist(s), off.y, off.x], [0, c.y, c.x], off)
+            }
+            func sh(_ s: Float, _ off: SIMD2<Float>, _ phalanx: Int) -> SIMD4<Float> {
+                [Float(finger + 10 * phalanx), s, off.x, off.y]
+            }
+            for r in 0..<along.count - 1 {
+                let s0 = along[r], s1 = along[r + 1], ph = min(Int(s0), 2)
+                for k in 0..<n {
+                    let (a, na, oa) = vert(s0, k), (b, nb, ob) = vert(s0, k + 1)
+                    let (c, nc, oc) = vert(s1, k + 1), (d, nd, od) = vert(s1, k)
+                    tri(a, b, c, na, nb, nc, shape: (sh(s0, oa, ph), sh(s0, ob, ph), sh(s1, oc, ph)))
+                    tri(a, c, d, na, nc, nd, shape: (sh(s0, oa, ph), sh(s1, oc, ph), sh(s1, od, ph)))
+                }
+            }
+            // The pointed tip and the cap at the knuckle.
+            let tip = SIMD3<Float>(dist(3), 0, 0), base = SIMD3<Float>(0, 0, 0)
+            for k in 0..<n {
+                let (a, na, oa) = vert(2.85, k), (b, nb, ob) = vert(2.85, k + 1)
+                tri(a, b, tip, na, nb, [1, 0, 0], shape: (sh(2.85, oa, 2), sh(2.85, ob, 2), sh(3, .zero, 2)))
+                let (c, nc, oc) = vert(0, k), (d, nd, od) = vert(0, k + 1)
+                tri(d, c, base, nd, nc, [-1, 0, 0], shape: (sh(0, od, 0), sh(0, oc, 0), sh(0, .zero, 0)))
             }
         }
     }

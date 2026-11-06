@@ -95,6 +95,7 @@ struct GeoPoint {
     float2 frontUV;    // uv for the Front video mode
     float3 depthPos;   // the point moved only by the Plane's depth, for depthCut
     float cut;         // the Plane's depthCut while Depth is mapped; 0 elsewhere
+    float dark;        // darkens this face (the inside of the Face's mouth); 0 elsewhere
 };
 
 inline GeoPoint geoPoint(float3 pos, float3 normal, float3 faceN, float specU) {
@@ -106,6 +107,7 @@ inline GeoPoint geoPoint(float3 pos, float3 normal, float3 faceN, float specU) {
     g.frontUV = float2(0.5 - pos.z * 0.35, 0.5 - pos.y * 0.35);
     g.depthPos = pos;
     g.cut = 0;
+    g.dark = 0;
     return g;
 }
 
@@ -119,6 +121,8 @@ struct GenOut {
     float3 faceN [[flat]];
     float2 frontUV;
     float cut [[flat]];
+    float dark [[flat]];
+    float3 wireHide [[flat]];   // 1 for each edge (opposite bary x, y, z) the wireframe skips
 };
 
 // The per-instance random a vertex's copy uses, 0..1.
@@ -185,12 +189,15 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     o.world = pos;
     o.position = cam.viewProj * float4(pos, 1);
     o.bary = v.bary.xyz;
+    int hide = int(v.bary.w + 0.5);
+    o.wireHide = float3(hide & 1, (hide >> 1) & 1, (hide >> 2) & 1);
     o.faceRand = v.position.w;
     o.inst = ir;
     o.depthPos = g.depthPos;
     o.faceN = g.faceN;
     o.frontUV = g.frontUV;
     o.cut = g.cut;
+    o.dark = g.dark;
     return o;
 }
 
@@ -253,9 +260,11 @@ inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid
         float3 v = videoColor(vid, pal, uv, p.videoTint) * (0.35 + 0.85 * shade);
         col = mix(col, v * max(p.fill, 0.35), p.videoTex);
     }
+    col *= 1 - in.dark;
 
     // Wireframe from barycentrics.
-    float e = min(min(in.bary.x, in.bary.y), in.bary.z);
+    float3 edge = in.bary + in.wireHide;
+    float e = min(min(edge.x, edge.y), edge.z);
     float w = 1 - smoothstep(0.0, fwidth(e) * 1.5, e);
     float3 wireColor = paletteClamp(pal, 1.0) * 1.4;
     col = mix(col, wireColor, w * p.wire);

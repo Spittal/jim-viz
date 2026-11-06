@@ -1135,7 +1135,7 @@ final class Engine {
                 let old = reuse?.audioIn
                 let capture = audioCaptures.capture(source, channelPair: spec.channelPair ?? 0)
                 let a = AudioInRuntime(capture: capture, params: spec.params ?? [:],
-                                       spectrum: old?.spectrum ?? renderer.makeSpectrumTextures(),
+                                       makeSpectrum: renderer.makeSpectrumTextures,
                                        reuse: old, continuing: reuse == nil ? current?.audioIn : nil)
                 inputs.append(.audio(a)); outputs += a.outputs
             case "clock" where !inputs.contains { $0.id == "clock" }:
@@ -1317,7 +1317,7 @@ final class Engine {
                 if problem == nil, let stream { streamBindings[spec.target] = stream }
                 let fallbackLabel: String
                 switch kind {
-                case .spectrum: fallbackLabel = "Audio In · Spectrum"
+                case .spectrum: fallbackLabel = "Audio In · \(StreamOutput.spectrumNames[spec.source] ?? "Spectrum")"
                 case .palette: fallbackLabel = "Palette · Colours"
                 case .audio: fallbackLabel = "Audio In · Audio Out"
                 case .clock: fallbackLabel = "Clock · Sync"

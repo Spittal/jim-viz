@@ -46,9 +46,9 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 
 | Kind | Example outputs | Consumed by |
 |---|---|---|
-| value (0–1) | Audio In · Kick, Clock · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
+| value (0–1) | Audio In · Kick, Audio In · Percussive, Clock · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
-| spectrum | Audio In · Spectrum (128 log bins) | `// @spectrum name Label` inputs |
+| spectrum | Audio In · Spectrum, Harmonic Spectrum, Percussive Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | Clock · Audio |
 | clock | Clock · Sync | LFO · Sync |

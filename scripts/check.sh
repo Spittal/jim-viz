@@ -8,9 +8,13 @@ swift build
 mkdir -p .build/testdata
 track=.build/testdata/test124.wav
 truth=.build/testdata/truth.txt
+padded=.build/testdata/test124-pad.wav
 [[ -f $track ]] || python3 scripts/testdata/gen_test_track.py $track $truth
+[[ -f $padded ]] || python3 scripts/testdata/add_pad.py $track $padded
 args=(--check --audio $track)
 [[ -n "$1" ]] && args+=(--snapshot "$1")
 JIMVIZ_CONTENT="$PWD/Content" .build/debug/JimViz $args
 echo "--- onset detection"
 .build/debug/JimViz --analyze $track --truth $truth
+echo "--- onset detection under a pad"
+.build/debug/JimViz --analyze $padded --truth $truth

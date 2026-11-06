@@ -87,10 +87,15 @@ final class StreamOutput: Identifiable {
     static let paletteKey = "palette.colors"
     static let audioKey = "audio.out"
     static let clockSyncKey = "clock.sync"
+    static let harmonicSpectrumKey = "audio.harmonicSpectrum"
+    static let percussiveSpectrumKey = "audio.percussiveSpectrum"
+    /// Audio In's spectrum outputs and their names.
+    static let spectrumNames = [spectrumKey: "Spectrum", harmonicSpectrumKey: "Harmonic Spectrum",
+                                percussiveSpectrumKey: "Percussive Spectrum"]
 
     /// A stream output's kind from its key alone, for when its device isn't in the scene.
     static func kind(ofKey key: String) -> IOKind? {
-        if key == spectrumKey { return .spectrum }
+        if spectrumNames[key] != nil { return .spectrum }
         if key == paletteKey { return .palette }
         if key == audioKey { return .audio }
         if key == clockSyncKey { return .clock }

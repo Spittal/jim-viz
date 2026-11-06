@@ -12,6 +12,9 @@ struct AudioFeatures {
     var kick: Float = 0
     var snare: Float = 0
     var hat: Float = 0
+    /// Levels of the harmonic (sustained, tonal) and percussive (hits, noise) parts.
+    var harmonic: Float = 0
+    var percussive: Float = 0
     /// True when there is signal above the gate.
     var active = false
 }
@@ -49,9 +52,13 @@ final class AudioAnalyzer {
     private(set) var onsetStrength: Float = 0
     /// True when this frame analysed new audio.
     private(set) var fresh = false
-    /// Log-spaced spectrum, 0...1, for shaders.
-    private(set) var spectrum = [Float](repeating: 0, count: spectrumBins)
-    private(set) var spectrumVersion = 0
+    /// Log-spaced spectra, 0...1, for shaders: the whole signal, and its harmonic and
+    /// percussive parts.
+    private(set) var spectrum = LogSpectrum()
+    private(set) var harmonicSpectrum = LogSpectrum()
+    private(set) var percussiveSpectrum = LogSpectrum()
+    /// This frame's power spectrum split into harmonic and percussive parts.
+    private(set) var split = HarmonicPercussive(bins: fftSize / 2)
     private var uiLock = os_unfair_lock()
     private var uiFeatures = AudioFeatures()
     private var uiSpectrum = [Float](repeating: 0, count: spectrumBins)
@@ -63,9 +70,8 @@ final class AudioAnalyzer {
     }
 
     // Auto-gain and envelope state per band.
-    private var peaks: [Float] = Array(repeating: -40, count: 7)
-    private var envelopes: [Float] = Array(repeating: 0, count: 4)
-    private var spectrumPeak: Float = -40
+    private var peaks: [Float] = Array(repeating: -40, count: 6)
+    private var envelopes: [Float] = Array(repeating: 0, count: 6)
     private var onsetDt: Float = 0
     private var onsets: [OnsetDetector] = [
         OnsetDetector(refractory: 0.11, decay: 0.16),  // kick
@@ -91,8 +97,10 @@ final class AudioAnalyzer {
     func continueState(from other: AudioAnalyzer) {
         peaks = other.peaks
         envelopes = other.envelopes
-        spectrumPeak = other.spectrumPeak
         spectrum = other.spectrum
+        harmonicSpectrum = other.harmonicSpectrum
+        percussiveSpectrum = other.percussiveSpectrum
+        split = other.split
         onsets = other.onsets
         onsetDt = other.onsetDt
         features = other.features
@@ -134,12 +142,13 @@ final class AudioAnalyzer {
         power[0] = 0
 
         let binHz = rate / Float(n)
-        func bandDb(_ lo: Float, _ hi: Float) -> Float {
+        func bandDb(_ lo: Float, _ hi: Float, of power: [Float]) -> Float {
             let a = max(1, Int(lo / binHz)), b = min(n / 2 - 1, max(a, Int(hi / binHz)))
             var sum: Float = 0
             power.withUnsafeBufferPointer { vDSP_sve($0.baseAddress! + a, 1, &sum, vDSP_Length(b - a + 1)) }
             return 10 * log10(sum + 1e-12)
         }
+        func bandDb(_ lo: Float, _ hi: Float) -> Float { bandDb(lo, hi, of: power) }
 
         let active = levelDb > gate
         let decayPerSec: Float = 2.5 // dB per second the auto-gain peak falls
@@ -160,12 +169,14 @@ final class AudioAnalyzer {
         f.high = envelope(2, autoGain(2, bandDb(4000, 16000)))
         f.level = envelope(3, autoGain(3, levelDb))
 
-        // Onsets use their own narrower bands. Only feed new audio, so frames without a new
-        // block don't register as a level drop and rise.
+        // Onsets listen to the percussive part only, in their own narrower bands, so pads,
+        // bass notes and chord changes don't fire them. Only feed new audio, so frames without
+        // a new block don't register as a level drop and rise.
+        if fresh { split.process(power: power, written: written) }
         let onsetBands: [(Float, Float)] = [(35, 120), (1500, 5000), (8000, 16000)]
         onsetDt += dt
         for (i, band) in onsetBands.enumerated() {
-            let db = bandDb(band.0, band.1)
+            let db = bandDb(band.0, band.1, of: split.percussive)
             if fresh { onsets[i].feed(db: db, active: active, sensitivity: sensitivity, dt: onsetDt) }
             onsets[i].advance(dt: dt)
         }
@@ -175,19 +186,36 @@ final class AudioAnalyzer {
         f.kick = onsets[0].envelope
         f.snare = onsets[1].envelope
         f.hat = onsets[2].envelope
+
+        let spectrumRange = range + 12
+        f.harmonic = envelope(4, autoGain(4, bandDb(20, 16000, of: split.harmonic)))
+        f.percussive = envelope(5, autoGain(5, bandDb(20, 16000, of: split.percussive)))
+        harmonicSpectrum.update(split.harmonic, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
+        percussiveSpectrum.update(split.percussive, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
         features = f
 
-        updateSpectrum(binHz: binHz, dt: dt, range: range + 12, release: release, active: active)
+        spectrum.update(power, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
+        os_unfair_lock_lock(&uiLock)
+        uiFeatures = features
+        for i in 0..<Self.spectrumBins { uiSpectrum[i] = spectrum.bins[i] }
+        os_unfair_lock_unlock(&uiLock)
     }
+}
 
-    private func updateSpectrum(binHz: Float, dt: Float, range: Float, release: Float, active: Bool) {
-        let bins = Self.spectrumBins
+/// A power spectrum gathered into `AudioAnalyzer.spectrumBins` log-spaced bins from 30 Hz to
+/// 16 kHz, auto-gained against its own recent peak and released like the levels.
+struct LogSpectrum {
+    private(set) var bins = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins)
+    private var dbs = [Float](repeating: -120, count: AudioAnalyzer.spectrumBins)
+    private var peak: Float = -40
+
+    mutating func update(_ power: [Float], binHz: Float, dt: Float, range: Float, release: Float, active: Bool) {
+        let count = bins.count
         let lo: Float = 30, hi: Float = 16000
         var frameMax: Float = -120
-        var dbs = [Float](repeating: -120, count: bins)
-        for i in 0..<bins {
-            let f0 = lo * pow(hi / lo, Float(i) / Float(bins))
-            let f1 = lo * pow(hi / lo, Float(i + 1) / Float(bins))
+        for i in 0..<count {
+            let f0 = lo * pow(hi / lo, Float(i) / Float(count))
+            let f1 = lo * pow(hi / lo, Float(i + 1) / Float(count))
             let a = max(1, Int(f0 / binHz)), b = max(a, min(power.count - 1, Int(f1 / binHz)))
             var sum: Float = 0
             for k in a...b { sum += power[k] }
@@ -195,17 +223,12 @@ final class AudioAnalyzer {
             dbs[i] = db
             frameMax = max(frameMax, db)
         }
-        spectrumPeak = max(frameMax, spectrumPeak - 2.5 * dt, -60)
-        for i in 0..<bins {
-            let v = active ? min(max((dbs[i] - (spectrumPeak - range)) / range, 0), 1) : 0
-            if v >= spectrum[i] || release <= 0 { spectrum[i] = v }
-            else { spectrum[i] += (v - spectrum[i]) * (1 - exp(-dt / max(release, 0.01))) }
+        peak = max(frameMax, peak - 2.5 * dt, -60)
+        for i in 0..<count {
+            let v = active ? min(max((dbs[i] - (peak - range)) / range, 0), 1) : 0
+            if v >= bins[i] || release <= 0 { bins[i] = v }
+            else { bins[i] += (v - bins[i]) * (1 - exp(-dt / max(release, 0.01))) }
         }
-        spectrumVersion &+= 1
-        os_unfair_lock_lock(&uiLock)
-        uiFeatures = features
-        for i in 0..<bins { uiSpectrum[i] = spectrum[i] }
-        os_unfair_lock_unlock(&uiLock)
     }
 }
 
