@@ -35,7 +35,7 @@ struct LFODevice: View {
     }
 }
 
-/// A modulator in the Modulation section: an LFO or a Math.
+/// A modulator in the Modulation section: an LFO, a Math or a Macro.
 struct ModulatorDevice: View {
     let mod: ModulatorRuntime
     var accent: Color? = nil
@@ -44,6 +44,26 @@ struct ModulatorDevice: View {
         switch mod.type {
         case .lfo: LFODevice(mod: mod, accent: accent)
         case .math: MathDevice(mod: mod, accent: accent)
+        case .macro: MacroDevice(mod: mod, accent: accent)
+        }
+    }
+}
+
+/// A Macro, in the Modulation section: three knobs stacked vertically. Each knob is an output
+/// (in the inspector), so mapping it onto several knobs lets one knob control them all.
+struct MacroDevice: View {
+    @Environment(Engine.self) private var engine
+    @Bindable var mod: ModulatorRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        DevicePanel(title: mod.id, subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
+                    select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
+            VStack(spacing: 4) {
+                ForEach(mod.bank.params) { p in
+                    Knob(param: p, targetPath: "mod.\(mod.id).\(p.def.name)")
+                }
+            }
         }
     }
 }
@@ -202,7 +222,9 @@ struct OutputRow: View {
                 .frame(height: compact ? 4 : 6)
             Button { engine.mapSource = mapping ? nil : output.key } label: {
                 Image(systemName: mapping ? "scope" : "plus.circle")
-                    .font(.system(size: compact ? 9 : 11, weight: mapping ? .bold : .regular))
+                    .font(.system(size: compact ? 11 : 14, weight: mapping ? .bold : .regular))
+                    .frame(width: compact ? 12 : 16, height: compact ? 12 : 16)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(mapping ? Theme.modulation : Theme.textDim)
@@ -614,8 +636,8 @@ struct StreamSocket: View {
         let hover = engine.dropKnob == input.key
         let highlight = mapMode || hover
         Group {
-            if mapMode, let waiting = engine.mapSource {
-                Button { engine.addMapping(source: waiting, target: input.key); engine.mapSource = nil } label: { chip(source) }
+            if mapMode {
+                Button { engine.mapWaiting(to: input.key) } label: { chip(source) }
                     .buttonStyle(.plain)
             } else {
                 Menu {

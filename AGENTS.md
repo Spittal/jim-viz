@@ -53,7 +53,8 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | audio | Audio In · Audio Out | Clock · Audio |
 | clock | Clock · Sync | LFO · Sync |
 
-- A value mapping is additive: `value = base + amount × curve(signal) × span`.
+- A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%
+  and an invert toggle for the minus.
 - A stream input (video, spectrum or palette) takes one stream; mapping another replaces it.
 - **Add a new kind when the data isn't a 0–1 scalar**; don't squeeze it into a value.
 - Shaders declare their inputs in comments, and the inputs appear as sockets.

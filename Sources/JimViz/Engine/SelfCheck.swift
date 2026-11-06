@@ -258,14 +258,25 @@ enum SelfCheck {
               m.isActive, m.amount == 0.25, fov.isModulated else { return "pulse → fov not mapped" }
         s1.modulate(f)
         guard abs(fov.live - fov.def.clamp(fov.base + 0.25 * fov.def.span)) < 0.01 else { return "modulation amount wrong: \(fov.live)" }
-        m.amount = -0.1
+        // Invert pushes the knob down by the amount instead.
+        m.amount = 0.1
+        m.invert = true
         s1.modulate(f)
-        guard abs(fov.live - fov.def.clamp(fov.base - 0.1 * fov.def.span)) < 0.01 else { return "negative amount wrong" }
+        guard abs(fov.live - fov.def.clamp(fov.base - 0.1 * fov.def.span)) < 0.01 else { return "inverted amount wrong" }
         guard abs(m.contribution + 0.1) < 0.001 else { return "mapping contribution wrong: \(m.contribution)" }
         // Settings survive structural edits.
         engine.addMapping(source: "clock.bar", target: "camera.roll")
-        guard engine.current?.mappings.first(where: { $0.target == "camera.fov" })?.amount == -0.1 else {
+        guard let kept = engine.current?.mappings.first(where: { $0.target == "camera.fov" }),
+              kept.amount == 0.1, kept.invert else {
             return "mapping settings lost on rebuild"
+        }
+        // Amounts are 0...1: a negative one is invalid, not quietly inverted.
+        if var bad = engine.currentSnapshot(), var list = bad.mappings, let i = list.firstIndex(where: { $0.target == "camera.fov" }) {
+            list[i].amount = -0.1
+            bad.mappings = list
+            guard engine.build(bad, reuse: nil) == nil, engine.errors["mapping"] != nil else { return "negative amount built" }
+        } else {
+            return "no scene snapshot"
         }
 
         // MIDI Input: while learning, controls moved on its device become outputs,
@@ -1560,6 +1571,12 @@ enum SelfCheck {
             print("ok   math (starts unmapped, no sync input, ops, value in through a mapping, unknown modulator fails)")
         }
 
+        if let problem = checkMacro(engine: engine) {
+            print("FAIL macro: \(problem)"); failures += 1
+        } else {
+            print("ok   macro (starts unmapped, three outputs follow their knobs, one knob drives several, remap by menu and click keeps settings, paused outputs 0)")
+        }
+
         if let problem = checkCameras(engine: engine) {
             print("FAIL cameras: \(problem)"); failures += 1
         } else {
@@ -1757,6 +1774,92 @@ extension SelfCheck {
         var bad = file
         bad.modulators = [ModulatorSpec(type: "wobbler", id: "w")]
         guard engine.build(bad, reuse: nil) == nil, engine.errors["modulator"] != nil else { return "unknown modulator built" }
+        return nil
+    }
+
+    /// The Macro modulator: added unmapped, three knobs stacked, each its own 0...1 output, so
+    /// one knob mapped onto several drives them all.
+    static func checkMacro(engine: Engine) -> String? {
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-macro.json")
+        let file = SceneFile(name: "Self-check Macro", inputs: [], modulators: [],
+                             camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+        do { try file.write(to: url) } catch { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        let back = engine.currentURL
+        defer {
+            if let back { engine.load(back, animated: false) }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+        }
+        engine.load(url, animated: false)
+        engine.apply(.modulation, "macro")
+        engine.apply(.modulation, "lfo")
+        guard let scene = engine.current, let macro = scene.modulators.first(where: { $0.id == "macro" }),
+              macro.type == .macro else { return "macro not added" }
+        guard Tools.label(.modulation, "macro") == "Macro" else { return "macro label" }
+        guard macro.bank.params.map(\.def.name) == ["macro1", "macro2", "macro3"] else { return "macro knobs wrong" }
+        guard !scene.mappings.contains(where: { $0.target.hasPrefix("mod.macro.") || $0.source.hasPrefix("mod.macro.") }) else {
+            return "macro started mapped"
+        }
+        guard !scene.streamInputs.contains(where: { $0.key == "mod.macro.sync" }) else { return "macro has a sync input" }
+        let keys = ["mod.macro.macro1", "mod.macro.macro2", "mod.macro.macro3"]
+        let outs = keys.compactMap { k in scene.outputs.first { $0.key == k } }
+        guard outs.count == 3, outs.allSatisfy({ !$0.isBipolar && engine.kind(of: $0.key) == .value }) else {
+            return "macro outputs missing or not unipolar values"
+        }
+
+        var f = SignalFrame()
+        f.dt = 0
+        macro.bank["macro1"]!.setBase(0.3); macro.bank["macro2"]!.setBase(0.7); macro.bank["macro3"]!.setBase(1)
+        scene.modulate(f); scene.modulate(f)
+        guard zip(outs.map(\.value), [Float(0.3), 0.7, 1]).allSatisfy({ abs($0 - $1) < 1e-4 }) else {
+            return "macro outputs don't follow their knobs: \(outs.map(\.value))"
+        }
+
+        // One knob drives two: Macro 1 → LFO depth (up) and LFO phase (inverted, down).
+        engine.addMapping(source: "mod.macro.macro1", target: "mod.lfo.depth")
+        engine.addMapping(source: "mod.macro.macro1", target: "mod.lfo.phase")
+        guard let s2 = engine.current, let m2 = s2.modulators.first(where: { $0.id == "macro" }),
+              let lfo = s2.modulators.first(where: { $0.id == "lfo" }),
+              let toDepth = s2.mappings.first(where: { $0.target == "mod.lfo.depth" }),
+              let toPhase = s2.mappings.first(where: { $0.target == "mod.lfo.phase" }),
+              toDepth.isActive, toPhase.isActive else { return "macro mappings inactive (a knob named depth must take values)" }
+        toDepth.amount = 1
+        toPhase.amount = 0.5; toPhase.invert = true
+        lfo.bank["depth"]!.setBase(0); lfo.bank["phase"]!.setBase(1)
+        m2.bank["macro1"]!.setBase(0.4)
+        s2.modulate(f); s2.modulate(f)
+        guard abs(lfo.bank["depth"]!.live - 0.4) < 1e-3, abs(lfo.bank["phase"]!.live - 0.8) < 1e-3 else {
+            return "macro didn't drive both knobs (depth \(lfo.bank["depth"]!.live), phase \(lfo.bank["phase"]!.live))"
+        }
+        // Remapping moves a mapping to another knob and keeps its settings.
+        engine.retargetMapping(toPhase, to: "mod.lfo.hz")
+        guard let s3 = engine.current, !s3.mappings.contains(where: { $0.target == "mod.lfo.phase" }),
+              let moved = s3.mappings.first(where: { $0.source == "mod.macro.macro1" && $0.target == "mod.lfo.hz" }),
+              moved.isActive, moved.amount == 0.5, moved.invert, s3.mappings.count == 2 else { return "remap lost the mapping or its settings" }
+        // Not onto a target it already feeds.
+        engine.retargetMapping(moved, to: "mod.lfo.depth")
+        guard engine.current?.mappings.contains(where: { $0.target == "mod.lfo.hz" }) == true else { return "remapped onto a duplicate" }
+        // Click to remap: the source waits like mapping, and the next knob clicked takes the mapping.
+        guard let waiting = engine.current?.mappings.first(where: { $0.target == "mod.lfo.hz" }) else { return "mapping lost" }
+        engine.startRemap(waiting)
+        guard engine.mapSource == "mod.macro.macro1", engine.remapping != nil else { return "remap mode not started" }
+        guard engine.knobClicked("mod.lfo.shape", keepMapping: true) else { return "remap click not used" }
+        guard let s4 = engine.current, engine.mapSource == nil, engine.remapping == nil,
+              !s4.mappings.contains(where: { $0.target == "mod.lfo.hz" }),
+              let clicked = s4.mappings.first(where: { $0.target == "mod.lfo.shape" }), clicked.invert, clicked.amount == 0.5,
+              s4.mappings.count == 2 else { return "click-to-remap didn't move the mapping once" }
+        // Mapping another output cancels a remap.
+        engine.startRemap(clicked)
+        engine.mapSource = "mod.macro.macro2"
+        guard engine.remapping == nil else { return "remap survived mapping another output" }
+        engine.mapSource = nil
+        // Paused, it outputs 0.
+        guard let m3 = engine.current?.modulators.first(where: { $0.id == "macro" }) else { return "macro lost" }
+        m3.enabled = false
+        engine.current?.modulate(f)
+        guard m3.outputs.allSatisfy({ $0.value == 0 }) else { return "paused macro still outputs" }
         return nil
     }
 }

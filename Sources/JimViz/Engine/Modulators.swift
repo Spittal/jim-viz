@@ -79,17 +79,29 @@ enum MathParams {
     }
 }
 
+/// Knobs of the Macro tool: three plain 0...1 knobs, each with its own output, so one knob can
+/// drive many others. The knobs are mappable too (a MIDI control or an LFO onto a macro).
+enum MacroParams {
+    static let count = 3
+    static let names = (1...count).map { "macro\($0)" }
+
+    static let defs: [ParamDef] = names.map { ParamDef(name: $0, defaultValue: 0, min: 0, max: 1, isInt: false) }
+}
+
 /// The modulator tools.
 enum ModulatorType: String {
     /// A low-frequency oscillator: bipolar, free running or synced to a Clock.
     case lfo
     /// Takes one value in through its `a` knob, does some math with `b`, and outputs the result.
     case math
+    /// Three knobs, each an output: one knob controls many.
+    case macro
 
     var defs: [ParamDef] {
         switch self {
         case .lfo: return LFOParams.defs
         case .math: return MathParams.defs
+        case .macro: return MacroParams.defs
         }
     }
 
@@ -97,11 +109,12 @@ enum ModulatorType: String {
         switch self {
         case .lfo: return "LFO"
         case .math: return "Math"
+        case .macro: return "Macro"
         }
     }
 }
 
-/// A modulator device in the chain: an LFO or a Math. Several can sit side by side.
+/// A modulator device in the chain: an LFO, a Math or a Macro. Several can sit side by side.
 @Observable
 final class ModulatorRuntime: Identifiable {
     let id: String
@@ -111,8 +124,11 @@ final class ModulatorRuntime: Identifiable {
     /// Whether Clock · Sync is mapped into its `mod.<id>.sync` input.
     private(set) var isSynced = false
     let bank: ParamBank
-    /// Its output, `mod.<id>.out`: bipolar (-1...1) for an LFO, 0...1 for Math.
-    @ObservationIgnored private(set) var output: OutputSignal!
+    /// Its outputs. LFO and Math have one, `mod.<id>.out`: bipolar (-1...1) for an LFO, 0...1
+    /// for Math. A Macro has one per knob, `mod.<id>.macro1`… (0...1).
+    @ObservationIgnored private(set) var outputs: [OutputSignal] = []
+    /// The first output, which LFO and Math scopes draw.
+    var output: OutputSignal { outputs[0] }
 
     @ObservationIgnored private var rEnabled: Bool
     /// The Clock it follows, through its Sync input. Set when the scene is built.
@@ -126,12 +142,21 @@ final class ModulatorRuntime: Identifiable {
         self.id = id; self.type = type; self.presetLabel = presetLabel
         rEnabled = enabled; self.enabled = enabled
         self.bank = bank
-        output = OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: type == .lfo) { [unowned self] f in
-            switch type {
-            case .lfo: return self.lfoValue(f)
-            case .math: return self.mathValue()
+        switch type {
+        case .lfo:
+            outputs = [OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: true) { [unowned self] f in self.lfoValue(f) }]
+        case .math:
+            outputs = [OutputSignal("mod.\(id).out", "Out", device: id) { [unowned self] _ in self.mathValue() }]
+        case .macro:
+            outputs = MacroParams.names.enumerated().map { i, name in
+                OutputSignal("mod.\(id).\(name)", "Macro \(i + 1)", device: id) { [unowned self] _ in self.macroValue(name) }
             }
         }
+    }
+
+    /// Render thread. The knob's value as of the previous frame (so mappings onto it count).
+    private func macroValue(_ name: String) -> Float {
+        rEnabled ? bank.live(name) : 0
     }
 
     /// Follows a Clock's beat, or runs free (nil). Called when the scene is built, from its mappings.

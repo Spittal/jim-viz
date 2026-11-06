@@ -101,8 +101,8 @@ struct Knob: View {
         let zeroN = def.min < 0 && def.max > 0 ? norm(0) : 0
         // The range modulation can reach: positive and negative amounts add up separately.
         let mods = mappings.filter { $0.isActive && $0.enabled }
-        let up = Double(mods.reduce(Float(0)) { $0 + max($1.amount, 0) })
-        let down = Double(mods.reduce(Float(0)) { $0 + min($1.amount, 0) })
+        let up = Double(mods.reduce(Float(0)) { $0 + max($1.signedAmount, 0) })
+        let down = Double(mods.reduce(Float(0)) { $0 + min($1.signedAmount, 0) })
         let modulated = !mods.isEmpty
         return Canvas { ctx, size in
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
