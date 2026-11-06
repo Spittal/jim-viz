@@ -202,7 +202,13 @@ final class Engine {
         didSet { UserDefaults.standard.set(showInspector, forKey: "inspector.visible") }
     }
     /// An output waiting to be mapped: the next knob clicked receives it.
-    var mapSource: String?
+    var mapSource: String? {
+        didSet { if remapping?.source != mapSource { remapping = nil } }
+    }
+    /// A mapping waiting to be moved: the next knob (or input) clicked becomes its target.
+    /// Set through `startRemap`, which also puts its source in `mapSource`, so knobs light up as
+    /// when mapping; cancelling or mapping something else clears it.
+    private(set) var remapping: MappingRuntime?
     /// The last knob clicked or turned, highlighted in the inspector.
     var selectedTarget: String?
     /// The device selected in the chain, by chain key (`audio`, `clock`, `mod.<id>`, `camera`,
@@ -703,6 +709,26 @@ final class Engine {
         selectedTarget = target
     }
 
+    /// Points a mapping at another input of the same kind, keeping its settings (amount, invert,
+    /// smooth, curve). A stream input takes one stream, so one already there is replaced.
+    func retargetMapping(_ m: MappingRuntime, to target: String) {
+        guard target != m.target else { return }
+        guard kind(of: target) == m.kind else {
+            info = "\(targetLabel(target)) takes \(kind(of: target).noun), not \(m.kind.noun)"; return
+        }
+        if sceneFile?.mappings?.contains(where: { $0.source == m.source && $0.target == target }) == true {
+            info = "Already mapped: \(sourceLabel(m.source)) → \(targetLabel(target))"; return
+        }
+        edit("Remapped \(sourceLabel(m.source)) → \(targetLabel(target))") { file in
+            var list = file.mappings ?? []
+            if m.kind.isStream { list.removeAll { $0.target == target } }
+            guard let i = list.firstIndex(where: { $0.source == m.source && $0.target == m.target }) else { return }
+            list[i].target = target
+            file.mappings = list
+        }
+        selectedTarget = target
+    }
+
     func removeMapping(_ m: MappingRuntime) {
         edit("Removed mapping") { $0.mappings?.removeAll { $0.source == m.source && $0.target == m.target } }
     }
@@ -715,12 +741,31 @@ final class Engine {
         current?.mappings.filter { $0.target == target } ?? []
     }
 
+    /// Waits for a click on a knob (or input of its kind) to move a mapping there. Again to cancel.
+    func startRemap(_ m: MappingRuntime) {
+        if remapping?.source == m.source && remapping?.target == m.target { mapSource = nil; return }
+        mapSource = m.source
+        remapping = m
+    }
+
+    /// Routes the output waiting to be mapped to a target: moves the mapping being remapped, or
+    /// adds a new one. Remapping ends after one target; `keepMapping` keeps adding.
+    func mapWaiting(to target: String, keepMapping: Bool = false) {
+        guard let source = mapSource else { return }
+        if let m = remapping {
+            retargetMapping(m, to: target)
+            mapSource = nil
+            return
+        }
+        addMapping(source: source, target: target)
+        if !keepMapping || kind(of: source).isStream { mapSource = nil }
+    }
+
     /// Clicked a knob: routes the output waiting to be mapped, if any, or selects the knob.
     /// Returns true if the click was used for mapping.
     func knobClicked(_ target: String, keepMapping: Bool) -> Bool {
         if let source = mapSource, kind(of: source) == .value {
-            addMapping(source: source, target: target)
-            if !keepMapping { mapSource = nil }
+            mapWaiting(to: target, keepMapping: keepMapping)
             return true
         }
         selectedTarget = target
@@ -996,7 +1041,7 @@ final class Engine {
             cameraLabel = nil
         }
 
-        // Modulation: LFOs and Maths.
+        // Modulation: LFOs, Maths and Macros.
         var modulators: [ModulatorRuntime] = []
         errors["modulator"] = nil
         for spec in file.modulators where !modulators.contains(where: { $0.id == spec.id }) {
@@ -1155,7 +1200,7 @@ final class Engine {
         if let cameraMotion {
             outputs += cameraMotion.outputs
         }
-        outputs += modulators.map(\.output)
+        outputs += modulators.flatMap(\.outputs)
 
         // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
         // until it is, so removing and re-adding a device keeps its mappings.
@@ -1232,6 +1277,7 @@ final class Engine {
             return "Unknown source \(source)"
         }
 
+        errors["mapping"] = nil
         for (i, spec) in (file.mappings ?? []).enumerated() {
             // Streams: a stream output into a stream input of the same kind.
             if let kind = streamsByKey[spec.source]?.kind ?? StreamOutput.kind(ofKey: spec.source) {
@@ -1261,6 +1307,10 @@ final class Engine {
                     sourceLabel: stream.map { "\($0.device) · \($0.name)" } ?? fallbackLabel,
                     targetLabel: input?.label ?? targetLabel(spec.target), problem: problem))
                 continue
+            }
+            if let amount = spec.amount, !(0...1).contains(amount) {
+                errors["mapping"] = "mapping \(spec.source) → \(spec.target): amount \(amount) is outside 0...1 (use invert)"
+                return nil
             }
             var problem: String?
             let output = outputsByKey[spec.source]

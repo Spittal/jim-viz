@@ -166,7 +166,7 @@ struct DeviceBrowser: View {
             case "picture": return "photo"
             default: return "waveform"
             }
-        case .modulation: return tool.name == "math" ? "function" : "waveform.path"
+        case .modulation: return tool.name == "math" ? "function" : tool.name == "macro" ? "dial.medium" : "waveform.path"
         case .camera: return CameraRig(rawValue: tool.name)?.icon ?? "camera.viewfinder"
         case .palette: return "paintpalette"
         case .generator:

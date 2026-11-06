@@ -85,7 +85,7 @@ enum Tools {
         }
         return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"),
                 tool(.input, "video"), tool(.input, "picture"),
-                tool(.modulation, "lfo"), tool(.modulation, "math")]
+                tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro")]
             + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + [tool(.palette, "palette")]
             + store.generatorTypes().map { tool(.generator, $0.name, category: $0.category) }
             + store.availableEffects().map { tool(.effect, $0) }

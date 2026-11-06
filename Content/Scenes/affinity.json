@@ -199,7 +199,8 @@
       "target" : "clock.audio"
     },
     {
-      "amount" : -0.8381274,
+      "amount" : 0.8381274,
+      "invert" : true,
       "source" : "clock.beat",
       "target" : "post.glow.amount"
     },
