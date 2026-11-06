@@ -226,6 +226,9 @@ final class RenderScene {
     /// Every stream output (video, spectrum, palette) and stream input in the chain, in chain order.
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
+    /// Every trigger input in the chain, in chain order: Clock · First Beat, Videos' Jump,
+    /// LFOs' Reset, the Cutter's Cut.
+    let triggerInputs: [TriggerInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
     let streamBindings: [String: StreamOutput]
     let camera: ParamBank?
@@ -285,6 +288,8 @@ final class RenderScene {
         effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
                                    uniquingKeysWith: { a, _ in a })
         usesPalette = palette != nil && streamBindings.values.contains { $0.kind == .palette }
+        triggerInputs = (clock.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
+            + modulators.compactMap(\.resetTrigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
@@ -312,7 +317,8 @@ final class RenderScene {
 
     /// Render thread, once per frame: runs its inputs (Audio In analyses, then the Clock
     /// advances, hearing that analysis if mapped), updates every output, then applies mappings
-    /// to every knob. Nothing here is shared with another scene.
+    /// to every knob and fires trigger inputs, and moves Videos to their in and out points
+    /// (and jumps). Nothing here is shared with another scene.
     func modulate(_ f: SignalFrame) {
         audioIn?.process(dt: f.dt)
         clock?.advance(f)
@@ -323,6 +329,7 @@ final class RenderScene {
             for p in bank.params { p.live = p.def.clamp(p.liveBase + p.modAccum) }
             bank.integrate(dt: f.dt)
         }
+        for v in videos { v.advanceTransport() }
     }
 }
 

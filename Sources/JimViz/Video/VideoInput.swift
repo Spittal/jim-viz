@@ -49,6 +49,8 @@ final class VideoManager {
 }
 
 /// A looping video file decoded to Metal textures, plus brightness and motion analysis.
+/// It plays between an in and an out point, set each frame by its Video input, and loops
+/// back to the in point at the out point.
 @Observable
 final class VideoFeed: VideoSourceFeed {
     enum Status: Equatable { case off, loading, playing, notFound, failed(String) }
@@ -69,6 +71,17 @@ final class VideoFeed: VideoSourceFeed {
 
     @ObservationIgnored private(set) var brightness: Float = 0
     @ObservationIgnored private(set) var motion: Float = 0
+
+    /// In and out points as fractions of the video's length. Render thread.
+    @ObservationIgnored private var range: ClosedRange<Double> = 0...1
+    /// Where playback is, 0...1 of the length, for the transport bar.
+    @ObservationIgnored private(set) var position: Float = 0
+    /// Length in seconds, once known.
+    @ObservationIgnored private var length: Double = 0
+    /// Counts seeks, so only the latest one's completion clears `seeking`. Plain fields read
+    /// without the lock from the seek's completion; a stale read only delays the next loop.
+    @ObservationIgnored private var seekID = 0
+    @ObservationIgnored private var seeking = false
 
     @ObservationIgnored let depth: DepthEstimator
     @ObservationIgnored var depthWanted = false {
@@ -127,9 +140,10 @@ final class VideoFeed: VideoSourceFeed {
         player = p
 
         if let obs = endObserver { NotificationCenter.default.removeObserver(obs) }
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: nil) { [weak p] _ in
-            p?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-            p?.play()
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: nil) { [weak self] _ in
+            self?.lock.lock()
+            self?.seekToIn()
+            self?.lock.unlock()
         }
     }
 
@@ -152,14 +166,12 @@ final class VideoFeed: VideoSourceFeed {
         defer { lock.unlock() }
 
         if let output = videoOutput, let p = player, wanted {
-            if let item = p.currentItem {
-                let dur = item.duration
-                if dur.isValid && !dur.isIndefinite && dur > .zero {
-                    if p.currentTime() >= dur {
-                        p.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                        p.play()
-                    }
-                }
+            if length <= 0, let dur = p.currentItem?.duration, dur.isNumeric, dur.seconds > 0 { length = dur.seconds }
+            if length > 0 {
+                let t = p.currentTime().seconds
+                position = Float(t / length)
+                // Past the out point, or before the in point after it moved: back to the in point.
+                if !seeking && (t >= range.upperBound * length || t < range.lowerBound * length - 0.05) { seekToIn() }
             }
 
             let itemTime = output.itemTime(forHostTime: CACurrentMediaTime())
@@ -170,6 +182,39 @@ final class VideoFeed: VideoSourceFeed {
             }
         }
         return frame
+    }
+
+    /// Render thread, each frame, from its Video's knobs: the in and out points, 0...1 of the
+    /// length. Out before in plays the span between them; they're kept at least 1% apart.
+    func setRange(in a: Float, out b: Float) {
+        var lo = Double(min(a, b)), hi = Double(max(a, b))
+        if hi - lo < 0.01 { hi = min(lo + 0.01, 1); lo = hi - 0.01 }
+        lock.lock(); range = lo...hi; lock.unlock()
+    }
+
+    /// Render thread: jumps to `u` (0...1) of the way between the in and out points.
+    func jump(to u: Float) {
+        lock.lock(); defer { lock.unlock() }
+        guard length > 0 else { return }
+        seek(to: (range.lowerBound + (range.upperBound - range.lowerBound) * Double(u)) * length)
+    }
+
+    /// Holding `lock`.
+    private func seekToIn() { seek(to: range.lowerBound * length) }
+
+    /// Holding `lock`.
+    private func seek(to seconds: Double) {
+        guard let p = player else { return }
+        seekID += 1
+        let id = seekID
+        seeking = true
+        position = Float(length > 0 ? seconds / length : 0)
+        // No lock here: a seek that replaces this one can complete it from inside `seek`.
+        p.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            guard let self, self.seekID == id else { return }
+            self.seeking = false
+        }
+        if wanted { p.play() }
     }
 
     private func receive(_ buffer: CVPixelBuffer) {
@@ -222,8 +267,17 @@ final class VideoFeed: VideoSourceFeed {
     }
 }
 
-/// A Video input in the scene's Inputs section. Loops a video file and processes it
-/// with the standard video knobs (framing, warp, color, background, depth).
+/// The Video input's transport knobs, after the video shader's: where in the file it loops.
+enum VideoTransport {
+    static let defs: [ParamDef] = [
+        ParamDef(name: "inPoint", defaultValue: 0, min: 0, max: 1, isInt: false, group: "Transport"),
+        ParamDef(name: "outPoint", defaultValue: 1, min: 0, max: 1, isInt: false, group: "Transport"),
+    ]
+}
+
+/// A Video input in the scene's Inputs section. Loops a video file between its in and out
+/// points and processes it with the standard video knobs (framing, warp, color, background,
+/// depth). Its Jump trigger input skips to a random spot between the in and out points.
 final class VideoRuntime: VideoSourceRuntime {
     let id: String
     let file: String?
@@ -239,6 +293,9 @@ final class VideoRuntime: VideoSourceRuntime {
     let depthPipeline: MTLRenderPipelineState?
     let depthHistory: MTLTexture
     var depthMapped = false
+    /// `video.<id>.jump`: each fire jumps to a random spot between the in and out points.
+    let jumpTrigger: TriggerInput
+    private var rng: UInt64 = 0x2545_F491_4F6C_DD1D
 
     var key: String { "video.\(id)" }
     var displayName: String {
@@ -251,11 +308,21 @@ final class VideoRuntime: VideoSourceRuntime {
         self.pipeline = pipeline; self.processed = processed
         self.depthPipeline = depthPipeline; self.depthHistory = depthHistory; self.depth = depth
         let label = file.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "Video"
+        jumpTrigger = TriggerInput("video.\(id).jump", "Jump")
         video = StreamOutput("video.\(id).video", "Video", device: label, texture: processed)
         depthVideo = StreamOutput("video.\(id).depth", "Depth", device: label, texture: depth)
         outputs = [
             OutputSignal("\(key).motion", "Motion", device: label) { [unowned feed] _ in feed.motion },
             OutputSignal("\(key).brightness", "Brightness", device: label) { [unowned feed] _ in feed.brightness },
         ]
+    }
+
+    /// Render thread, once per frame after mappings: hands the feed its in and out points, and
+    /// jumps when Jump fired.
+    func advanceTransport() {
+        feed.setRange(in: bank.live("inPoint"), out: bank.live("outPoint"))
+        guard jumpTrigger.take() else { return }
+        rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17
+        feed.jump(to: Float(rng >> 40) / Float(1 << 24))
     }
 }

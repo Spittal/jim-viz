@@ -15,9 +15,7 @@
       "rate" : 0,
       "rollRange" : 63.52295,
       "shake" : 0,
-      "shakeSpeed" : 1,
-      "threshold" : 0.09841357,
-      "trigger" : 0
+      "shakeSpeed" : 1
     },
     "type" : "cutter"
   },
@@ -119,9 +117,8 @@
       "target" : "clock.audio"
     },
     {
-      "amount" : 0.10064602,
-      "source" : "clock.bar",
-      "target" : "camera.trigger"
+      "source" : "clock.onBar",
+      "target" : "camera.cut"
     }
   ],
   "modulators" : [

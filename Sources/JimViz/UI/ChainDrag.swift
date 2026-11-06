@@ -45,8 +45,8 @@ extension View {
     func chainDragSource(_ drag: ChainDrag, engine: Engine) -> some View {
         onDrag {
             engine.activeDrag = drag
-            // Dragging a stream output enters map mode, which shows the inputs to drop on.
-            if case .output(let key) = drag, engine.kind(of: key).isStream {
+            // Dragging a stream or trigger output enters map mode, which shows the inputs to drop on.
+            if case .output(let key) = drag, engine.kind(of: key) != .value {
                 DispatchQueue.main.async { engine.mapSource = key }
             }
             return NSItemProvider(object: drag.token as NSString)
@@ -136,10 +136,11 @@ struct ChainDropDelegate: DropDelegate {
     private func resolve(_ location: CGPoint) -> ChainDropTarget? {
         guard let drag = engine.activeDrag else { return nil }
         if case .output(let source) = drag {
-            // Only inputs of the same kind: knobs take values, video inputs take video.
+            // Only inputs it connects to: knobs take values, video inputs take video, trigger
+            // inputs take triggers and values.
             let kind = engine.kind(of: source)
             let hit = frames.first {
-                $0.key.hasPrefix("knob:") && $0.value.contains(location) && engine.kind(of: String($0.key.dropFirst(5))) == kind
+                $0.key.hasPrefix("knob:") && $0.value.contains(location) && kind.connects(to: engine.kind(of: String($0.key.dropFirst(5))))
             }
             return hit.map { .knob(String($0.key.dropFirst(5))) }
         }
@@ -248,7 +249,7 @@ extension Engine {
             apply(kind, tool, preset: preset, replaceSelected: false)
         case (.output(let key), .knob(let target)):
             addMapping(source: key, target: target)
-            if mapSource == key, kind(of: key).isStream { mapSource = nil }
+            if mapSource == key, kind(of: key) != .value { mapSource = nil }
         default:
             break
         }

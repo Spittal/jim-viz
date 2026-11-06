@@ -112,11 +112,8 @@ enum CameraRig: String, CaseIterable {
             ] + wobble
         case .cutter:
             return [
-                // Automatic cuts per second; 0 cuts only on the trigger.
+                // Automatic cuts per second; 0 cuts only on its Cut trigger.
                 p("rate", 0.5, 0, 8, "Cuts"),
-                // Cuts each time this rises past `threshold`. Map a kick or Clock · Pulse here.
-                p("trigger", 0, 0, 1, "Cuts"),
-                p("threshold", 0.2, 0.01, 1, "Cuts"),
                 // Seconds to ease into the next shot; 0 is a hard cut.
                 p("glide", 0, 0, 2, "Cuts"),
                 p("minDistance", 3, 0.5, 40, "Shots"),
@@ -166,8 +163,8 @@ final class CameraMotion {
     /// Fly-through distance travelled.
     var travel: Float = 0
 
-    /// Cutter: the shot being left and the one being cut to, the glide between them, the
-    /// trigger's edge detector and the flash the `cut` output reads.
+    /// Cutter: the shot being left and the one being cut to, the glide between them, and the
+    /// flash the `flash` output reads.
     struct Shot {
         /// Radians round the target.
         var angle: Float = 0
@@ -182,8 +179,12 @@ final class CameraMotion {
     var to = Shot()
     var glide: Float = 1
     var sinceCut: Float = 0
-    var armed = true
     var cutFlash: Float = 0
+    /// Cutter: set on the frame it cuts, for its On Cut output.
+    private var didCut = false
+    /// The Cutter's Cut input (`camera.cut`): each fire cuts to a new shot. Kept across
+    /// rebuilds with the motion.
+    let cutTrigger = TriggerInput("camera.cut", "Cut")
     private var rng: UInt64 = 0x9E37_79B9_7F4A_7C15
 
     /// Outputs, 0...1, set by `advance`.
@@ -256,10 +257,7 @@ final class CameraMotion {
         case .cutter:
             sinceCut += dt
             cutFlash = max(cutFlash - dt * 4, 0)
-            let trigger = v("trigger"), threshold = v("threshold")
-            var cut = false
-            if armed && trigger > threshold { cut = true; armed = false }
-            if trigger < threshold * 0.5 { armed = true }
+            var cut = cutTrigger.take()
             let rate = v("rate")
             if rate > 0 && sinceCut >= 1 / rate { cut = true }
             if cut { cutTo(next: current) }
@@ -306,6 +304,7 @@ final class CameraMotion {
         glide = 0
         sinceCut = 0
         cutFlash = 1
+        didCut = true
     }
 
     /// 0..<1 from a xorshift, so cuts allocate nothing and never touch a global generator.
@@ -314,14 +313,23 @@ final class CameraMotion {
         return Float(rng >> 40) / Float(1 << 24)
     }
 
-    /// The camera's value outputs.
+    /// The camera's trigger inputs: the Cutter's Cut.
+    var triggerInputs: [TriggerInput] { rig == .cutter ? [cutTrigger] : [] }
+
+    /// The camera's value and trigger outputs.
     var outputs: [OutputSignal] {
         switch rig {
         case .orbit: return [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { _ in self.phaseOutput }]
         case .still: return []
         case .fly: return [OutputSignal("camera.progress", "Progress", device: "Camera") { _ in self.phaseOutput }]
         case .vertigo: return [OutputSignal("camera.zoom", "Zoom", device: "Camera") { _ in self.zoomOutput }]
-        case .cutter: return [OutputSignal("camera.cut", "Cut", device: "Camera") { _ in self.cutFlash }]
+        case .cutter: return [
+            OutputSignal.trigger("camera.onCut", "On Cut", device: "Camera") { _ in
+                defer { self.didCut = false }
+                return self.didCut
+            },
+            OutputSignal("camera.flash", "Cut Flash", device: "Camera") { _ in self.cutFlash },
+        ]
         case .lissajous: return [OutputSignal("camera.phase", "Phase", device: "Camera") { _ in self.phaseOutput }]
         }
     }

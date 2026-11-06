@@ -457,18 +457,24 @@ enum SelfCheck {
         }
 
         let cutter = CameraMotion(.cutter), cutterBank = bank(.cutter, ["rate": 0, "shake": 0, "drift": 0])
-        guard let cutOut = cutter.outputs.first(where: { $0.key == "camera.cut" }) else { return "cutter has no cut output" }
+        guard cutterBank["trigger"] == nil, cutterBank["threshold"] == nil,
+              cutter.triggerInputs.map(\.key) == ["camera.cut"], CameraMotion(.orbit).triggerInputs.isEmpty else {
+            return "cutter should have a Cut trigger input, not trigger and threshold knobs"
+        }
+        guard let flash = cutter.outputs.first(where: { $0.key == "camera.flash" }),
+              let onCut = cutter.outputs.first(where: { $0.key == "camera.onCut" }), onCut.kind == .trigger else {
+            return "cutter has no Cut Flash and On Cut outputs"
+        }
         let before = cutter.advance(cutterBank, frame: f).eye
-        cutterBank["trigger"]?.live = 1
+        cutter.cutTrigger.fire()
         let afterCut = cutter.advance(cutterBank, frame: f).eye
-        cutOut.update(SignalFrame())
-        guard afterCut != before, cutOut.value == 1 else { return "cutter didn't cut on the trigger" }
+        flash.update(SignalFrame()); onCut.update(SignalFrame())
+        guard afterCut != before, flash.value == 1, onCut.value == 1 else { return "cutter didn't cut on its Cut trigger" }
         let held = cutter.advance(cutterBank, frame: f).eye
-        guard held == afterCut else { return "cutter cut again while the trigger stayed high" }
-        cutterBank["trigger"]?.live = 0
-        _ = cutter.advance(cutterBank, frame: f)
-        cutterBank["trigger"]?.live = 1
-        guard cutter.advance(cutterBank, frame: f).eye != held else { return "cutter didn't re-arm" }
+        onCut.update(SignalFrame())
+        guard held == afterCut, onCut.value == 0 else { return "cutter cut again without a new fire" }
+        cutter.cutTrigger.fire()
+        guard cutter.advance(cutterBank, frame: f).eye != held else { return "cutter didn't cut on the second fire" }
 
         // Scenes: a new camera type loads with its outputs, an unknown one is an error.
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-camera.json")
@@ -487,7 +493,8 @@ enum SelfCheck {
         }
         guard write("cutter") else { return "could not write the test scene" }
         engine.load(url, animated: false)
-        guard engine.current?.cameraMotion?.rig == .cutter, engine.current?.outputs.contains(where: { $0.key == "camera.cut" }) == true,
+        guard engine.current?.cameraMotion?.rig == .cutter, engine.current?.outputs.contains(where: { $0.key == "camera.onCut" }) == true,
+              engine.current?.triggerInputs.map(\.key) == ["camera.cut"],
               engine.current?.mappings.isEmpty == true else { return "cutter scene didn't load with its output and no mappings" }
         guard write("dolly") else { return "could not write the test scene" }
         engine.load(url, animated: false)
@@ -1272,6 +1279,18 @@ enum SelfCheck {
             print("ok   cameras (presets, poses, static, orbit snap, cutter trigger, unknown type fails)")
         }
 
+        if let problem = checkTriggers(engine: engine) {
+            print("FAIL triggers: \(problem)"); failures += 1
+        } else {
+            print("ok   triggers (typed, start unmapped, values fire past ½, clock events, LFO reset, cutter, first beat)")
+        }
+
+        if let problem = checkVideoTransport(engine: engine) {
+            print("FAIL video transport: \(problem)"); failures += 1
+        } else {
+            print("ok   video transport (in/out knobs unpacked, loops between in and out, jump lands inside, starts unmapped)")
+        }
+
         if let problem = checkStreams(engine: engine) {
             print("FAIL streams: \(problem)"); failures += 1
         } else {
@@ -1540,5 +1559,198 @@ extension Engine {
                                    bytesPerRow: w * 4, bitsPerPixel: 32)!
         _ = bytes.withUnsafeBytes { memcpy(rep.bitmapData!, $0.baseAddress!, w * h * 4) }
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+
+extension SelfCheck {
+    /// Trigger IO: trigger inputs take triggers and values, knobs don't take triggers, nothing
+    /// is mapped into a trigger by itself, a value fires once each time it rises past ½, the
+    /// Clock's On Beat fires once a beat, and LFO Reset and Clock First Beat do what they say.
+    static func checkTriggers(engine: Engine) -> String? {
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-triggers.json")
+        let file = SceneFile(name: "Self-check Triggers", inputs: [InputSpec(type: "clock")],
+                             modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["shape": 4, "hz": 2]),
+                                          ModulatorSpec(type: "lfo", id: "slow", params: ["hz": 0.1])],
+                             camera: CameraSlot(type: "cutter", params: ["rate": 0]), palette: nil, generator: nil,
+                             effects: [], mappings: [])
+        do { try file.write(to: url) } catch { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        let back = engine.currentURL
+        defer {
+            if let back { engine.load(back, animated: false) }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+        }
+        engine.load(url, animated: false)
+        guard let scene = engine.current else { return "test scene didn't load" }
+        guard Set(scene.triggerInputs.map(\.key)) == ["clock.firstBeat", "mod.lfo.reset", "mod.slow.reset", "camera.cut"] else {
+            return "trigger inputs are \(scene.triggerInputs.map(\.key))"
+        }
+        guard scene.mappings.isEmpty else { return "something mapped itself" }
+        engine.apply(.modulation, "lfo")
+        guard engine.current?.mappings.isEmpty == true else { return "a new LFO mapped its Reset" }
+        engine.removeModulator(id: engine.current?.modulators.last?.id ?? "")
+        let triggerOuts = scene.outputs.filter { $0.kind == .trigger }.map(\.key)
+        guard Set(triggerOuts) == ["clock.onBeat", "clock.onBar", "clock.onPhrase", "camera.onCut"] else {
+            return "trigger outputs are \(triggerOuts)"
+        }
+
+        // Typed: triggers only into trigger inputs; values into knobs and triggers; streams neither.
+        engine.addMapping(source: "clock.onBeat", target: "camera.fov")
+        engine.addMapping(source: "clock.sync", target: "camera.cut")
+        guard engine.current?.mappings.isEmpty == true else { return "mapped a trigger onto a knob, or a stream onto a trigger" }
+        engine.addMapping(source: "mod.lfo.out", target: "camera.cut")
+        engine.addMapping(source: "clock.onBeat", target: "mod.slow.reset")
+        guard let s = engine.current, s.mappings.count == 2, s.mappings.allSatisfy({ $0.kind == .trigger && $0.isActive }),
+              s.mappings.allSatisfy({ $0.spec.amount == nil }) else {
+            return "value → trigger or trigger → trigger mapping missing, inactive or with settings: \(engine.current?.mappings.map { "\($0.source)>\($0.target) \($0.problem ?? "")" } ?? [])"
+        }
+        guard let cut = s.cameraMotion?.cutTrigger, let slow = s.modulators.first(where: { $0.id == "slow" }),
+              let clock = s.clock else { return "scene lost its devices" }
+
+        // Run 2 s at 60 fps, 120 BPM: the 2 Hz square LFO fires Cut 4 times, On Beat fires 4
+        // times, and each beat restarts the slow LFO, whose phase would otherwise only creep up.
+        clock.setManualBPM(120)
+        clock.manager.seek(beat: 0.5)
+        guard let onBeat = s.outputs.first(where: { $0.key == "clock.onBeat" }) else { return "no On Beat" }
+        var f = SignalFrame()
+        f.dt = 1 / 60
+        var beats = 0, cuts = 0, resets = 0
+        var lastPhase: Float = 0
+        let start = CACurrentMediaTime()
+        for i in 0..<120 {
+            f.now = start + Double(i) / 60
+            s.modulate(f)
+            if onBeat.value == 1 { beats += 1 }
+            if cut.take() { cuts += 1 }
+            if slow.currentPhase < lastPhase { resets += 1 }
+            lastPhase = slow.currentPhase
+        }
+        guard (3...5).contains(beats) else { return "On Beat fired \(beats) times in 4 beats" }
+        guard (3...5).contains(cuts) else { return "a 2 Hz square LFO fired Cut \(cuts) times in 2 s" }
+        guard resets >= 3 else { return "LFO Reset didn't restart the cycle (\(resets))" }
+
+        // A value fires once on the way up, not again while it stays high, again after it drops.
+        let gate = OutputSignal("test.gate", "Gate", device: "Test") { _ in 0 }
+        let target = TriggerInput("camera.cut", "Cut")
+        let m = MappingRuntime(id: "t", spec: MappingSpec(source: "test.gate", target: "camera.cut"), kind: .trigger,
+                               output: gate, param: nil, trigger: target, sourceLabel: "", targetLabel: "", problem: nil)
+        var fired = 0
+        for v: Float in [0.8, 0, 0.3, 0.6, 0.9, 1, 0.4, 0.6, 0.1, 0.7] {
+            gate.value = v
+            m.modulate(1 / 60)
+            if target.take() { fired += 1 }
+        }
+        guard fired == 2 else { return "a value fired \(fired) times (want 2: high at build doesn't fire, rises after dropping below ¼ do)" }
+
+        // First Beat, by trigger: the beat nearest the fire becomes a downbeat.
+        clock.manager.seek(beat: 2.9)
+        clock.firstBeatTrigger.fire()
+        f.now = CACurrentMediaTime()
+        s.modulate(f)
+        let phrase = clock.beat.truncatingRemainder(dividingBy: 32)
+        guard phrase < 0.5 || phrase > 31.5 else { return "First Beat trigger didn't set the downbeat (beat \(clock.beat))" }
+        return nil
+    }
+
+    /// A Video's in and out points are its own knobs, not packed for the shader; playback stays
+    /// between them; Jump lands between them; and its Jump starts unmapped. Plays a short
+    /// generated clip through AVPlayer in real time, so it takes a few seconds.
+    static func checkVideoTransport(engine: Engine) -> String? {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("jimviz-selfcheck-video", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let clip = dir.appendingPathComponent("clip.mov")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        if let problem = writeTestClip(to: clip, seconds: 4) { return problem }
+
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-video.json")
+        let file = SceneFile(name: "Self-check Video", inputs: [InputSpec(type: "video", id: "video", file: clip.path)],
+                             modulators: [], camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+        do { try file.write(to: url) } catch { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        let back = engine.currentURL
+        defer {
+            if let back { engine.load(back, animated: false) }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+        }
+        engine.load(url, animated: false)
+        guard let scene = engine.current, let video = scene.videos.first else { return "video scene didn't load" }
+        guard scene.mappings.isEmpty, scene.triggerInputs.map(\.key) == ["video.video.jump"] else { return "video's Jump missing or mapped" }
+        let bank = video.bank
+        guard let inP = bank["inPoint"], let outP = bank["outPoint"], bank.packedCount == bank.params.count - 2,
+              bank.packedDefs.allSatisfy({ $0.name != "inPoint" && $0.name != "outPoint" }) else {
+            return "in and out points missing, or packed for the shader"
+        }
+
+        let feed = video.feed
+        var f = SignalFrame()
+        f.dt = 1 / 60
+        /// Plays for `seconds`, returning the positions seen once any seek has settled.
+        func play(_ seconds: Double, settle: Double = 0.3) -> [Float] {
+            var seen: [Float] = []
+            let start = Date()
+            while Date().timeIntervalSince(start) < seconds {
+                f.now = CACurrentMediaTime()
+                scene.modulate(f)
+                _ = feed.latest()
+                if Date().timeIntervalSince(start) > settle { seen.append(feed.position) }
+                RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 60))
+            }
+            return seen
+        }
+        // Wait for it to load.
+        _ = play(1, settle: 1)
+        guard feed.status == .playing else { return "test clip didn't play: \(feed.status)" }
+        inP.setBase(0.5); outP.setBase(0.65)
+        let looped = play(1.5)
+        guard !looped.isEmpty, looped.allSatisfy({ $0 >= 0.48 && $0 <= 0.67 }) else {
+            return "playback left the in/out span 0.5–0.65: \(looped.min() ?? -1)…\(looped.max() ?? -1)"
+        }
+        guard Set(looped.map { ($0 * 100).rounded() }).count > 3 else { return "playback didn't move between the in and out points" }
+        inP.setBase(0.1); outP.setBase(0.9)
+        var landed: [Float] = []
+        for _ in 0..<4 {
+            video.jumpTrigger.fire()
+            landed.append(play(0.35, settle: 0.25).first ?? -1)
+        }
+        guard landed.allSatisfy({ $0 >= 0.09 && $0 <= 0.91 }) else { return "Jump landed outside the span: \(landed)" }
+        guard Set(landed.map { ($0 * 20).rounded() }).count > 1 else { return "Jump always landed in the same place: \(landed)" }
+        return nil
+    }
+
+    /// Writes a small H.264 clip of grey frames.
+    private static func writeTestClip(to url: URL, seconds: Int) -> String? {
+        try? FileManager.default.removeItem(at: url)
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else { return "could not make a test clip writer" }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64,
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64,
+        ])
+        writer.add(input)
+        guard writer.startWriting() else { return "test clip: \(writer.error?.localizedDescription ?? "can't write")" }
+        writer.startSession(atSourceTime: .zero)
+        let fps = 30
+        for i in 0..<(seconds * fps) {
+            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+            guard let pool = adaptor.pixelBufferPool else { return "test clip: no pixel buffer pool" }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            guard let buffer else { return "test clip: no pixel buffer" }
+            CVPixelBufferLockBaseAddress(buffer, [])
+            memset(CVPixelBufferGetBaseAddress(buffer), Int32(i * 255 / (seconds * fps)), CVPixelBufferGetDataSize(buffer))
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)))
+        }
+        input.markAsFinished()
+        let done = DispatchSemaphore(value: 0)
+        writer.finishWriting { done.signal() }
+        done.wait()
+        return writer.status == .completed ? nil : "test clip: \(writer.error?.localizedDescription ?? "not written")"
     }
 }

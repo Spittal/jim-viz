@@ -49,24 +49,40 @@ enum Wave {
 /// Keys: `audio.bass`, `clock.pulse`, `mod.lfo.out`, `camera.angle`. Each tool makes its own
 /// and computes it from its own state. `compute` runs on the render thread once per frame;
 /// `value` is read by the UI meters.
+///
+/// A trigger output (`kind` `.trigger`, made with `trigger`) is 1 on the frame its event
+/// happens and 0 otherwise; it maps onto trigger inputs only.
 final class OutputSignal: Identifiable {
     let key: String
     let name: String
     /// The device it belongs to, for grouping ("Audio In", "Clock", "lfo2").
     let device: String
     let isBipolar: Bool
+    /// `.value` or `.trigger`.
+    let kind: IOKind
     var id: String { key }
     private let compute: (SignalFrame) -> Float
     /// Latest value. Written on the render thread, read by the UI.
     var value: Float = 0
+    /// Trigger outputs: when it last fired (`SignalFrame.now`), for the UI's flash.
+    private(set) var lastFired: CFTimeInterval = -1
 
-    init(_ key: String, _ name: String, device: String, isBipolar: Bool = false, compute: @escaping (SignalFrame) -> Float) {
-        self.key = key; self.name = name; self.device = device; self.isBipolar = isBipolar; self.compute = compute
+    init(_ key: String, _ name: String, device: String, isBipolar: Bool = false, kind: IOKind = .value,
+         compute: @escaping (SignalFrame) -> Float) {
+        self.key = key; self.name = name; self.device = device; self.isBipolar = isBipolar; self.kind = kind
+        self.compute = compute
+    }
+
+    /// A trigger output: `fires` runs once per frame on the render thread and says whether the
+    /// event happened since the last frame.
+    static func trigger(_ key: String, _ name: String, device: String, fires: @escaping (SignalFrame) -> Bool) -> OutputSignal {
+        OutputSignal(key, name, device: device, kind: .trigger) { fires($0) ? 1 : 0 }
     }
 
     func update(_ f: SignalFrame) {
         let raw = compute(f)
         value = isBipolar ? min(max(raw, -1), 1) : min(max(raw, 0), 1)
+        if kind == .trigger && value > 0 { lastFired = f.now }
     }
 
     /// The device it belongs to, as a chain key: `audio`, `clock`, `mod.lfo`, `camera`.
@@ -218,7 +234,8 @@ final class MIDIInputRuntime: Identifiable {
 /// A value mapping (value output → knob) adds `amount × curve(signal) × range` on top of the
 /// knob, so the knob stays the base you set by hand; a negative amount pushes it down.
 /// A stream mapping (video, spectrum or palette output → an input of the same kind) just
-/// connects the stream; it has no settings.
+/// connects the stream; it has no settings. So does a trigger mapping (a trigger or value
+/// output → a trigger input), which fires its input as `TriggerInput` describes.
 ///
 /// UI-facing values are observed; each mirrors into a plain field the render thread reads.
 @Observable
@@ -231,6 +248,8 @@ final class MappingRuntime: Identifiable {
     @ObservationIgnored let output: OutputSignal?
     @ObservationIgnored let stream: StreamOutput?
     @ObservationIgnored let param: Param?
+    /// Trigger mappings: the input it fires.
+    @ObservationIgnored let trigger: TriggerInput?
     let sourceLabel: String
     let targetLabel: String
     /// Why the mapping is inactive, if it is.
@@ -246,6 +265,9 @@ final class MappingRuntime: Identifiable {
     @ObservationIgnored private var rSmooth: Float
     @ObservationIgnored private var rCurve: Float
     @ObservationIgnored private var state: Float = 0
+    /// Trigger mappings: whether the source has dropped low enough to fire again. Off at first,
+    /// so a source already high when the scene is built doesn't fire.
+    @ObservationIgnored private var armed = false
     /// What this mapping adds to its knob this frame, as a fraction of the knob's range
     /// (-1...1): amount × curve(signal), after smoothing. Written on the render thread.
     @ObservationIgnored private(set) var contribution: Float = 0
@@ -253,12 +275,12 @@ final class MappingRuntime: Identifiable {
     var isActive: Bool { problem == nil }
 
     init(id: String, spec: MappingSpec, kind: IOKind = .value, output: OutputSignal?, stream: StreamOutput? = nil,
-         param: Param?, sourceLabel: String, targetLabel: String, problem: String?) {
+         param: Param?, trigger: TriggerInput? = nil, sourceLabel: String, targetLabel: String, problem: String?) {
         self.id = id
         source = spec.source
         target = spec.target
         self.kind = kind
-        self.output = output; self.stream = stream; self.param = param
+        self.output = output; self.stream = stream; self.param = param; self.trigger = trigger
         self.sourceLabel = sourceLabel; self.targetLabel = targetLabel; self.problem = problem
         let e = spec.enabled ?? true, a = spec.amount ?? 0.25
         let sm = Swift.max(spec.smooth ?? 0, 0), c = Swift.max(spec.curve ?? 1, 0.1)
@@ -267,7 +289,7 @@ final class MappingRuntime: Identifiable {
     }
 
     var spec: MappingSpec {
-        if kind.isStream { return MappingSpec(source: source, target: target) }
+        if kind != .value { return MappingSpec(source: source, target: target) }
         var s = MappingSpec(source: source, target: target, amount: amount)
         if !enabled { s.enabled = false }
         if curve != 1 { s.curve = curve }
@@ -277,6 +299,12 @@ final class MappingRuntime: Identifiable {
 
     /// Render thread, once per frame, after outputs update.
     func modulate(_ dt: Float) {
+        if let trigger, let output {
+            let v = output.value
+            if armed && v >= 0.5 { trigger.fire(); armed = false }
+            else if v < 0.25 { armed = true }
+            return
+        }
         guard rEnabled, let output, let param else { contribution = 0; return }
         var v = output.value
         if rCurve != 1 {

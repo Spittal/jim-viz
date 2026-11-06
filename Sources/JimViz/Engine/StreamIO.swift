@@ -1,7 +1,9 @@
 import Metal
+import QuartzCore
 
-/// The kinds of IO. A value output (0...1, like `audio.kick`) maps onto knobs. The others are
-/// streams a device produces, each mapped onto one input of the same kind.
+/// The kinds of IO. A value output (0...1, like `audio.kick`) maps onto knobs. A trigger is an
+/// event (Clock · On Beat, Camera · On Cut) that fires a trigger input (Cutter · Cut, Video ·
+/// Jump). The others are streams a device produces, each mapped onto one input of the same kind.
 /// - video: a picture, like a webcam's feed.
 /// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1.
 /// - palette: a Palette's gradient, with its inputs applied.
@@ -11,17 +13,29 @@ import Metal
 /// into the Clock's Audio input; clock sync goes into modulators. Nothing reaches a shader,
 /// the Clock, or an LFO except through a mapping: no shared audio, clock or colors.
 enum IOKind: String {
-    case value, video, spectrum, palette, audio, clock
+    case value, trigger, video, spectrum, palette, audio, clock
 
-    var isStream: Bool { self != .value }
+    var isStream: Bool { self != .value && self != .trigger }
 
-    /// As written in messages: "video", "spectrum", "palette", "values", "clock".
-    var noun: String { self == .value ? "values" : rawValue }
+    /// Whether an output of this kind maps onto an input of `input`'s kind: the same kind, or a
+    /// value onto a trigger (it fires when the value rises past ½, so an LFO, a kick or a MIDI
+    /// pad can fire one).
+    func connects(to input: IOKind) -> Bool { self == input || (self == .value && input == .trigger) }
+
+    /// As written in messages: "video", "spectrum", "palette", "values", "triggers", "clock".
+    var noun: String {
+        switch self {
+        case .value: return "values"
+        case .trigger: return "triggers"
+        default: return rawValue
+        }
+    }
 
     /// SF Symbol for sockets and mappings.
     var icon: String {
         switch self {
         case .value: return "dial.medium"
+        case .trigger: return "bolt.fill"
         case .video: return "video"
         case .spectrum: return "waveform"
         case .palette: return "paintpalette"
@@ -31,7 +45,7 @@ enum IOKind: String {
     }
 
     /// The shader declaration that makes an input of this kind: `// @video name Label`.
-    /// Values, audio and clock have none.
+    /// Values, triggers, audio and clock have none.
     var directive: String? { isStream && self != .audio && self != .clock ? "// @\(rawValue) " : nil }
 }
 
@@ -113,4 +127,50 @@ struct StreamInput: Identifiable, Hashable {
     let kind: IOKind
     var id: String { key }
     var deviceKey: String { devicePath(key) }
+}
+
+/// A trigger input a tool declares: the Cutter camera's `camera.cut`, a Video's
+/// `video.<id>.jump`, an LFO's `mod.<id>.reset`. Something happens each time it fires.
+///
+/// Mapped outputs fire it: a trigger output on its event, a value output each time it rises
+/// past ½ (it has to fall below ¼ before it can fire again). Clicking its pad fires it by hand.
+/// Any number of outputs can be mapped onto one. The tool takes each fire once, on the render
+/// thread; a plain Bool shared with the UI, like `Param.live`.
+final class TriggerInput: Identifiable {
+    let key: String
+    let label: String
+    var id: String { key }
+    var deviceKey: String { devicePath(key) }
+    private var pending = false
+    /// When it last fired (`CACurrentMediaTime`), for the pad's flash.
+    private(set) var lastFired: CFTimeInterval = -1
+
+    init(_ key: String, _ label: String) { self.key = key; self.label = label }
+
+    /// Whether a key names a trigger input, from the key alone, for when its device isn't in
+    /// the scene: `camera.cut`, `clock.firstBeat`, `mod.<id>.reset`, `video.<id>.jump`.
+    static func isKey(_ key: String) -> Bool {
+        let parts = key.split(separator: ".")
+        switch (parts.first, parts.count) {
+        case ("camera", 2): return parts[1] == "cut"
+        case ("clock", 2): return parts[1] == "firstBeat"
+        case ("mod", 3): return parts[2] == "reset"
+        case ("video", 3): return parts[2] == "jump"
+        default: return false
+        }
+    }
+
+    /// Any thread: a mapping or a click.
+    func fire() {
+        pending = true
+        lastFired = CACurrentMediaTime()
+    }
+
+    /// Render thread, by the tool once per frame: true once for each fire (fires in the same
+    /// frame count as one).
+    func take() -> Bool {
+        guard pending else { return false }
+        pending = false
+        return true
+    }
 }

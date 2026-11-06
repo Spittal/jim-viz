@@ -679,15 +679,16 @@ final class Engine {
 
     // MARK: Mappings
 
-    /// Routes an output to an input of the same kind: a value output to a knob (a knob can take
-    /// any number), or a stream (video, spectrum, palette) to a stream input of that kind (each
-    /// takes one; mapping another replaces it).
+    /// Routes an output to an input it connects to: a value output to a knob (a knob can take
+    /// any number), a trigger or value output to a trigger input (any number too), or a stream
+    /// (video, spectrum, palette) to a stream input of that kind (each takes one; mapping
+    /// another replaces it).
     func addMapping(source: String, target: String) {
         let label = "\(sourceLabel(source)) → \(targetLabel(target))"
         let sourceKind = kind(of: source), targetKind = kind(of: target)
-        guard sourceKind == targetKind else {
-            info = sourceKind.isStream ? "\(sourceLabel(source)) is \(sourceKind.noun): map it onto a \(sourceKind.noun) input"
-                                       : "\(targetLabel(target)) takes \(targetKind.noun), not values"
+        guard sourceKind.connects(to: targetKind) else {
+            info = sourceKind == .value ? "\(targetLabel(target)) takes \(targetKind.noun), not values"
+                                        : "\(sourceLabel(source)) is \(sourceKind.noun): map it onto a \(sourceKind == .trigger ? "trigger" : sourceKind.noun) input"
             return
         }
         let stream = sourceKind.isStream
@@ -697,7 +698,7 @@ final class Engine {
         edit("Mapped \(label)") { file in
             var list = file.mappings ?? []
             if stream { list.removeAll { $0.target == target } }
-            list.append(stream ? MappingSpec(source: source, target: target) : MappingSpec(source: source, target: target, amount: 0.25))
+            list.append(targetKind == .value ? MappingSpec(source: source, target: target, amount: 0.25) : MappingSpec(source: source, target: target))
             file.mappings = list
         }
         selectedTarget = target
@@ -731,6 +732,7 @@ final class Engine {
     /// "Low Poly · explode", "glow2 · amount", "Low Poly · Background".
     func targetLabel(_ target: String) -> String {
         if let v = current?.streamInputs.first(where: { $0.key == target }) { return "\(deviceName(v.deviceKey)) · \(v.label)" }
+        if let t = current?.triggerInputs.first(where: { $0.key == target }) { return "\(deviceName(t.deviceKey)) · \(t.label)" }
         let parts = target.split(separator: ".").map(String.init)
         guard let name = parts.last else { return target }
         let device: String
@@ -909,13 +911,16 @@ final class Engine {
         addMapping(source: source, target: target)
     }
 
-    /// The kind of IO a key is: a stream output or input's kind, or a value (outputs and knobs).
+    /// The kind of IO a key is: a stream output or input's kind, a trigger (trigger inputs and
+    /// outputs), or a value (other outputs and knobs).
     func kind(of key: String) -> IOKind {
         if let scene = current {
             if let o = scene.streamOutputs.first(where: { $0.key == key }) { return o.kind }
             if let i = scene.streamInputs.first(where: { $0.key == key }) { return i.kind }
+            if scene.triggerInputs.contains(where: { $0.key == key }) { return .trigger }
+            if let o = scene.outputs.first(where: { $0.key == key }) { return o.kind }
         }
-        return StreamOutput.kind(ofKey: key) ?? .value
+        return StreamOutput.kind(ofKey: key) ?? (TriggerInput.isKey(key) ? .trigger : .value)
     }
 
     /// "Webcam · Video", "Audio In · Kick".
@@ -1115,9 +1120,9 @@ final class Engine {
                 if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
                 let old = reuse?.videos.first { $0.id == id }
                 if pipeline == nil, let old {
-                    defs = old.bank.params.map(\.def); pipeline = old.pipeline; depthPipeline = old.depthPipeline
+                    defs = old.bank.packedDefs; pipeline = old.pipeline; depthPipeline = old.depthPipeline
                 }
-                let bank = ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank)
+                let bank = ParamBank(defs: defs, unpacked: VideoTransport.defs, values: spec.params ?? [:], reuse: old?.bank)
                 let filePath = spec.file ?? spec.device
                 let feed = videos.feed(for: filePath, store: store)
                 let v = VideoRuntime(id: id, file: filePath, bank: bank, feed: feed,
@@ -1213,6 +1218,12 @@ final class Engine {
         }
         for fx in effects { for v in fx.inputs { streamInputs["post.\(fx.id).\(v.name)"] = ("\(fx.id) · \(v.label)", v.kind) } }
         var streamBindings: [String: StreamOutput] = [:]
+        // Trigger inputs, with their labels for mappings.
+        var triggers: [String: (input: TriggerInput, label: String)] = [:]
+        for t in cameraMotion?.triggerInputs ?? [] { triggers[t.key] = (t, "Camera · \(t.label)") }
+        for case .clock(let c) in inputs { triggers[c.firstBeatTrigger.key] = (c.firstBeatTrigger, "Clock · \(c.firstBeatTrigger.label)") }
+        for case .video(let v) in inputs { triggers[v.jumpTrigger.key] = (v.jumpTrigger, "\(v.displayName) · \(v.jumpTrigger.label)") }
+        for mod in modulators { if let t = mod.resetTrigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
 
         /// Why a source isn't available, when its device isn't in the chain.
         func missing(_ source: String) -> String {
@@ -1262,8 +1273,24 @@ final class Engine {
                     targetLabel: input?.label ?? targetLabel(spec.target), problem: problem))
                 continue
             }
-            var problem: String?
             let output = outputsByKey[spec.source]
+            // Triggers: a trigger or value output into a trigger input.
+            let trigger = triggers[spec.target]
+            if trigger != nil || TriggerInput.isKey(spec.target) || output?.kind == .trigger {
+                var problem: String?
+                if output == nil { problem = missing(spec.source) }
+                else if trigger == nil {
+                    problem = TriggerInput.isKey(spec.target) ? "\(targetLabel(spec.target)) isn't in this scene"
+                                                              : "Knobs take values, not triggers"
+                }
+                mappings.append(MappingRuntime(
+                    id: "\(i):\(spec.source)>\(spec.target)", spec: spec, kind: .trigger, output: problem == nil ? output : nil,
+                    param: nil, trigger: problem == nil ? trigger?.input : nil,
+                    sourceLabel: Outputs.label(spec.source, in: outputs),
+                    targetLabel: trigger?.label ?? targetLabel(spec.target), problem: problem))
+                continue
+            }
+            var problem: String?
             if let input = streamInputs[spec.target] { problem = "\(input.label) takes \(input.kind.noun), not values" }
             if output == nil { problem = missing(spec.source) }
             let parts = spec.target.split(separator: ".").map(String.init)

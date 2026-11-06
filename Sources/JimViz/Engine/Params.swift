@@ -111,12 +111,17 @@ final class Param: Identifiable {
 }
 
 /// An ordered set of params, packed in declaration order for shader uniforms.
+/// `unpacked` knobs follow the shader's: the tool reads them itself (a Video's in and out
+/// points), so they're left out of the uniforms.
 final class ParamBank {
     let params: [Param]
+    /// How many of `params`, from the start, are the shader's and packed for it.
+    let packedCount: Int
     private let byName: [String: Param]
 
-    init(defs: [ParamDef], values: [String: Float] = [:], reuse: ParamBank? = nil) {
-        params = defs.map { def in
+    init(defs: [ParamDef], unpacked: [ParamDef] = [], values: [String: Float] = [:], reuse: ParamBank? = nil) {
+        packedCount = defs.count
+        params = (defs + unpacked).map { def in
             // Keep the existing object when the definition is unchanged, so UI state survives reloads.
             if let old = reuse?[def.name], old.def == def {
                 if let v = values[def.name] { old.setBase(v) }
@@ -129,15 +134,21 @@ final class ParamBank {
         }
         byName = Dictionary(uniqueKeysWithValues: params.map { ($0.def.name, $0) })
         rateParams = params.filter(\.def.isRate)
-        packBuffer = [Float](repeating: 0, count: max(params.count + rateParams.count, 1))
+        packedRates = params.prefix(packedCount).filter(\.def.isRate)
+        packBuffer = [Float](repeating: 0, count: max(packedCount + packedRates.count, 1))
     }
 
     subscript(name: String) -> Param? { byName[name] }
 
     func live(_ name: String) -> Float { byName[name]?.live ?? 0 }
 
-    /// Params flagged `rate`, in declaration order; their phases follow the plain fields.
+    /// Params flagged `rate`, in declaration order.
     let rateParams: [Param]
+    /// The shader's rate params, whose phases follow its plain fields.
+    private let packedRates: [Param]
+
+    /// The shader's knob definitions, without the tool's own.
+    var packedDefs: [ParamDef] { params.prefix(packedCount).map(\.def) }
 
     /// Scratch for `withPacked`, so packing a bank each frame allocates nothing.
     private var packBuffer: [Float]
@@ -151,8 +162,8 @@ final class ParamBank {
     /// none): every param in order, then each rate param's phase. As bytes for
     /// `setFragmentBytes`. Render thread only.
     func withPacked(_ body: (UnsafeRawPointer, Int) -> Void) {
-        for i in params.indices { packBuffer[i] = params[i].live }
-        for i in rateParams.indices { packBuffer[params.count + i] = Float(rateParams[i].phase) }
+        for i in 0..<packedCount { packBuffer[i] = params[i].live }
+        for i in packedRates.indices { packBuffer[packedCount + i] = Float(packedRates[i].phase) }
         packBuffer.withUnsafeBytes { body($0.baseAddress!, $0.count) }
     }
 

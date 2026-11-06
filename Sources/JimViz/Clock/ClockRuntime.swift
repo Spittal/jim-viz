@@ -16,7 +16,8 @@ enum ClockParams {
 
 /// The Clock tool in a scene: a beat clock at a typed tempo that follows audio only when Audio
 /// In · Audio Out is mapped into its Audio input. Its outputs are the beat as values (Pulse,
-/// Beat, Bar, Phrase) and as a Sync stream that LFOs follow when mapped.
+/// Beat, Bar, Phrase), as triggers (On Beat, On Bar, On Phrase) and as a Sync stream that LFOs
+/// follow when mapped. Its First Beat trigger input sets the downbeat, like its button.
 ///
 /// Switching scenes, the incoming Clock picks up the outgoing one's beat and tempo on its first
 /// frame, so the beat never jumps. Status is refreshed for the UI at UI rate.
@@ -26,6 +27,8 @@ final class ClockRuntime {
     @ObservationIgnored let manager: ClockManager
     @ObservationIgnored private(set) var outputs: [OutputSignal] = []
     @ObservationIgnored private(set) var syncOutput: StreamOutput!
+    /// `clock.firstBeat`: each fire is a press of First Beat, at the moment it fired.
+    @ObservationIgnored let firstBeatTrigger = TriggerInput("clock.firstBeat", "First Beat")
     /// The Audio In it follows, when mapped. Set when the scene is built.
     @ObservationIgnored private(set) var audioSource: AudioInRuntime?
     /// The previous scene's Clock, whose beat this one takes over on its first frame.
@@ -56,9 +59,22 @@ final class ClockRuntime {
             out("beat", "Beat Ramp") { Float($0 - floor($0)) },
             out("bar", "Bar Ramp") { let x = $0 / 4; return Float(x - floor(x)) },
             out("phrase", "Phrase Ramp") { let x = $0 / 32; return Float(x - floor(x)) },
+            every(1, "onBeat", "On Beat"),
+            every(4, "onBar", "On Bar"),
+            every(32, "onPhrase", "On Phrase"),
         ]
         syncOutput = StreamOutput(StreamOutput.clockSyncKey, "Sync", device: d, kind: .clock)
         refresh()
+    }
+
+    /// A trigger output that fires each time the beat count crosses a multiple of `beats`.
+    private func every(_ beats: Double, _ name: String, _ label: String) -> OutputSignal {
+        var last = Double.nan
+        return OutputSignal.trigger("clock.\(name)", label, device: "Clock") { [unowned self] _ in
+            let n = floor(self.manager.beat / beats)
+            defer { last = n }
+            return n != last && !last.isNaN
+        }
     }
 
     /// Continuous beat count. Render thread.
@@ -76,6 +92,7 @@ final class ClockRuntime {
             manager.continueBeat(from: c.manager)
             continuing = nil
         }
+        if firstBeatTrigger.take() { manager.firstBeat(at: firstBeatTrigger.lastFired) }
         manager.latencyMs = Double(bank.live("latency"))
         let lo = Double(bank.live("minBPM")), hi = Double(bank.live("maxBPM"))
         manager.audioTempo.minBPM = min(lo, hi)
@@ -105,5 +122,5 @@ final class ClockRuntime {
     func setManualBPM(_ v: Double) { manager.manual.bpm = min(max(v, 40), 250) }
 
     /// The user pressed First Beat: the beat nearest this moment becomes bar 1, beat 1.
-    func firstBeat() { manager.firstBeat(at: CACurrentMediaTime()) }
+    func firstBeat() { firstBeatTrigger.fire() }
 }

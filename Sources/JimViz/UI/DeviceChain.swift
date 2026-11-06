@@ -81,7 +81,12 @@ struct DeviceChain: View {
                     if let cam = scene.camera {
                         DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera, key: "camera"), select: "camera",
                                     onClose: { engine.removeCamera() }) {
-                            KnobGrid(params: cam.params, prefix: "camera")
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let triggers = scene.cameraMotion?.triggerInputs, !triggers.isEmpty {
+                                    HStack(spacing: 4) { ForEach(triggers) { TriggerPad(scene: scene, input: $0) } }
+                                }
+                                KnobGrid(params: cam.params, prefix: "camera")
+                            }
                         }
                         .contextMenu {
                             Button("Remove", role: .destructive) { engine.removeCamera() }

@@ -81,7 +81,8 @@ enum MathParams {
 
 /// The modulator tools.
 enum ModulatorType: String {
-    /// A low-frequency oscillator: bipolar, free running or synced to a Clock.
+    /// A low-frequency oscillator: bipolar, free running or synced to a Clock. Its Reset
+    /// trigger input restarts its cycle.
     case lfo
     /// Takes one value in through its `a` knob, does some math with `b`, and outputs the result.
     case math
@@ -119,6 +120,10 @@ final class ModulatorRuntime: Identifiable {
     @ObservationIgnored private var syncClock: ClockRuntime?
     /// Free-running phase, integrated so changing `hz` never jumps.
     @ObservationIgnored private var freePhase: Double = 0
+    /// Synced: the Clock beat its cycles count from, moved by Reset.
+    @ObservationIgnored private var syncOrigin: Double = 0
+    /// LFOs: `mod.<id>.reset`, which restarts the cycle each time it fires.
+    @ObservationIgnored let resetTrigger: TriggerInput?
     /// Normalized phase (0...1) of the current cycle, read by UI WaveScope.
     @ObservationIgnored var currentPhase: Float = 0
 
@@ -126,6 +131,7 @@ final class ModulatorRuntime: Identifiable {
         self.id = id; self.type = type; self.presetLabel = presetLabel
         rEnabled = enabled; self.enabled = enabled
         self.bank = bank
+        resetTrigger = type == .lfo ? TriggerInput("mod.\(id).reset", "Reset") : nil
         output = OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: type == .lfo) { [unowned self] f in
             switch type {
             case .lfo: return self.lfoValue(f)
@@ -143,6 +149,7 @@ final class ModulatorRuntime: Identifiable {
     /// Continues a free-running phase from the device this one replaces after a chain edit.
     func continuePhase(from old: ModulatorRuntime) {
         freePhase = old.freePhase
+        syncOrigin = old.syncOrigin
         currentPhase = old.currentPhase
     }
 
@@ -161,10 +168,14 @@ final class ModulatorRuntime: Identifiable {
         }
         let shape = Int(bank.live("shape"))
         let phase = Double(bank.live("phase"))
+        if resetTrigger?.take() == true {
+            freePhase = 0
+            syncOrigin = syncClock?.beat ?? 0
+        }
         let x: Double
         if let clock = syncClock {
             let i = Swift.min(Swift.max(Int(bank.live("rate")), 0), LFOParams.rates.count - 1)
-            x = clock.beat / LFOParams.rates[i].beats
+            x = (clock.beat - syncOrigin) / LFOParams.rates[i].beats
         } else {
             freePhase += Double(f.dt * bank.live("hz"))
             x = freePhase

@@ -15,12 +15,13 @@ struct LFODevice: View {
                     accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
             VStack(alignment: .leading, spacing: 6) {
-                if let scene = engine.current, let socket = scene.streamInputs.first(where: { $0.key == "mod.\(mod.id).sync" }) {
-                    if isSyncWaiting || mod.isSynced {
-                        HStack(spacing: 4) {
+                if let scene = engine.current {
+                    HStack(spacing: 4) {
+                        if let reset = mod.resetTrigger { TriggerPad(scene: scene, input: reset) }
+                        if let socket = scene.streamInputs.first(where: { $0.key == "mod.\(mod.id).sync" }), isSyncWaiting || mod.isSynced {
                             StreamSocket(scene: scene, input: socket)
-                            Spacer()
                         }
+                        Spacer()
                     }
                 }
                 HStack(alignment: .top, spacing: 6) {
@@ -198,23 +199,32 @@ struct OutputRow: View {
                 .foregroundStyle(mapping ? Theme.modulation : Theme.text)
                 .lineLimit(1)
                 .frame(width: compact ? 66 : 82, alignment: .leading)
-            LiveMeter(output: output)
-                .frame(height: compact ? 4 : 6)
+            if output.kind == .trigger {
+                TriggerFlash(lastFired: { output.lastFired })
+                    .frame(height: compact ? 4 : 6)
+            } else {
+                LiveMeter(output: output)
+                    .frame(height: compact ? 4 : 6)
+            }
             Button { engine.mapSource = mapping ? nil : output.key } label: {
                 Image(systemName: mapping ? "scope" : "plus.circle")
                     .font(.system(size: compact ? 9 : 11, weight: mapping ? .bold : .regular))
             }
             .buttonStyle(.plain)
             .foregroundStyle(mapping ? Theme.modulation : Theme.textDim)
-            .help(mapping ? "Click a knob to map \(output.name) to it (Shift-click to map several). Click here to cancel."
-                          : "Map \(output.name): click this, then click a knob")
+            .help(output.kind == .trigger
+                  ? (mapping ? "Click a trigger input to map \(output.name) to it. Click here to cancel."
+                             : "Map \(output.name): click this, then a trigger input")
+                  : (mapping ? "Click a knob to map \(output.name) to it (Shift-click to map several). Click here to cancel."
+                             : "Map \(output.name): click this, then click a knob"))
         }
         .padding(.vertical, compact ? 0 : 2)
         .padding(.horizontal, mapping && !compact ? 4 : 0)
         .background(RoundedRectangle(cornerRadius: 3).fill(mapping && !compact ? Theme.modulation.opacity(0.15) : .clear))
         .contentShape(Rectangle())
         .chainDragSource(.output(output.key), engine: engine)
-        .help("\(output.device) · \(output.name). Drag onto a knob to map it.")
+        .help(output.kind == .trigger ? "\(output.device) · \(output.name), a trigger. Drag onto a trigger input to map it."
+                                      : "\(output.device) · \(output.name). Drag onto a knob or a trigger input to map it.")
     }
 }
 
@@ -471,6 +481,10 @@ struct VideoDevice: View {
                     .controlSize(.small)
                     .frame(width: 160)
                     .help("Which video file to loop")
+                    VideoTransportBar(video: video).frame(width: 160, height: 8)
+                    if let scene = engine.current {
+                        HStack(spacing: 4) { TriggerPad(scene: scene, input: video.jumpTrigger); Spacer(minLength: 0) }
+                    }
                     DepthPreview(source: video)
                 }
                 .frame(width: 160)
@@ -657,5 +671,87 @@ struct StreamSocket: View {
         .frame(height: 18)
         .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
         .contentShape(Rectangle())
+    }
+}
+
+/// A trigger input's pad, such as the Cutter's Cut or a Video's Jump. Click it to fire it by
+/// hand. While an output that can fire it is waiting to be mapped (a trigger, or a value, which
+/// fires it when it rises past ½), click it to map that output (Shift-click to keep mapping),
+/// or drop one on it. It flashes each time it fires, and names what's mapped into it.
+struct TriggerPad: View {
+    @Environment(Engine.self) private var engine
+    let scene: RenderScene
+    let input: TriggerInput
+
+    var body: some View {
+        let sources = scene.mappings.filter { $0.target == input.key }
+        let waiting = engine.mapSource.flatMap { engine.kind(of: $0).connects(to: .trigger) ? $0 : nil }
+        let hover = engine.dropKnob == input.key
+        Button {
+            if let waiting {
+                engine.addMapping(source: waiting, target: input.key)
+                if !NSEvent.modifierFlags.contains(.shift) { engine.mapSource = nil }
+            } else {
+                input.fire()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                TriggerFlash(lastFired: { input.lastFired }, icon: true)
+                Text(input.label).font(Theme.labelFont).foregroundStyle(Theme.text)
+                if !sources.isEmpty {
+                    Text(sources.count > 1 ? "\(sources.count) mapped" : sources[0].isActive ? sources[0].sourceLabel : "waiting")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.textDim)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.modulation, lineWidth: waiting != nil || hover ? (hover ? 2 : 1) : 0))
+        .chainFrame(ChainDropDelegate.knobKey(input.key))
+        .help(waiting != nil ? "Click to map \(engine.sourceLabel(waiting!)) onto \(input.label)"
+                             : "\(input.label): a trigger input. Click to fire it. Map a trigger, or a value that fires it when it rises past ½ (an LFO, a kick, a MIDI pad).")
+    }
+}
+
+/// Lights up for a moment each time something fires: a trigger output's meter, or a pad's bolt.
+struct TriggerFlash: View {
+    let lastFired: () -> CFTimeInterval
+    var icon = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            let flash = max(0, 1 - (CACurrentMediaTime() - lastFired()) / 0.25)
+            if icon {
+                Image(systemName: "bolt.fill").font(.system(size: 9))
+                    .foregroundStyle(flash > 0 ? Theme.modulation.opacity(0.4 + 0.6 * flash) : Theme.textDim)
+            } else {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(flash > 0 ? Theme.modulation.opacity(0.25 + 0.75 * flash) : Color(white: 0.1))
+            }
+        }
+    }
+}
+
+/// A Video's transport: the span between its in and out points, and where playback is.
+struct VideoTransportBar: View {
+    let video: VideoRuntime
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            let a = CGFloat(video.bank["inPoint"]?.display ?? 0), b = CGFloat(video.bank["outPoint"]?.display ?? 1)
+            let head = CGFloat(min(max(video.feed.position, 0), 1))
+            Canvas { ctx, size in
+                ctx.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 2), with: .color(Color(white: 0.1)))
+                let lo = min(a, b) * size.width, hi = max(a, b) * size.width
+                ctx.fill(Path(CGRect(x: lo, y: 0, width: max(hi - lo, 1), height: size.height)), with: .color(Theme.modulation.opacity(0.3)))
+                ctx.fill(Path(CGRect(x: head * size.width - 1, y: 0, width: 2, height: size.height)), with: .color(Theme.text))
+            }
+        }
+        .help("In and out points (the lit span) and the playhead. Set them with the in point and out point knobs.")
     }
 }

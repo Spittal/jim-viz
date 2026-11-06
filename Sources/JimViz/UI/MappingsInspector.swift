@@ -71,7 +71,7 @@ struct MappingsInspector: View {
     @ViewBuilder
     private var hint: some View {
         if let source = engine.mapSource {
-            banner("Click a knob to map \(Outputs.label(source, in: engine.current?.outputs ?? [])). Shift-click for several, Esc to finish.",
+            banner("Click a \(engine.kind(of: source) == .trigger ? "trigger input" : "knob") to map \(Outputs.label(source, in: engine.current?.outputs ?? [])). Shift-click for several, Esc to finish.",
                    color: Theme.modulation) { engine.mapSource = nil }
         } else if let input = engine.current?.learningMIDI {
             banner("Learning: move controls on \(engine.deviceName(input.key)) to add them as outputs. Esc to finish.",
@@ -168,7 +168,7 @@ private struct DeviceInspector: View {
                 OutputCard(scene: scene, output: output)
             }
             if !outputs.isEmpty || !streams.isEmpty {
-                Text("Click + then a knob (Shift-click for several), pick a knob from →, or drag an output onto a knob.")
+                Text("Click + then a knob or trigger (Shift-click for several), pick one from →, or drag an output onto one.")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -176,10 +176,17 @@ private struct DeviceInspector: View {
             }
         }
         let sockets = scene.streamInputs.filter { $0.deviceKey == key }
-        if !sockets.isEmpty {
+        let triggers = scene.triggerInputs.filter { $0.deviceKey == key }
+        if !sockets.isEmpty || !triggers.isEmpty {
             InspectorSection("Inputs", key: "video-in") {
                 ForEach(sockets) { StreamSocket(scene: scene, input: $0) }
-                empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs run free, and the Clock doesn't follow the audio.")
+                if !sockets.isEmpty {
+                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs run free, and the Clock doesn't follow the audio.")
+                }
+                ForEach(triggers) { t in HStack { TriggerPad(scene: scene, input: t); Spacer() } }
+                if !triggers.isEmpty {
+                    empty("Triggers fire from any number of outputs: a trigger (Clock · On Beat, Camera · On Cut) on its event, or a value each time it rises past ½ (an LFO, a kick, a MIDI pad). Click one to fire it by hand.")
+                }
             }
         }
         InspectorSection("Mapped Into \(engine.deviceName(key))", key: "incoming") {
@@ -278,7 +285,8 @@ private struct StreamOutputCard: View {
     }
 }
 
-/// Every knob in the scene, by device, for mapping an output without leaving the inspector.
+/// Every input in the scene an output can map onto, for mapping without leaving the inspector:
+/// knobs by device (values only), then trigger inputs.
 private struct MapToMenu: View {
     @Environment(Engine.self) private var engine
     let scene: RenderScene
@@ -286,7 +294,19 @@ private struct MapToMenu: View {
 
     var body: some View {
         Menu {
-            ForEach(scene.deviceKeys, id: \.self) { path in
+            if !scene.triggerInputs.isEmpty {
+                Section("Triggers") {
+                    ForEach(scene.triggerInputs) { t in
+                        let done = scene.mappings.contains { $0.source == output.key && $0.target == t.key }
+                        let label = engine.targetLabel(t.key)
+                        Button(done ? "✓ \(label)" : label) { engine.addMapping(source: output.key, target: t.key) }
+                            .disabled(done)
+                    }
+                }
+            } else if output.kind == .trigger {
+                Text("Nothing in the scene takes triggers")
+            }
+            ForEach(output.kind == .value ? scene.deviceKeys : [], id: \.self) { path in
                 if let bank = scene.banksByPath[path], !bank.params.isEmpty {
                     Menu(engine.deviceName(path)) {
                         ForEach(bank.params) { p in
@@ -306,7 +326,7 @@ private struct MapToMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Map \(output.name) to a knob")
+        .help(output.kind == .trigger ? "Map \(output.name) to a trigger input" : "Map \(output.name) to a knob or trigger input")
     }
 }
 
@@ -324,7 +344,7 @@ private struct MappingRow: View {
         let color = mapping.source.hasPrefix("midi.") ? Theme.midi : Theme.modulation
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                if mapping.kind.isStream {
+                if mapping.kind != .value {
                     Image(systemName: mapping.kind.icon).font(.system(size: 8)).foregroundStyle(color)
                 } else {
                     Button(action: toggleEnabled) {
@@ -354,7 +374,10 @@ private struct MappingRow: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.accent)
             }
-            if mapping.kind.isStream {
+            if mapping.kind == .trigger {
+                Text(engine.kind(of: mapping.source) == .trigger ? "Fires on each event" : "Fires each time it rises past ½")
+                    .font(.system(size: 10)).foregroundStyle(Theme.textDim)
+            } else if mapping.kind.isStream {
                 Text(mapping.kind.rawValue.capitalized).font(.system(size: 10)).foregroundStyle(Theme.textDim)
             } else {
             ContributionMeter(mapping: mapping, color: color)
