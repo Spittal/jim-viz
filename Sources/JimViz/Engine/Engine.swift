@@ -1394,6 +1394,12 @@ final class Engine {
         for mod in modulators {
             mod.sync(to: streamBindings["mod.\(mod.id).sync"] != nil ? clock : nil)
         }
+        // A shader's rate knobs follow the Clock only while Sync is mapped into its clock input.
+        func synced(_ prefix: String, _ inputs: [StreamInputDef]) -> ClockRuntime? {
+            inputs.contains { $0.kind == .clock && streamBindings["\(prefix).\($0.name)"] != nil } ? clock : nil
+        }
+        for gen in generators { gen.bank.syncClock = synced(gen.key, gen.inputs) }
+        for fx in effects { fx.bank.syncClock = synced("post.\(fx.id)", fx.inputs) }
 
         return RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
                            streamOutputs: streamOutputs, streamBindings: streamBindings,

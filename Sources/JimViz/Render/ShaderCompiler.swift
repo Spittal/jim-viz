@@ -13,9 +13,9 @@ struct CompiledShader {
     let params: [ParamDef]
     /// Set by a `// @history self` line: texture(1) is the effect's own previous output.
     let selfHistory: Bool
-    /// Inputs from `// @video`, `// @spectrum` and `// @palette` lines, in declaration order.
-    /// Generators read them from texture(0) up, effects from texture(2) up; bit n of
-    /// `f.inputs` is set when the input at texture(n) is connected.
+    /// Inputs from `// @video`, `// @spectrum`, `// @palette` and `// @clock` lines, in
+    /// declaration order. Generators read the textures from texture(0) up, effects from
+    /// texture(2) up; bit n of `f.inputs` is set when the input at texture(n) is connected.
     var inputs: [StreamInputDef] = []
     /// Generators: the mesh named by a `// @mesh` line.
     var mesh: MeshShape?

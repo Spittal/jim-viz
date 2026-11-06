@@ -133,6 +133,7 @@ final class ParamBank {
             return p
         }
         byName = Dictionary(uniqueKeysWithValues: params.map { ($0.def.name, $0) })
+        syncedBeat = reuse?.syncedBeat
         rateParams = params.filter(\.def.isRate)
         packedRates = params.prefix(packedCount).filter(\.def.isRate)
         packBuffer = [Float](repeating: 0, count: max(packedCount + packedRates.count, 1))
@@ -153,9 +154,31 @@ final class ParamBank {
     /// Scratch for `withPacked`, so packing a bank each frame allocates nothing.
     private var packBuffer: [Float]
 
-    /// Render thread, once per frame after `live` is set: advances every rate param's phase.
+    /// The Clock its rate params follow, while Clock · Sync is mapped into its shader's clock
+    /// input. Set when the scene is built, from its mappings.
+    var syncClock: ClockRuntime?
+    /// Synced: the Clock's beat as of the last frame. Nil until the first synced frame.
+    private var syncedBeat: Double?
+    /// Synced, a rate knob's second lasts this many beats, so nothing changes speed at 120 BPM.
+    static let beatsPerSyncedSecond = 2.0
+
+    /// Render thread, once per frame after `live` is set: advances every rate param's phase,
+    /// by `dt`, or synced by how far the Clock's beat moved (so a tap of First Beat moves the
+    /// phases with it). The first synced frame sets each phase to where it would be had its
+    /// knob been held since beat 0, which lines it up with the beat.
     func integrate(dt: Float) {
-        for p in rateParams { p.phase += Double(p.live * dt) }
+        guard let clock = syncClock else {
+            syncedBeat = nil
+            for p in rateParams { p.phase += Double(p.live * dt) }
+            return
+        }
+        let seconds = clock.beat / Self.beatsPerSyncedSecond
+        if let last = syncedBeat {
+            for p in rateParams { p.phase += Double(p.live) * (seconds - last / Self.beatsPerSyncedSecond) }
+        } else {
+            for p in rateParams { p.phase = Double(p.live) * seconds }
+        }
+        syncedBeat = clock.beat
     }
 
     /// Live values packed to match the generated Metal `Params` struct (one 0 when there are
