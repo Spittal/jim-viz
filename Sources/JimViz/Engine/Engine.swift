@@ -57,7 +57,7 @@ final class Engine {
     @ObservationIgnored var offlineTime: Double = 0
 
     private enum CacheEntry {
-        case generator(CompiledShader, mesh: MTLRenderPipelineState, background: MTLRenderPipelineState)
+        case generator(CompiledShader, mesh: MTLRenderPipelineState, blend: MTLRenderPipelineState?, background: MTLRenderPipelineState)
         case effect(CompiledShader, MTLRenderPipelineState)
         case webcam(CompiledShader, MTLRenderPipelineState, depth: MTLRenderPipelineState)
     }
@@ -955,7 +955,7 @@ final class Engine {
         for slot in file.allGenerators {
             let slotKey = slot.id == nil ? "generator" : "generator.\(slot.id!)"
             let slotId = slot.id ?? "generator"
-            guard case let .generator(shader, meshPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
+            guard case let .generator(shader, meshPipe, blendPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
                 return nil
             }
             guard let mesh = shader.mesh else {
@@ -967,7 +967,7 @@ final class Engine {
             let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil)
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
-                                               mesh: mesh, bank: bank, meshPipeline: meshPipe, backgroundPipeline: bgPipe,
+                                               mesh: mesh, bank: bank, meshPipeline: meshPipe, blendPipeline: blendPipe, backgroundPipeline: bgPipe,
                                                inputs: shader.inputs, device: renderer.device,
                                                reusing: old?.type == slot.type ? old : nil))
         }
@@ -1342,7 +1342,7 @@ final class Engine {
             let entry: CacheEntry
             if generator {
                 let p = try renderer.makeGeneratorPipelines(shader)
-                entry = .generator(shader, mesh: p.mesh, background: p.background)
+                entry = .generator(shader, mesh: p.mesh, blend: p.blend, background: p.background)
             } else {
                 entry = .effect(shader, try renderer.makeEffectPipeline(shader))
             }

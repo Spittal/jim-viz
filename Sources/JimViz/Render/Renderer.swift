@@ -16,6 +16,9 @@ final class GeneratorRuntime: Identifiable {
     let mesh: MeshShape
     let bank: ParamBank
     let meshPipeline: MTLRenderPipelineState
+    /// From `gen_fragment_blend`, if the shader has one: draws the mesh blended into what's
+    /// already there, for the `intersection` knob's modes past Comp.
+    let blendPipeline: MTLRenderPipelineState?
     let backgroundPipeline: MTLRenderPipelineState
     /// Declared with `// @video`, `// @spectrum`, `// @palette`; bound from texture(0) up.
     let inputs: [StreamInputDef]
@@ -33,11 +36,11 @@ final class GeneratorRuntime: Identifiable {
 
     /// Builds the mesh for the bank's current mesh knobs, or carries on `old`'s when it draws the same mesh.
     init(id: String, key: String, type: String, preset: String?, label: String?, mesh: MeshShape, bank: ParamBank,
-         meshPipeline: MTLRenderPipelineState, backgroundPipeline: MTLRenderPipelineState,
+         meshPipeline: MTLRenderPipelineState, blendPipeline: MTLRenderPipelineState?, backgroundPipeline: MTLRenderPipelineState,
          inputs: [StreamInputDef], device: MTLDevice, reusing old: GeneratorRuntime?) {
         self.id = id; self.key = key; self.type = type; self.preset = preset; self.label = label
         self.mesh = mesh; self.bank = bank; self.inputs = inputs
-        self.meshPipeline = meshPipeline; self.backgroundPipeline = backgroundPipeline
+        self.meshPipeline = meshPipeline; self.blendPipeline = blendPipeline; self.backgroundPipeline = backgroundPipeline
         if let old, old.mesh == mesh {
             (vertexBuffer, vertexCount, topology) = (old.vertexBuffer, old.vertexCount, old.topology)
         } else {
@@ -400,6 +403,8 @@ final class Renderer {
     }
     private let depthOn: MTLDepthStencilState
     private let depthOff: MTLDepthStencilState
+    /// Tests against depth without writing it: Intersection blend modes, which see through.
+    private let depthTestOnly: MTLDepthStencilState
 
     init(device: MTLDevice) {
         self.device = device
@@ -415,6 +420,10 @@ final class Renderer {
         off.depthCompareFunction = .always
         off.isDepthWriteEnabled = false
         depthOff = device.makeDepthStencilState(descriptor: off)!
+        let testOnly = MTLDepthStencilDescriptor()
+        testOnly.depthCompareFunction = .less
+        testOnly.isDepthWriteEnabled = false
+        depthTestOnly = device.makeDepthStencilState(descriptor: testOnly)!
         let bd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
         bd.usage = .shaderRead
         blackTexture = device.makeTexture(descriptor: bd)!
@@ -529,7 +538,8 @@ final class Renderer {
 
     // MARK: Pipeline factories (called on main when shaders compile)
 
-    func makeGeneratorPipelines(_ shader: CompiledShader) throws -> (mesh: MTLRenderPipelineState, background: MTLRenderPipelineState) {
+    func makeGeneratorPipelines(_ shader: CompiledShader) throws
+        -> (mesh: MTLRenderPipelineState, blend: MTLRenderPipelineState?, background: MTLRenderPipelineState) {
         let lib = shader.library
         guard let v = lib.makeFunction(name: "gen_vertex"), let f = lib.makeFunction(name: "gen_fragment") else {
             throw ShaderError(file: shader.url.lastPathComponent, message: "needs gen_vertex and gen_fragment functions")
@@ -556,7 +566,8 @@ final class Renderer {
             return try device.makeRenderPipelineState(descriptor: d)
         }
         do {
-            return (try pipe(v, f, blend: false), try pipe(bv, bf, blend: true))
+            let blend = try lib.makeFunction(name: "gen_fragment_blend").map { try pipe(v, $0) }
+            return (try pipe(v, f, blend: false), blend, try pipe(bv, bf, blend: true))
         } catch {
             throw ShaderError(file: shader.url.lastPathComponent, message: ShaderCompiler.summarize(error))
         }
@@ -774,8 +785,14 @@ final class Renderer {
                 }
                 enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
 
-                enc.setRenderPipelineState(gen.meshPipeline)
-                enc.setDepthStencilState(depthOn)
+                // Intersection past Comp blends into what's drawn, reading it back per sample.
+                if (gen.bank["intersection"]?.live ?? 0) > 0.5, let blend = gen.blendPipeline {
+                    enc.setRenderPipelineState(blend)
+                    enc.setDepthStencilState(depthTestOnly)
+                } else {
+                    enc.setRenderPipelineState(gen.meshPipeline)
+                    enc.setDepthStencilState(depthOn)
+                }
                 enc.setCullMode(.none)
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)

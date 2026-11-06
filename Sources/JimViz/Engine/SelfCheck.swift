@@ -862,6 +862,119 @@ enum SelfCheck {
         return nil
     }
 
+    /// Low Poly Instances layout (Grid, Cube), Brownian motion and Intersection blending, on a
+    /// scene built in memory: a static camera on the front, one geo, nothing mapped.
+    private static func checkInstancing(engine: Engine) -> String? {
+        func scene(_ geo: String, _ params: [String: Float]) -> RenderScene? {
+            let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0, "spikes": 0, "scale": 0.5]
+            let file = SceneFile(name: "instancing", inputs: [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 12, "y": 0, "z": 0, "fov": 55]),
+                                 palette: nil,
+                                 generator: GeneratorSlot(id: nil, type: geo, preset: nil, params: base.merging(params) { $1 }),
+                                 effects: [], mappings: [])
+            return engine.build(file, reuse: nil)
+        }
+        // Every geo gets the knobs, starting at Sphere, still and Comp, and the blend pipeline.
+        for geo in ["sphere", "torus", "plane", "cube", "shards", "wheel"] {
+            guard let s = scene(geo, [:]), let gen = s.generator else { return "\(geo) didn't build: \(engine.errorSummary ?? "")" }
+            guard gen.bank["layout"]?.def.labels == ["Sphere", "Grid", "Cube"], gen.bank["layout"]?.base == 0,
+                  gen.bank["columns"] != nil, gen.bank["brownian"]?.base == 0, gen.bank["brownianSpeed"]?.def.isRate == true,
+                  gen.bank["intersection"]?.def.labels == ["Comp", "Add", "Difference", "Burn"], gen.bank["intersection"]?.base == 0 else {
+                return "\(geo) instancing knobs or defaults wrong"
+            }
+            guard gen.blendPipeline != nil else { return "\(geo) has no Intersection blend pipeline" }
+            guard s.mappings.isEmpty, s.streamBindings.isEmpty else { return "\(geo) connected itself" }
+        }
+
+        // Grid and Cube: copies spread apart cover more of the frame than copies stacked up.
+        for layout: Float in [1, 2] {
+            guard let stacked = scene("cube", ["instances": 9, "layout": layout, "columns": 3, "spread": 0]),
+                  let spread = scene("cube", ["instances": 9, "layout": layout, "columns": 3, "spread": 1.5]) else { return "grid scene didn't build" }
+            _ = engine.renderOffscreen(stacked, frames: 1, snapshot: nil)
+            let a = engine.coverage(engine.renderer.history)
+            _ = engine.renderOffscreen(spread, frames: 1, snapshot: nil)
+            let b = engine.coverage(engine.renderer.history)
+            guard b.fraction > a.fraction * 3 else { return "layout \(Int(layout)) didn't spread copies: \(a.fraction) → \(b.fraction)" }
+            if layout == 1 {
+                // A flat 3 × 3 grid faces the camera: centred, as tall as it is wide.
+                guard abs(b.centroid.y - 0.5) < 0.02, abs(b.centroid.x - 0.5) < 0.02 else { return "grid not centred: \(b.centroid)" }
+            }
+        }
+
+        // Brownian: a single copy wanders off its place over time, and stays put without it.
+        for amount: Float in [0, 2] {
+            guard let s = scene("cube", ["brownian": amount, "brownianSpeed": 2]) else { return "brownian scene didn't build" }
+            _ = engine.renderOffscreen(s, frames: 1, snapshot: nil)
+            let start = engine.coverage(engine.renderer.history).centroid
+            _ = engine.renderOffscreen(s, frames: 60, snapshot: nil)
+            let end = engine.coverage(engine.renderer.history).centroid
+            let moved = simd_length(end - start)
+            if amount == 0, moved > 0.001 { return "copy moved without brownian: \(moved)" }
+            if amount > 0, moved < 0.01 { return "brownian didn't move the copy: \(moved)" }
+        }
+
+        // Intersection: four copies stacked on one spot. Add brightens the overlap, Difference
+        // and Burn darken it, against Comp.
+        var level: [Float] = []
+        for mode: Float in [0, 1, 2, 3] {
+            guard let s = scene("cube", ["instances": 4, "spread": 0, "intersection": mode]) else { return "intersection scene didn't build" }
+            let ms = engine.renderOffscreen(s, frames: 2, snapshot: nil)
+            if let e = engine.errorSummary { return "intersection \(Int(mode)): \(e)" }
+            if ms > 8 { return "intersection \(Int(mode)) took \(ms) ms/frame" }
+            let c = engine.averageColor(engine.renderer.history)
+            level.append(c.x + c.y + c.z)
+        }
+        guard level[1] > level[0] * 1.5, level[2] < level[0] * 0.7, level[3] < level[0] * 0.9 else {
+            return "intersection modes don't blend: comp \(level[0]), add \(level[1]), difference \(level[2]), burn \(level[3])"
+        }
+        return nil
+    }
+
+    /// The Composite effect, on a scene built in memory: its Layer starts unmapped and passes the
+    /// picture through; mapped to a video, each mode blends it in, and amount fades it.
+    private static func checkComposite(engine: Engine) -> String? {
+        func scene(_ mode: Float, amount: Float = 1, mapped: Bool = true, enabled: Bool = true) -> RenderScene? {
+            let file = SceneFile(name: "composite", inputs: [InputSpec(type: "video", id: "layer")], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
+                                 palette: nil,
+                                 generator: GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0]),
+                                 effects: [EffectSpec(effect: "composite", id: "composite", enabled: enabled,
+                                                      params: ["mode": mode, "amount": amount])],
+                                 mappings: mapped ? [MappingSpec(source: "video.layer.video", target: "post.composite.layer")] : [])
+            return engine.build(file, reuse: nil)
+        }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 64, height: 36, mipmapped: false)
+        d.usage = .shaderRead
+        guard let grey = engine.device.makeTexture(descriptor: d) else { return "no test texture" }
+        grey.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0,
+                     withBytes: [UInt8](repeating: 128, count: 64 * 36 * 4), bytesPerRow: 64 * 4)
+        func render(_ s: RenderScene?) -> SIMD3<Float>? {
+            guard let s else { return nil }
+            s.videos.first?.feed.inject(grey)
+            _ = engine.renderOffscreen(s, frames: 3, snapshot: nil)
+            return engine.averageColor(engine.renderer.history)
+        }
+        func sum(_ c: SIMD3<Float>) -> Float { c.x + c.y + c.z }
+
+        guard let unmapped = scene(0, mapped: false), unmapped.streamBindings.isEmpty,
+              unmapped.effects.first?.inputs.map(\.kind) == [.video] else { return "Layer should be one unmapped video input" }
+        guard let base = render(scene(0, mapped: false, enabled: false)), let through = render(unmapped) else { return "scene didn't build" }
+        guard simd_length(base - through) < 0.002 else { return "unmapped Layer changed the picture: \(base) → \(through)" }
+
+        guard let s = scene(0), let layerTex = s.videos.first?.processed, let comp = render(s) else { return "comp didn't build" }
+        let layer = engine.averageColor(layerTex)
+        guard sum(layer) > 0.3 else { return "layer video is black: \(layer)" }
+        guard simd_length(comp - layer) < 0.02 else { return "Comp isn't the layer: \(comp) vs \(layer)" }
+        guard let add = render(scene(1)), simd_length(add - (base + layer)) < 0.03 else { return "Add isn't picture + layer" }
+        // The layer is brighter than almost all the picture, so the difference is about layer − picture.
+        guard let diff = render(scene(2)), simd_length(diff - (layer - base)) < 0.04, sum(diff) < sum(comp) - 0.05 else {
+            return "Difference isn't |picture − layer|"
+        }
+        guard let burn = render(scene(3)), sum(burn) < sum(base) else { return "Burn didn't darken" }
+        guard let off = render(scene(1, amount: 0)), simd_length(off - base) < 0.002 else { return "amount 0 still blends" }
+        return nil
+    }
+
     /// Edits a scene's chain in memory and checks the result. Nothing is saved.
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
@@ -935,7 +1048,9 @@ enum SelfCheck {
               Tools.cardinality(.input, "clock") == .one,
               Tools.cardinality(.camera, "orbit") == .one,
               Tools.cardinality(.palette, "palette") == .one,
-              Tools.cardinality(.generator, "torus") == .many else { return "tool cardinality incorrect" }
+              Tools.cardinality(.generator, "torus") == .many,
+              Tools.cardinality(.input, "video") == .many,
+              Tools.cardinality(.input, "picture") == .many else { return "tool cardinality incorrect" }
 
         // Optional camera and palette removal and rendering without them.
         engine.removeCamera()
@@ -1097,6 +1212,185 @@ enum SelfCheck {
             return "removing the webcam left its video or mapping active"
         }
         return nil
+    }
+
+    private static func checkVideoInput(engine: Engine) -> String? {
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        engine.load(url, animated: false)
+        defer { engine.load(url, animated: false) }
+        engine.apply(.input, "video")
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("video.") }) == false else {
+            return "new video mapped itself"
+        }
+        engine.addMapping(source: "video.video.video", target: "generator.texVideo")
+        guard let added = engine.current, let first = added.videos.first, first.key == "video.video",
+              added.streamBindings["generator.texVideo"] === first.video, engine.selectedDevice == "video.video",
+              added.mappings.first(where: { $0.source == "video.video.video" })?.kind == .video else {
+            return "video output not mapped into generator Texture"
+        }
+        guard !first.depthMapped, !first.feed.depthWanted,
+              added.streamOutputs.filter({ $0.deviceKey == "video.video" && $0.kind == .video }).map(\.name) == ["Video", "Depth"] else {
+            return "video depth outputs incorrect"
+        }
+        guard added.outputs.contains(where: { $0.key == "video.video.motion" }),
+              added.outputs.contains(where: { $0.key == "video.video.brightness" }) else {
+            return "video value outputs missing"
+        }
+
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 64, height: 36, mipmapped: false)
+        d.usage = .shaderRead
+        guard let blue = engine.device.makeTexture(descriptor: d) else { return "no test texture" }
+        let px = [UInt8](repeating: 0, count: 64 * 36 * 4).enumerated().map { $0.offset % 4 == 0 || $0.offset % 4 == 3 ? 255 : 0 }
+        blue.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0, withBytes: px.map(UInt8.init), bytesPerRow: 64 * 4)
+        first.feed.inject(blue)
+
+        guard let bg = first.bank["bg"] else { return "video has no bg knob" }
+        bg.setBase(1)
+        _ = engine.renderOffscreen(added, frames: 3, snapshot: nil)
+        let processed = engine.averageColor(first.processed)
+        guard processed.z > 0.8, processed.x < 0.2 else { return "processed video not blue: \(processed)" }
+
+        engine.addMapping(source: "video.video.motion", target: "generator.spin")
+        guard engine.current?.mappings.first(where: { $0.source == "video.video.motion" })?.isActive == true else {
+            return "video motion output not mappable"
+        }
+
+        // Test actual video decoding from file
+        let tempVideoURL = FileManager.default.temporaryDirectory.appendingPathComponent("selfcheck-loop-\(UUID().uuidString).mp4")
+        createTestVideo(url: tempVideoURL)
+        defer { try? FileManager.default.removeItem(at: tempVideoURL) }
+
+        let fileFeed = VideoFeed(path: tempVideoURL.path, fileURL: tempVideoURL, metal: engine.device)
+        fileFeed.play()
+        let start = Date()
+        var gotFrame = false
+        while Date().timeIntervalSince(start) < 2.0 {
+            if fileFeed.latest() != nil {
+                gotFrame = true
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        fileFeed.stop()
+        guard gotFrame else { return "video file feed did not produce frames" }
+
+        engine.removeInput("video.video")
+        guard engine.current?.streamBindings.values.contains(where: { $0.key == "video.video.video" }) == false,
+              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Video in the chain",
+              engine.current?.mappings.first(where: { $0.source == "video.video.motion" })?.problem == "Needs its Video in the chain" else {
+            return "removing video left its video or mapping active"
+        }
+        return nil
+    }
+
+    private static func checkPictureInput(engine: Engine) -> String? {
+        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        engine.load(url, animated: false)
+        defer { engine.load(url, animated: false) }
+        engine.apply(.input, "picture")
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("picture.") }) == false else {
+            return "new picture mapped itself"
+        }
+        engine.addMapping(source: "picture.picture.video", target: "generator.texVideo")
+        guard let added = engine.current, let first = added.pictures.first, first.key == "picture.picture",
+              added.streamBindings["generator.texVideo"] === first.video, engine.selectedDevice == "picture.picture",
+              added.mappings.first(where: { $0.source == "picture.picture.video" })?.kind == .video else {
+            return "picture output not mapped into generator Texture"
+        }
+        guard !first.depthMapped, !first.feed.depthWanted,
+              added.streamOutputs.filter({ $0.deviceKey == "picture.picture" && $0.kind == .video }).map(\.name) == ["Video", "Depth"] else {
+            return "picture depth outputs incorrect"
+        }
+        guard added.outputs.contains(where: { $0.key == "picture.picture.motion" }),
+              added.outputs.contains(where: { $0.key == "picture.picture.brightness" }) else {
+            return "picture value outputs missing"
+        }
+
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 64, height: 36, mipmapped: false)
+        d.usage = .shaderRead
+        guard let green = engine.device.makeTexture(descriptor: d) else { return "no test texture" }
+        let px = [UInt8](repeating: 0, count: 64 * 36 * 4).enumerated().map { $0.offset % 4 == 1 || $0.offset % 4 == 3 ? 255 : 0 }
+        green.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0, withBytes: px.map(UInt8.init), bytesPerRow: 64 * 4)
+        first.feed.inject(green)
+
+        guard let bg = first.bank["bg"] else { return "picture has no bg knob" }
+        bg.setBase(1)
+        _ = engine.renderOffscreen(added, frames: 3, snapshot: nil)
+        let processed = engine.averageColor(first.processed)
+        guard processed.y > 0.8, processed.x < 0.2 else { return "processed picture not green: \(processed)" }
+
+        engine.addMapping(source: "picture.picture.brightness", target: "generator.spin")
+        guard engine.current?.mappings.first(where: { $0.source == "picture.picture.brightness" })?.isActive == true else {
+            return "picture brightness output not mappable"
+        }
+
+        // Test actual picture decoding from file
+        let tempPicURL = FileManager.default.temporaryDirectory.appendingPathComponent("selfcheck-pic-\(UUID().uuidString).png")
+        createTestImage(url: tempPicURL)
+        defer { try? FileManager.default.removeItem(at: tempPicURL) }
+
+        let filePicFeed = PictureFeed(path: tempPicURL.path, fileURL: tempPicURL, metal: engine.device)
+        guard filePicFeed.status == .running, filePicFeed.latest() != nil, filePicFeed.brightness > 0 else {
+            return "picture file feed did not load image file correctly"
+        }
+
+        engine.removeInput("picture.picture")
+        guard engine.current?.streamBindings.values.contains(where: { $0.key == "picture.picture.video" }) == false,
+              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Picture in the chain",
+              engine.current?.mappings.first(where: { $0.source == "picture.picture.brightness" })?.problem == "Needs its Picture in the chain" else {
+            return "removing picture left its video or mapping active"
+        }
+        return nil
+    }
+
+    private static func createTestVideo(url: URL) {
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return }
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 64,
+            AVVideoHeightKey: 36
+        ]
+        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: 64,
+            kCVPixelBufferHeightKey as String: 36
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: writerInput, sourcePixelBufferAttributes: attrs)
+        writer.add(writerInput)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, 64, 36, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
+        guard let buffer = pb else { return }
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        if let base = CVPixelBufferGetBaseAddress(buffer) {
+            memset(base, 200, 64 * 36 * 4)
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+
+        adaptor.append(buffer, withPresentationTime: CMTime.zero)
+        adaptor.append(buffer, withPresentationTime: CMTime(value: 5, timescale: 60))
+        adaptor.append(buffer, withPresentationTime: CMTime(value: 10, timescale: 60))
+        writerInput.markAsFinished()
+        let sema = DispatchSemaphore(value: 0)
+        writer.finishWriting { sema.signal() }
+        _ = sema.wait(timeout: .now() + 2)
+    }
+
+    private static func createTestImage(url: URL) {
+        let width = 16, height = 16
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 200, count: width * height * 4)
+        guard let context = CGContext(data: &rawData, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let cgImage = context.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        CGImageDestinationFinalize(dest)
     }
 
     /// The depth field scene, with a test depth standing in for the model (near on the left
@@ -1292,6 +1586,18 @@ enum SelfCheck {
             print("ok   webcam (processing, video into the generator, outputs, removal)")
         }
 
+        if let problem = checkVideoInput(engine: engine) {
+            print("FAIL video: \(problem)"); failures += 1
+        } else {
+            print("ok   video (looping, processing, outputs, removal)")
+        }
+
+        if let problem = checkPictureInput(engine: engine) {
+            print("FAIL picture: \(problem)"); failures += 1
+        } else {
+            print("ok   picture (still image, processing, outputs, removal)")
+        }
+
         if let problem = checkTransitions(engine: engine) {
             print("FAIL transitions: \(problem)"); failures += 1
         } else {
@@ -1314,6 +1620,16 @@ enum SelfCheck {
             print("FAIL low poly: \(problem)"); failures += 1
         } else {
             print("ok   low poly geos")
+        }
+        if let problem = checkInstancing(engine: engine) {
+            print("FAIL instancing: \(problem)"); failures += 1
+        } else {
+            print("ok   instancing (Grid and Cube layouts, Brownian motion, Intersection blend modes, start unmapped)")
+        }
+        if let problem = checkComposite(engine: engine) {
+            print("FAIL composite: \(problem)"); failures += 1
+        } else {
+            print("ok   composite (Layer starts unmapped and passes through; Comp, Add, Difference, Burn, amount)")
         }
         if let problem = checkComposition(engine: engine) {
             print("FAIL composition: \(problem)"); failures += 1
@@ -1471,6 +1787,30 @@ extension Engine {
         var sum = SIMD3<Float>.zero
         for i in stride(from: 0, to: px.count, by: 4) { sum += SIMD3(Float(px[i]), Float(px[i + 1]), Float(px[i + 2])) }
         return sum / Float(tex.width * tex.height)
+    }
+
+    /// How much of a work texture geometry covers (alpha above half; backgrounds leave 0), and
+    /// the covered pixels' centre, in 0..1 uv.
+    func coverage(_ tex: MTLTexture) -> (fraction: Float, centroid: SIMD2<Float>) {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: tex.pixelFormat, width: tex.width, height: tex.height, mipmapped: false)
+        d.storageMode = .shared
+        guard tex.pixelFormat == .rgba16Float, let copy = device.makeTexture(descriptor: d),
+              let cmd = renderer.queue.makeCommandBuffer(), let blit = cmd.makeBlitCommandEncoder() else { return (0, .zero) }
+        blit.copy(from: tex, to: copy)
+        blit.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+        var px = [Float16](repeating: 0, count: tex.width * tex.height * 4)
+        copy.getBytes(&px, bytesPerRow: tex.width * 8, from: MTLRegionMake2D(0, 0, tex.width, tex.height), mipmapLevel: 0)
+        var n: Float = 0, sum = SIMD2<Float>.zero
+        for y in 0..<tex.height {
+            for x in 0..<tex.width where px[(y * tex.width + x) * 4 + 3] > 0.5 {
+                n += 1
+                sum += SIMD2(Float(x) + 0.5, Float(y) + 0.5)
+            }
+        }
+        let size = SIMD2(Float(tex.width), Float(tex.height))
+        return (n / (size.x * size.y), n > 0 ? sum / n / size : .zero)
     }
 
     /// Renders frames at 60fps simulated time and returns the average GPU time per frame.
