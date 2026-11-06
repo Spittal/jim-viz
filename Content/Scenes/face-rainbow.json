@@ -11,6 +11,7 @@
     },
     {
       "effect" : "feedback",
+      "enabled" : false,
       "id" : "feedback",
       "params" : {
         "amount" : 0.99,
@@ -27,22 +28,57 @@
       "params" : {
         "contrast" : 2,
         "flash" : 0,
-        "grain" : 0.19450928,
-        "lineCount" : 699.46875,
-        "scanlines" : 0.11809082,
-        "vignette" : 0.44379884
+        "grain" : 0.09684083,
+        "lineCount" : 1080,
+        "scanlines" : 1,
+        "vignette" : 0.93950194
       }
     },
     {
       "effect" : "chroma",
       "id" : "chroma",
       "params" : {
-        "amount" : 0.05,
+        "amount" : 0,
         "angle" : -1.5911499,
         "radial" : 0.72148436
       }
     }
   ],
+  "generator" : {
+    "params" : {
+      "bands" : 6,
+      "bgGlow" : 0.5,
+      "colorShift" : 0,
+      "colorSpeed" : 0,
+      "count" : 216,
+      "explode" : 1.0464844,
+      "fill" : 1,
+      "fog" : 0.04,
+      "instances" : 1,
+      "length" : 2.5,
+      "light" : 1.1,
+      "noiseAmount" : 0.2,
+      "noiseScale" : 1.4,
+      "noiseSpeed" : 0.25,
+      "radius" : 1,
+      "scale" : 1.3591797,
+      "shardSpin" : 0,
+      "size" : 0.69853514,
+      "spectrum" : 0,
+      "spectrumMode" : 1,
+      "spikes" : 0,
+      "spin" : 0.49140626,
+      "spread" : 3,
+      "tumble" : 0,
+      "videoMap" : 0,
+      "videoScale" : 1,
+      "videoScatter" : 0,
+      "videoTex" : 1,
+      "videoTint" : 0,
+      "wire" : 0.8132324
+    },
+    "type" : "shards"
+  },
   "inputs" : [
     {
       "device" : "system",
@@ -55,7 +91,6 @@
       "type" : "audio"
     },
     {
-      "device" : "Opal C1",
       "id" : "webcam",
       "params" : {
         "bg" : 0.80600584,
@@ -99,6 +134,14 @@
     {
       "source" : "palette.colors",
       "target" : "generator.pal"
+    },
+    {
+      "source" : "audio.spectrum",
+      "target" : "generator.spec"
+    },
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
     }
   ],
   "modulators" : [

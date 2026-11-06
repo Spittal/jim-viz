@@ -68,7 +68,7 @@
       "effect" : "chroma",
       "id" : "chroma",
       "params" : {
-        "amount" : 0,
+        "amount" : 0.04300293,
         "angle" : 3.15,
         "radial" : 1
       }
@@ -111,20 +111,96 @@
       "spectrum" : 0.12558594,
       "spectrumMode" : 1,
       "spikes" : 0.8988281,
-      "spin" : 0.66640633,
+      "spin" : 1.9451172,
       "spread" : 9.679199,
       "tumble" : 0,
       "turn" : 0.6255863,
       "videoMap" : 0,
       "videoScale" : 1,
       "videoScatter" : 0.14116211,
-      "videoTex" : 0.3212158,
+      "videoTex" : 0.69860834,
       "videoTint" : 0.36796874,
       "width" : 0.623291,
       "wire" : 0
     },
     "type" : "wheel"
   },
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 9,
+        "bgGlow" : 0.87890625,
+        "blades" : 1,
+        "colorShift" : 0,
+        "colorSpeed" : -1,
+        "curl" : 0,
+        "explode" : 0,
+        "fill" : 1,
+        "flap" : 0,
+        "flutter" : 0.75161135,
+        "fog" : 0.16387695,
+        "instances" : 1,
+        "length" : 0,
+        "light" : 2.15,
+        "noiseAmount" : 0.59467775,
+        "noiseScale" : 0.1,
+        "noiseSpeed" : 0.25,
+        "pitch" : -35.033203,
+        "radius" : 0.91640615,
+        "scale" : 0.80087894,
+        "segments" : 1,
+        "spectrum" : 0.12558594,
+        "spectrumMode" : 1,
+        "spikes" : 0.8988281,
+        "spin" : 1.9451172,
+        "spread" : 9.679199,
+        "tumble" : 0,
+        "turn" : 0.6255863,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0.14116211,
+        "videoTex" : 0.69860834,
+        "videoTint" : 0.36796874,
+        "width" : 0.623291,
+        "wire" : 0
+      },
+      "type" : "wheel"
+    },
+    {
+      "id" : "sphere",
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.39584962,
+        "colorShift" : 0,
+        "colorSpeed" : 0,
+        "detail" : 0,
+        "explode" : 0,
+        "fill" : 0.19782716,
+        "fog" : 0,
+        "instances" : 1,
+        "light" : 1.1,
+        "noiseAmount" : 0.2,
+        "noiseScale" : 1.4,
+        "noiseSpeed" : 0.25,
+        "scale" : 0.7432617,
+        "spectrum" : 0,
+        "spectrumMode" : 1,
+        "spikes" : 0,
+        "spin" : 1.10625,
+        "spread" : 0,
+        "squash" : 1,
+        "tumble" : 0.6741211,
+        "twist" : 0,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 0.8,
+        "videoTint" : 0,
+        "wire" : 0.22399902
+      },
+      "type" : "sphere"
+    }
+  ],
   "inputs" : [
     {
       "device" : "system",
@@ -179,7 +255,7 @@
       "target" : "clock.audio"
     },
     {
-      "amount" : 0.6448369,
+      "amount" : 0.654809,
       "source" : "clock.beat",
       "target" : "generator.spin"
     },
@@ -230,6 +306,12 @@
       "amount" : 0.25,
       "source" : "clock.pulse",
       "target" : "generator.scale"
+    },
+    {
+      "amount" : 1,
+      "curve" : 1.5380095,
+      "source" : "audio.mid",
+      "target" : "generator.sphere.scale"
     }
   ],
   "modulators" : [
