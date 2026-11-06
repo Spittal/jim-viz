@@ -157,8 +157,10 @@ struct MappingSpec: Codable, Equatable {
     /// `webcam.<id>.<param>`) for a value, or a stream input of the same kind
     /// (`generator.bgVideo`, `generator.spec`, `generator.pal`) for a stream.
     var target: String
-    /// Value mappings: fraction of the knob's range added at full signal, -1...1. Negative pushes down.
+    /// Value mappings: fraction of the knob's range added at full signal, 0...1.
     var amount: Float?
+    /// Value mappings: pushes the knob down instead of up.
+    var invert: Bool?
     /// Exponent applied to the 0...1 signal before scaling. 1 is linear.
     var curve: Float?
     /// Modulation smoothing time in seconds.

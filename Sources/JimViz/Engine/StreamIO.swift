@@ -31,6 +31,15 @@ enum IOKind: String {
         }
     }
 
+    /// What an input of this kind is called in instructions: "knob", "trigger input", "video input".
+    var inputNoun: String {
+        switch self {
+        case .value: return "knob"
+        case .trigger: return "trigger input"
+        default: return "\(noun) input"
+        }
+    }
+
     /// SF Symbol for sockets and mappings.
     var icon: String {
         switch self {
@@ -85,7 +94,10 @@ final class StreamOutput: Identifiable {
         if key == paletteKey { return .palette }
         if key == audioKey { return .audio }
         if key == clockSyncKey { return .clock }
-        if key.hasSuffix(".video") || key.hasSuffix(".depth") { return .video }
+        // Video and depth come from video inputs (`webcam.<id>.video`, `picture.<id>.depth`);
+        // elsewhere `.depth` is a knob, like an LFO's.
+        let parts = key.split(separator: ".")
+        if parts.count == 3, ["webcam", "video", "picture"].contains(parts[0]), ["video", "depth"].contains(parts[2]) { return .video }
         return nil
     }
 }

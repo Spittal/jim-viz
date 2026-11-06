@@ -54,7 +54,8 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | clock | Clock · Sync | LFO · Sync |
 | trigger | Clock · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Clock · First Beat |
 
-- A value mapping is additive: `value = base + amount × curve(signal) × span`.
+- A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%
+  and an invert toggle for the minus.
 - A trigger input also takes value outputs: it fires each time the value rises past ½ (re-arming below ¼), so an LFO, kick or MIDI pad can fire it. Any number can be mapped onto one; trigger mappings have no settings. Triggers don't map onto knobs. Don't add trigger + threshold knobs; declare a `TriggerInput`.
 - A stream input (video, spectrum or palette) takes one stream; mapping another replaces it.
 - **Add a new kind when the data isn't a 0–1 scalar**; don't squeeze it into a value.

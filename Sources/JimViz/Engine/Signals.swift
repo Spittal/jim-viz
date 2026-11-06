@@ -232,7 +232,7 @@ final class MIDIInputRuntime: Identifiable {
 /// One routing from an output to an input, as edited in the inspector.
 ///
 /// A value mapping (value output → knob) adds `amount × curve(signal) × range` on top of the
-/// knob, so the knob stays the base you set by hand; a negative amount pushes it down.
+/// knob, so the knob stays the base you set by hand; `invert` pushes it down instead.
 /// A stream mapping (video, spectrum or palette output → an input of the same kind) just
 /// connects the stream; it has no settings. So does a trigger mapping (a trigger or value
 /// output → a trigger input), which fires its input as `TriggerInput` describes.
@@ -256,12 +256,16 @@ final class MappingRuntime: Identifiable {
     let problem: String?
 
     var enabled: Bool { didSet { rEnabled = enabled } }
+    /// 0...1: how far the output pushes the knob, as a share of its range.
     var amount: Float { didSet { rAmount = amount } }
+    /// Pushes the knob down instead of up.
+    var invert: Bool { didSet { rInvert = invert } }
     var smooth: Float { didSet { rSmooth = smooth } }
     var curve: Float { didSet { rCurve = curve } }
 
     @ObservationIgnored private var rEnabled: Bool
     @ObservationIgnored private var rAmount: Float
+    @ObservationIgnored private var rInvert: Bool
     @ObservationIgnored private var rSmooth: Float
     @ObservationIgnored private var rCurve: Float
     @ObservationIgnored private var state: Float = 0
@@ -282,16 +286,20 @@ final class MappingRuntime: Identifiable {
         self.kind = kind
         self.output = output; self.stream = stream; self.param = param; self.trigger = trigger
         self.sourceLabel = sourceLabel; self.targetLabel = targetLabel; self.problem = problem
-        let e = spec.enabled ?? true, a = spec.amount ?? 0.25
+        let e = spec.enabled ?? true, a = spec.amount ?? 0.25, inv = spec.invert ?? false
         let sm = Swift.max(spec.smooth ?? 0, 0), c = Swift.max(spec.curve ?? 1, 0.1)
-        rEnabled = e; rAmount = a; rSmooth = sm; rCurve = c
-        enabled = e; amount = a; smooth = sm; curve = c
+        rEnabled = e; rAmount = a; rInvert = inv; rSmooth = sm; rCurve = c
+        enabled = e; amount = a; invert = inv; smooth = sm; curve = c
     }
+
+    /// The amount with its direction: negative when inverted.
+    var signedAmount: Float { invert ? -amount : amount }
 
     var spec: MappingSpec {
         if kind != .value { return MappingSpec(source: source, target: target) }
         var s = MappingSpec(source: source, target: target, amount: amount)
         if !enabled { s.enabled = false }
+        if invert { s.invert = true }
         if curve != 1 { s.curve = curve }
         if smooth > 0 { s.smooth = smooth }
         return s
@@ -315,7 +323,7 @@ final class MappingRuntime: Identifiable {
             state += (v - state) * (1 - exp(-dt / rSmooth))
             v = state
         }
-        contribution = v * rAmount
+        contribution = v * (rInvert ? -rAmount : rAmount)
         param.modAccum += contribution * param.def.span
     }
 }

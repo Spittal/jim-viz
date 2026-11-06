@@ -70,7 +70,10 @@ struct MappingsInspector: View {
 
     @ViewBuilder
     private var hint: some View {
-        if let source = engine.mapSource {
+        if let m = engine.remapping {
+            banner("Click a \(m.kind.inputNoun) to move \(m.sourceLabel) → \(m.targetLabel) there. Esc to cancel.",
+                   color: Theme.modulation) { engine.mapSource = nil }
+        } else if let source = engine.mapSource {
             banner("Click a \(engine.kind(of: source) == .trigger ? "trigger input" : "knob") to map \(Outputs.label(source, in: engine.current?.outputs ?? [])). Shift-click for several, Esc to finish.",
                    color: Theme.modulation) { engine.mapSource = nil }
         } else if let input = engine.current?.learningMIDI {
@@ -225,6 +228,7 @@ private struct OutputCard: View {
             HStack(spacing: 4) {
                 OutputRow(output: output)
                 MapToMenu(scene: scene, output: output)
+                    .frame(width: 16, height: 16)
             }
             ForEach(mapped) { MappingRow(mapping: $0, showSource: false) }
         }
@@ -256,7 +260,9 @@ private struct StreamOutputCard: View {
                 Text(noun).font(.system(size: 9)).foregroundStyle(.tertiary)
                 Spacer()
                 Button { engine.mapSource = mapping ? nil : stream.key } label: {
-                    Image(systemName: mapping ? "scope" : "plus.circle").font(.system(size: 11, weight: mapping ? .bold : .regular))
+                    Image(systemName: mapping ? "scope" : "plus.circle").font(.system(size: 14, weight: mapping ? .bold : .regular))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(mapping ? Theme.modulation : Theme.textDim)
@@ -274,6 +280,7 @@ private struct StreamOutputCard: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .frame(width: 16, height: 16)
                 .help("Map \(stream.name) to a \(noun) input")
             }
             .padding(.vertical, 2)
@@ -330,6 +337,56 @@ private struct MapToMenu: View {
     }
 }
 
+/// Points a mapping at another target, from the same list as mapping an output: every knob by
+/// device for a value, the trigger inputs for a trigger, or the inputs of its kind for a stream.
+/// The current target is ticked.
+private struct RemapMenu: View {
+    @Environment(Engine.self) private var engine
+    let mapping: MappingRuntime
+
+    var body: some View {
+        Menu {
+            if let scene = engine.current {
+                if mapping.kind.isStream {
+                    let targets = scene.streamInputs.filter { $0.kind == mapping.kind }
+                    ForEach(targets) { input in
+                        item(input.key, engine.targetLabel(input.key), scene: scene)
+                    }
+                    if targets.isEmpty { Text("Nothing in the scene takes \(mapping.kind.noun)") }
+                } else if mapping.kind == .trigger {
+                    ForEach(scene.triggerInputs) { t in
+                        item(t.key, engine.targetLabel(t.key), scene: scene)
+                    }
+                } else {
+                    ForEach(scene.deviceKeys, id: \.self) { path in
+                        if let bank = scene.banksByPath[path], !bank.params.isEmpty {
+                            Menu(engine.deviceName(path)) {
+                                ForEach(bank.params) { p in
+                                    item("\(path).\(p.def.name)", knobLabel(p.def.name), scene: scene)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.forward.circle").font(.system(size: 11))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Remap: send \(mapping.sourceLabel) somewhere else instead")
+    }
+
+    @ViewBuilder
+    private func item(_ target: String, _ label: String, scene: RenderScene) -> some View {
+        let current = target == mapping.target
+        let taken = !current && scene.mappings.contains { $0.source == mapping.source && $0.target == target }
+        Button(current || taken ? "✓ \(label)" : label) { engine.retargetMapping(mapping, to: target) }
+            .disabled(current || taken)
+    }
+}
+
 // MARK: - Mappings
 
 private struct MappingRow: View {
@@ -362,8 +419,22 @@ private struct MappingRow: View {
                 }
                 .lineLimit(1)
                 Spacer(minLength: 2)
+                let remapping = engine.remapping?.source == mapping.source && engine.remapping?.target == mapping.target
+                Button { engine.startRemap(mapping) } label: {
+                    Image(systemName: remapping ? "scope" : "plus.circle").font(.system(size: 14, weight: remapping ? .bold : .regular))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(remapping ? color : Theme.textDim)
+                .help(remapping ? "Click a \(mapping.kind.inputNoun) to move this mapping there. Click here to cancel."
+                                : "Remap: click this, then the \(mapping.kind.inputNoun) to move it to")
+                RemapMenu(mapping: mapping)
+                    .frame(width: 16, height: 16)
                 Button { engine.removeMapping(mapping) } label: {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.textDim)
@@ -382,8 +453,17 @@ private struct MappingRow: View {
             } else {
             ContributionMeter(mapping: mapping, color: color)
             Group {
-                SliderRow(label: "Amount", value: $mapping.amount, range: -1...1, text: percent(mapping.amount, signed: true))
-                    .help("How far the output pushes the knob, as a share of its range. Negative pushes it down.")
+                SliderRow(label: "Amount", value: $mapping.amount, range: 0...1, text: "\(Int((mapping.amount * 100).rounded()))%")
+                    .help("How far the output pushes the knob, as a share of its range")
+                HStack(spacing: 6) {
+                    Text("Invert").font(.system(size: 10)).foregroundStyle(Theme.textDim).frame(width: 44, alignment: .leading)
+                    Toggle("", isOn: Binding(get: { mapping.invert }, set: { _ in toggleInvert() }))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                    Spacer()
+                }
+                .help("Pushes the knob down instead of up")
                 SliderRow(label: "Smooth", value: $mapping.smooth, range: 0...1,
                           text: mapping.smooth == 0 ? "off" : "\(Int(mapping.smooth * 1000)) ms")
                     .help("Glides the output, so fast hits become swells")
@@ -420,9 +500,13 @@ private struct MappingRow: View {
         }
     }
 
-    private func percent(_ v: Float, signed: Bool) -> String {
-        let p = Int((v * 100).rounded())
-        return signed && p > 0 ? "+\(p)%" : "\(p)%"
+    private func toggleInvert() {
+        let snapshot = engine.currentSnapshot()
+        mapping.invert.toggle()
+        if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
+            engine.recordUndo(name: "Invert Mapping", before: snapshot)
+            engine.scheduleAutoSave()
+        }
     }
 }
 

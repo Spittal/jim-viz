@@ -19,14 +19,24 @@
 // @param spikes 0 0 3
 // @param explode 0 0 4
 
-// Motion: instances copies the geo onto a sphere of radius spread; each copy tumbles on its own
-// axis; spin turns everything around the vertical axis.
+// Instances: copies of the geo, placed by layout. Sphere spreads them over a sphere of radius
+// spread; Grid lays them in a flat grid facing the front, columns wide, spread apart; Cube
+// stacks up-to-columns × columns grids in layers going back, spread apart.
+// @group Instances
+// @param instances 1 1 96 int
+// @param layout 0 0 2 int Sphere,Grid,Cube
+// @param columns 4 1 16 int
+// @param spread 3 0 20
+
+// Motion: each copy tumbles on its own axis; spin turns everything around the vertical axis.
+// brownian wanders each copy around its place on a smooth random path, up to that far away;
+// brownianSpeed is how fast it wanders.
 // @group Motion
 // @param scale 1 0 4
 // @param spin 0 -4 4 rate
 // @param tumble 0 0 4 rate
-// @param instances 1 1 96 int
-// @param spread 3 0 20
+// @param brownian 0 0 4
+// @param brownianSpeed 0.5 0 4 rate
 
 // @group Look
 // @param wire 0 0 1
@@ -37,6 +47,13 @@
 // @param light 1.1 0 3
 // @param fog 0.04 0 0.5
 // @param bgGlow 0.5 0 2
+
+// Intersection: how faces combine where they overlap something already drawn (other faces,
+// copies or geos earlier in the chain). Comp draws the nearest on top. Add, Difference and Burn
+// see through the geo and blend every overlapping layer: add sums them, difference subtracts,
+// burn darkens. Where nothing was drawn before, faces draw as normal.
+// @group Intersection
+// @param intersection 0 0 3 int Comp,Add,Difference,Burn
 
 // Video inputs: map a video output (a Webcam) into Texture to paint it onto the faces.
 // videoTex is how much shows.
@@ -107,6 +124,34 @@ struct GenOut {
 // The per-instance random a vertex's copy uses, 0..1.
 inline float instanceRand(uint iid) { return hash11(float(iid) * 17.13 + 1.7); }
 
+// Where copy i sits, by layout. Grids face the front (+x, the Front camera's side, where Front
+// video projects from): columns run left to right, rows top to bottom, Cube layers go back.
+// They are centred and never wider than the copies need.
+inline float3 instanceOffset(float i, constant Params& p) {
+    float count = max(p.instances, 1.0);
+    if (count < 1.5) return 0;
+    int layout = int(p.layout + 0.5);
+    if (layout == 0) {
+        // Fibonacci sphere.
+        float y = 1 - 2 * (i + 0.5) / count;
+        float r = sqrt(max(1 - y * y, 0.0));
+        float phi = i * 2.39996323;
+        return float3(cos(phi) * r, y, sin(phi) * r) * p.spread;
+    }
+    float cols = min(max(p.columns, 1.0), count);
+    float rows = ceil(count / cols);
+    if (layout == 1) {
+        float2 cell = float2(fmod(i, cols), floor(i / cols));
+        return float3(0, (rows - 1) * 0.5 - cell.y, (cols - 1) * 0.5 - cell.x) * p.spread;
+    }
+    rows = min(rows, cols);
+    float perLayer = cols * rows;
+    float layers = ceil(count / perLayer);
+    float k = fmod(i, perLayer);
+    float3 cell = float3(fmod(k, cols), floor(k / cols), floor(i / perLayer));
+    return float3((layers - 1) * 0.5 - cell.z, (rows - 1) * 0.5 - cell.y, (cols - 1) * 0.5 - cell.x) * p.spread;
+}
+
 inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& f, constant Params& p,
                             constant Camera& cam, texture2d<float> spec) {
     float ir = instanceRand(iid);
@@ -125,14 +170,13 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     float3 axis = normalize(float3(hash11(ir * 3.1) - 0.5, hash11(ir * 5.7) - 0.5, hash11(ir * 7.3) - 0.5) + 1e-3);
     pos = rotAxis(axis, p.tumblePhase * (0.5 + ir)) * pos;
 
-    // Instances sit on a Fibonacci sphere.
-    float count = max(p.instances, 1.0);
-    if (count > 1.5) {
-        float i = float(iid);
-        float y = 1 - 2 * (i + 0.5) / count;
-        float r = sqrt(max(1 - y * y, 0.0));
-        float phi = i * 2.39996323;
-        pos += float3(cos(phi) * r, y, sin(phi) * r) * p.spread;
+    pos += instanceOffset(float(iid), p);
+
+    // Brownian: each copy wanders on its own smooth random path.
+    if (p.brownian > 0) {
+        float t = p.brownianSpeedPhase;
+        float s = ir * 97.0;
+        pos += float3(fbm3(float3(t, s, 0.0)), fbm3(float3(s + 31.0, t, 7.0)), fbm3(float3(13.0, s + 57.0, t))) * p.brownian;
     }
 
     pos.xz = rot2(p.spinPhase) * pos.xz;
@@ -156,12 +200,9 @@ inline float3 videoColor(texture2d<float> vid, texture2d<float> pal, float2 uv, 
     return mix(v, palette(pal, luma(v) * 0.9 + 0.05) * (0.4 + luma(v)), tint);
 }
 
-fragment float4 gen_fragment(GenOut in [[stage_in]],
-                             texture2d<float> pal [[texture(0)]],
-                             texture2d<float> vid [[texture(2)]],
-                             constant Frame& f [[buffer(0)]],
-                             constant Params& p [[buffer(1)]],
-                             constant Camera& cam [[buffer(2)]]) {
+// A face's colour, shared by the plain and the Intersection fragment functions.
+inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid,
+                           constant Frame& f, constant Params& p, constant Camera& cam) {
     // Depth edges (Plane): a face the depth stood up on its side spans a jump (a person's
     // outline against the wall), so drop it. Compares the face as moved by depth with how it was.
     if (in.cut > 0) {
@@ -226,6 +267,39 @@ fragment float4 gen_fragment(GenOut in [[stage_in]],
     col = mix(col, bg, 1 - exp(-dist * p.fog));
 
     return float4(col, 1);
+}
+
+// Intersection Comp: depth-tested, the nearest face wins.
+fragment float4 gen_fragment(GenOut in [[stage_in]],
+                             texture2d<float> pal [[texture(0)]],
+                             texture2d<float> vid [[texture(2)]],
+                             constant Frame& f [[buffer(0)]],
+                             constant Params& p [[buffer(1)]],
+                             constant Camera& cam [[buffer(2)]]) {
+    return lowpolyColor(in, pal, vid, f, p, cam);
+}
+
+// Intersection Add, Difference and Burn: drawn without writing depth, reading what's already
+// in the target. Alpha marks drawn geometry (backgrounds leave 0), so only real overlaps blend.
+fragment float4 gen_fragment_blend(GenOut in [[stage_in]],
+                                   float4 dst [[color(0)]],
+                                   texture2d<float> pal [[texture(0)]],
+                                   texture2d<float> vid [[texture(2)]],
+                                   constant Frame& f [[buffer(0)]],
+                                   constant Params& p [[buffer(1)]],
+                                   constant Camera& cam [[buffer(2)]]) {
+    float4 c = lowpolyColor(in, pal, vid, f, p, cam);
+    if (dst.a < 0.5) return c;
+    int mode = int(p.intersection + 0.5);
+    float3 o;
+    if (mode == 1) {
+        o = dst.rgb + c.rgb;
+    } else if (mode == 2) {
+        o = abs(dst.rgb - c.rgb);
+    } else {
+        o = saturate(1 - (1 - saturate(dst.rgb)) / max(c.rgb, 1e-3));
+    }
+    return float4(o, 1);
 }
 
 // Drawn behind the mesh. Alpha 0 marks background so feedback can trail behind geometry.

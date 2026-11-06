@@ -157,12 +157,14 @@
       "target": "generator.scale"
     },
     {
-      "amount": -0.6755445,
+      "amount": 0.6755445,
+      "invert": true,
       "source": "audio.hat",
       "target": "generator.scale"
     },
     {
-      "amount": -0.40342343,
+      "amount": 0.40342343,
+      "invert": true,
       "source": "mod.lfo.out",
       "target": "camera.roll"
     },
