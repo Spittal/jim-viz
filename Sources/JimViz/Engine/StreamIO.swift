@@ -8,10 +8,11 @@ import QuartzCore
 /// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1.
 /// - palette: a Palette's gradient, with its inputs applied.
 /// - audio: Audio In's audio stream, frame by frame, for the Clock's beat tracking.
-/// - clock: Clock's tempo / beat sync stream, for syncing LFOs and modulators.
+/// - clock: Clock's tempo / beat sync stream, for syncing LFOs and shaders' rate knobs.
 /// Video, spectrum and palette are textures a shader declares an input for; audio goes only
-/// into the Clock's Audio input; clock sync goes into modulators. Nothing reaches a shader,
-/// the Clock, or an LFO except through a mapping: no shared audio, clock or colors.
+/// into the Clock's Audio input; clock sync goes into an LFO's Sync input or a clock input a
+/// shader declares. Nothing reaches a shader, the Clock, or an LFO except through a mapping:
+/// no shared audio, clock or colors.
 enum IOKind: String {
     case value, trigger, video, spectrum, palette, audio, clock
 
@@ -54,8 +55,8 @@ enum IOKind: String {
     }
 
     /// The shader declaration that makes an input of this kind: `// @video name Label`.
-    /// Values, triggers, audio and clock have none.
-    var directive: String? { isStream && self != .audio && self != .clock ? "// @\(rawValue) " : nil }
+    /// Values, triggers and audio have none.
+    var directive: String? { isStream && self != .audio ? "// @\(rawValue) " : nil }
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
@@ -106,16 +107,19 @@ final class StreamOutput: Identifiable {
 ///   // @video bgVideo Background
 ///   // @spectrum spec Spectrum
 ///   // @palette pal Palette
+///   // @clock sync Sync
 /// Its target key is `<device>.<name>` (`generator.bgVideo`). Each takes one stream.
-/// Inputs get texture slots in declaration order: generators from texture(0) (vertex and
-/// fragment stage), effects from texture(2).
+/// Video, spectrum and palette inputs get texture slots in declaration order: generators from
+/// texture(0) (vertex and fragment stage), effects from texture(2). A clock input takes no
+/// slot: while Clock · Sync is mapped into it, the shader's rate knobs follow the beat
+/// (`ParamBank.syncClock`).
 struct StreamInputDef: Hashable {
     let name: String
     let label: String
     let kind: IOKind
 
     static func parse(shaderSource: String) -> [StreamInputDef] {
-        let kinds: [IOKind] = [.video, .spectrum, .palette]
+        let kinds: [IOKind] = [.video, .spectrum, .palette, .clock]
         var defs: [StreamInputDef] = []
         for raw in shaderSource.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)

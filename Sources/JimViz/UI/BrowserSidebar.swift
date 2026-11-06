@@ -177,6 +177,7 @@ struct DeviceBrowser: View {
             case "cube": return "cube"
             case "shards": return "sparkle"
             case "wheel": return "fanblades"
+            case "dancer": return "figure.dance"
             default: return "cube.transparent"
             }
         case .effect:

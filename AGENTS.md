@@ -51,7 +51,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | spectrum | Audio In · Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | Clock · Audio |
-| clock | Clock · Sync | LFO · Sync |
+| clock | Clock · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
 | trigger | Clock · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Clock · First Beat |
 
 - A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%

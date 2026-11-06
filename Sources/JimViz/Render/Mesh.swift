@@ -20,7 +20,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel
+    case sphere, torus, plane, cube, shards, wheel, dancer
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -31,6 +31,7 @@ enum MeshShape: String, CaseIterable {
         case .cube: return ["divisions"]
         case .shards: return ["count"]
         case .wheel: return ["blades", "segments"]
+        case .dancer: return ["sides"]
         }
     }
 }
@@ -67,6 +68,7 @@ struct MeshBuilder {
         case .cube: return [min(max(i("divisions"), 1), 32)]
         case .shards: return [min(max(i("count"), 1), 4000)]
         case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
+        case .dancer: return [min(max(i("sides"), 3), 16)]
         }
     }
 
@@ -79,6 +81,7 @@ struct MeshBuilder {
         case .cube: b.cube(t[0])
         case .shards: b.shards(t[0])
         case .wheel: b.wheel(blades: t[0], segments: t[1])
+        case .dancer: b.dancer(sides: t[0])
         }
         return b.vertices
     }

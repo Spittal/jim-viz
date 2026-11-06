@@ -20,7 +20,7 @@ final class GeneratorRuntime: Identifiable {
     /// already there, for the `intersection` knob's modes past Comp.
     let blendPipeline: MTLRenderPipelineState?
     let backgroundPipeline: MTLRenderPipelineState
-    /// Declared with `// @video`, `// @spectrum`, `// @palette`; bound from texture(0) up.
+    /// Declared with `// @video`, `// @spectrum`, `// @palette` (bound from texture(0) up) and `// @clock`.
     let inputs: [StreamInputDef]
 
     /// Render thread only. Swapped for a rebuilt mesh by `updateMesh`.
@@ -96,7 +96,7 @@ final class EffectRuntime: Identifiable {
     @ObservationIgnored let pipeline: MTLRenderPipelineState?
     /// When true, texture(1) is this effect's own previous output instead of the final frame.
     @ObservationIgnored let selfHistory: Bool
-    /// Declared with `// @video`, `// @spectrum`, `// @palette`; bound from texture(2) up.
+    /// Declared with `// @video`, `// @spectrum`, `// @palette` (bound from texture(2) up) and `// @clock`.
     @ObservationIgnored let inputs: [StreamInputDef]
     /// This effect's own output and last frame's, for `selfHistory`. Made on main when the
     /// effect is built and carried over when the chain is edited, so the render thread never
@@ -708,17 +708,20 @@ final class Renderer {
     /// for `Frame.inputs` (bit n for texture(n)). Unconnected video and spectrum get black, an
     /// unconnected palette the grey ramp. Generators also get them in the vertex stage, at the
     /// same indices, so the spectrum or a video (like a webcam's depth) can move the mesh.
+    /// Clock inputs aren't textures and take no slot.
     private func bindInputs(_ enc: MTLRenderCommandEncoder, _ inputs: [StreamInputDef], sources: [StreamOutput?],
                             from first: Int, vertex: Bool = false) -> Float {
         var mask = 0
-        for (i, input) in inputs.enumerated() {
+        var slot = first
+        for (i, input) in inputs.enumerated() where input.kind != .clock {
             let source = i < sources.count ? sources[i] : nil
             let tex: MTLTexture
             if let t = source?.currentTexture { tex = t }
             else { tex = input.kind == .palette ? greyRamp : blackTexture }
-            if source != nil { mask |= 1 << (first + i) }
-            enc.setFragmentTexture(tex, index: first + i)
-            if vertex { enc.setVertexTexture(tex, index: first + i) }
+            if source != nil { mask |= 1 << slot }
+            enc.setFragmentTexture(tex, index: slot)
+            if vertex { enc.setVertexTexture(tex, index: slot) }
+            slot += 1
         }
         return Float(mask)
     }

@@ -789,7 +789,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "dancer"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -801,7 +801,7 @@ enum SelfCheck {
         }
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
-                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch"]
+                                     "cube": "inflate", "shards": "shardSpin", "wheel": "pitch", "dancer": "snap"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -854,6 +854,13 @@ enum SelfCheck {
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
                 w.reset(); l.reset()
             }
+            if geo == "dancer" {
+                guard let w = gen.bank["limbWidth"], w.def.min == 0, let l = gen.bank["limbLength"], l.def.min == 0,
+                      let h = gen.bank["headSize"], h.def.min == 0 else { return "dancer limbWidth/limbLength/headSize min should be 0" }
+                w.setBase(0); l.setBase(0); h.setBase(0)
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                w.reset(); l.reset(); h.reset()
+            }
             if geo == "torus" {
                 guard let t = gen.bank["thickness"], t.def.min == 0 else { return "torus thickness min should be 0" }
                 t.setBase(0)
@@ -880,6 +887,80 @@ enum SelfCheck {
         return nil
     }
 
+    /// Dancer, on a scene built in memory (a static camera on the front): its Sync input starts
+    /// unmapped, the routine draws a figure standing on the floor all the way through, it moves
+    /// at tempo and holds still at tempo 0, and with Clock · Sync mapped its tempo follows the
+    /// Clock's beat instead of the seconds.
+    private static func checkDancer(engine: Engine, snapshotDir: URL?) -> String? {
+        func scene(_ params: [String: Float], synced: Bool = false) -> RenderScene? {
+            let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
+            let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "clock")] : [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
+                                 palette: nil,
+                                 generator: GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 }),
+                                 effects: [],
+                                 mappings: synced ? [MappingSpec(source: "clock.sync", target: "generator.sync")] : [])
+            return engine.build(file, reuse: nil)
+        }
+        guard let still = scene(["tempo": 0]), let gen = still.generator, let tempo = gen.bank["tempo"] else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.inputs.map(\.kind) == [.clock, .palette, .spectrum, .video] else { return "inputs should be Sync, Palette, Spectrum and Texture" }
+        guard still.mappings.isEmpty, still.streamBindings.isEmpty, gen.bank.syncClock == nil else { return "connected itself" }
+        // The whole routine, a beat at a time (a rate knob's phase is in seconds at 120 BPM).
+        for beat in stride(from: 0.0, to: 32, by: snapshotDir == nil ? 1 : 0.5) {
+            tempo.phase = beat / 2
+            let name = String(format: "dancer-%04.1f.png", beat)
+            _ = engine.renderOffscreen(still, frames: 1, snapshot: snapshotDir?.appendingPathComponent(name))
+            let c = engine.coverage(engine.renderer.history)
+            guard c.fraction > 0.005, c.fraction < 0.4 else { return "beat \(beat) drew \(c.fraction) of the frame" }
+            // The floor is 1 below the middle; the feet stand on it whatever the pose.
+            guard c.centroid.y > 0.35, c.centroid.y < 0.65 else { return "beat \(beat) is off the floor: \(c.centroid)" }
+        }
+        tempo.phase = 0
+        for speed: Float in [0, 1] {
+            guard let s = scene(["tempo": speed]) else { return "didn't build" }
+            _ = engine.renderOffscreen(s, frames: 1, snapshot: nil)
+            let a = engine.coverage(engine.renderer.history)
+            _ = engine.renderOffscreen(s, frames: 20, snapshot: nil)
+            let b = engine.coverage(engine.renderer.history)
+            let moved = simd_length(b.centroid - a.centroid) + abs(b.fraction - a.fraction)
+            if speed == 0, moved > 0.001 { return "moved at tempo 0: \(moved)" }
+            if speed > 0, moved < 0.002 { return "didn't dance at tempo \(speed): \(moved)" }
+        }
+        // Free, tempo 1 runs a second a second. Synced, a second is two of the Clock's beats.
+        guard let free = scene(["tempo": 1]), let freeTempo = free.generator?.bank["tempo"] else { return "didn't build" }
+        _ = engine.renderOffscreen(free, frames: 60, snapshot: nil)
+        guard abs(freeTempo.phase - 1) < 0.01 else { return "free, tempo ran \(freeTempo.phase) in a second" }
+        guard let synced = scene(["tempo": 1], synced: true), let clock = synced.clock,
+              let syncedTempo = synced.generator?.bank["tempo"] else { return "didn't build with a Clock" }
+        guard synced.generator?.bank.syncClock === clock, synced.mappings.allSatisfy({ $0.problem == nil }) else {
+            return "Clock · Sync didn't map into Sync"
+        }
+        _ = engine.renderOffscreen(synced, frames: 30, snapshot: nil)
+        guard abs(syncedTempo.phase - clock.beat / 2) < 0.001 else {
+            return "synced, the dance is at beat \(syncedTempo.phase * 2), the Clock at \(clock.beat)"
+        }
+        let before = (phase: syncedTempo.phase, beat: clock.beat)
+        _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
+        let beats = clock.beat - before.beat
+        guard abs(beats - 2) > 0.02 else { return "the Clock runs at 120 BPM, which tells nothing apart" }
+        guard abs((syncedTempo.phase - before.phase) - beats / 2) < 0.001 else { return "synced, the dance didn't keep to the beat" }
+        // Double time: the dance gains two beats on every beat of the Clock.
+        syncedTempo.setBase(2)
+        let doubled = (phase: syncedTempo.phase, beat: clock.beat)
+        _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
+        guard abs((syncedTempo.phase - doubled.phase) - (clock.beat - doubled.beat)) < 0.05 else { return "synced, tempo 2 isn't double time" }
+        // A value can't go into Sync, and Sync can't go onto a knob.
+        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "clock")], modulators: [], camera: nil, palette: nil,
+                              generator: GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:]), effects: [], mappings: [])
+        wrong.mappings = [MappingSpec(source: "clock.pulse", target: "generator.sync"),
+                          MappingSpec(source: "clock.sync", target: "generator.tempo")]
+        guard let bad = engine.build(wrong, reuse: nil), bad.mappings.allSatisfy({ $0.problem != nil }),
+              bad.generator?.bank.syncClock == nil else { return "Sync took a value, or a knob took Sync" }
+        return nil
+    }
+
     /// Low Poly Instances layout (Grid, Cube), Brownian motion and Intersection blending, on a
     /// scene built in memory: a static camera on the front, one geo, nothing mapped.
     private static func checkInstancing(engine: Engine) -> String? {
@@ -893,7 +974,7 @@ enum SelfCheck {
             return engine.build(file, reuse: nil)
         }
         // Every geo gets the knobs, starting at Sphere, still and Comp, and the blend pipeline.
-        for geo in ["sphere", "torus", "plane", "cube", "shards", "wheel"] {
+        for geo in ["sphere", "torus", "plane", "cube", "shards", "wheel", "dancer"] {
             guard let s = scene(geo, [:]), let gen = s.generator else { return "\(geo) didn't build: \(engine.errorSummary ?? "")" }
             guard gen.bank["layout"]?.def.labels == ["Sphere", "Grid", "Cube"], gen.bank["layout"]?.base == 0,
                   gen.bank["columns"] != nil, gen.bank["brownian"]?.base == 0, gen.bank["brownianSpeed"]?.def.isRate == true,
@@ -1660,6 +1741,11 @@ enum SelfCheck {
             print("FAIL low poly: \(problem)"); failures += 1
         } else {
             print("ok   low poly geos")
+        }
+        if let problem = checkDancer(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL dancer: \(problem)"); failures += 1
+        } else {
+            print("ok   dancer (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the Clock when synced)")
         }
         if let problem = checkInstancing(engine: engine) {
             print("FAIL instancing: \(problem)"); failures += 1

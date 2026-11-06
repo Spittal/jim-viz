@@ -184,7 +184,7 @@ private struct DeviceInspector: View {
             InspectorSection("Inputs", key: "video-in") {
                 ForEach(sockets) { StreamInputTag(scene: scene, input: $0) }
                 if !sockets.isEmpty {
-                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs run free, and the Clock doesn't follow the audio.")
+                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs and rate knobs run free, and the Clock doesn't follow the audio.")
                 }
                 ForEach(triggers) { TriggerInputTag(scene: scene, input: $0) }
                 if !triggers.isEmpty {
