@@ -182,13 +182,13 @@ private struct DeviceInspector: View {
         let triggers = scene.triggerInputs.filter { $0.deviceKey == key }
         if !sockets.isEmpty || !triggers.isEmpty {
             InspectorSection("Inputs", key: "video-in") {
-                ForEach(sockets) { StreamSocket(scene: scene, input: $0) }
+                ForEach(sockets) { StreamInputTag(scene: scene, input: $0) }
                 if !sockets.isEmpty {
                     empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs run free, and the Clock doesn't follow the audio.")
                 }
-                ForEach(triggers) { t in HStack { TriggerPad(scene: scene, input: t); Spacer() } }
+                ForEach(triggers) { TriggerInputTag(scene: scene, input: $0) }
                 if !triggers.isEmpty {
-                    empty("Triggers fire from any number of outputs: a trigger (Clock · On Beat, Camera · On Cut) on its event, or a value each time it rises past ½ (an LFO, a kick, a MIDI pad). Click one to fire it by hand.")
+                    empty("Triggers fire from any number of outputs: a trigger (Clock · On Beat, Camera · On Cut) on its event, or a value each time it rises past ½ (an LFO, a kick, a MIDI pad). Click one to fire it by hand or pick what fires it.")
                 }
             }
         }

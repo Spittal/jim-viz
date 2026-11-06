@@ -9,28 +9,16 @@ struct LFODevice: View {
     var accent: Color? = nil
 
     var body: some View {
-        let isSyncWaiting = engine.mapSource.map { engine.kind(of: $0) == .clock } ?? false
         let subtitle = mod.presetLabel.map { "\($0) · \(mod.isSynced ? "Sync" : "Free")" } ?? (mod.isSynced ? "Sync" : "Free")
         DevicePanel(title: mod.id, subtitle: subtitle, isOn: $mod.enabled,
                     accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let scene = engine.current {
-                    HStack(spacing: 4) {
-                        if let reset = mod.resetTrigger { TriggerPad(scene: scene, input: reset) }
-                        if let socket = scene.streamInputs.first(where: { $0.key == "mod.\(mod.id).sync" }), isSyncWaiting || mod.isSynced {
-                            StreamSocket(scene: scene, input: socket)
-                        }
-                        Spacer()
-                    }
+            HStack(alignment: .top, spacing: 6) {
+                WaveScope(mod: mod).frame(width: 96, height: 58)
+                let visibleParams = mod.bank.params.filter { p in
+                    mod.isSynced ? p.def.name != "hz" : p.def.name != "rate"
                 }
-                HStack(alignment: .top, spacing: 6) {
-                    WaveScope(mod: mod).frame(width: 96, height: 58)
-                    let visibleParams = mod.bank.params.filter { p in
-                        mod.isSynced ? p.def.name != "hz" : p.def.name != "rate"
-                    }
-                    KnobGrid(params: visibleParams, prefix: "mod.\(mod.id)")
-                }
+                KnobGrid(params: visibleParams, prefix: "mod.\(mod.id)")
             }
         }
     }
@@ -504,9 +492,6 @@ struct VideoDevice: View {
                     .frame(width: 160)
                     .help("Which video file to loop")
                     VideoTransportBar(video: video).frame(width: 160, height: 8)
-                    if let scene = engine.current {
-                        HStack(spacing: 4) { TriggerPad(scene: scene, input: video.jumpTrigger); Spacer(minLength: 0) }
-                    }
                     DepthPreview(source: video)
                 }
                 .frame(width: 160)
@@ -633,110 +618,6 @@ private struct VideoPreviewView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: MetalSurfaceView, context: Context) {}
-}
-
-/// A stream input socket, such as the generator's Background (video), Spectrum or Palette.
-/// Pick an output of its kind from its menu, click it while one is waiting to be mapped, or
-/// drop one on it.
-struct StreamSocket: View {
-    @Environment(Engine.self) private var engine
-    let scene: RenderScene
-    let input: StreamInput
-
-    var body: some View {
-        let source = scene.mappings.first { $0.target == input.key && $0.kind.isStream }
-        let mapMode = engine.mapSource.map { engine.kind(of: $0) == input.kind } ?? false
-        let candidates = scene.streamOutputs.filter { $0.kind == input.kind }
-        let hover = engine.dropKnob == input.key
-        let highlight = mapMode || hover
-        Group {
-            if mapMode {
-                Button { engine.mapWaiting(to: input.key) } label: { chip(source) }
-                    .buttonStyle(.plain)
-            } else {
-                Menu {
-                    Button("None") { engine.setStreamInput(input.key, nil) }
-                    if !candidates.isEmpty { Divider() }
-                    ForEach(candidates) { v in
-                        Button("\(v.device) · \(v.name)") { engine.setStreamInput(input.key, v.key) }
-                    }
-                    if candidates.isEmpty {
-                        switch input.kind {
-                        case .spectrum: Text("Add Audio In to get a spectrum")
-                        case .audio: Text("Add Audio In to get audio")
-                        default: Text("Add a Webcam input to get video")
-                        }
-                    }
-                } label: { chip(source) }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-        }
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.modulation, lineWidth: highlight ? (hover ? 2 : 1) : 0))
-        .chainFrame(ChainDropDelegate.knobKey(input.key))
-        .help("\(input.label): a \(input.kind.noun) input. Pick a \(input.kind.noun) output, or drop one here.")
-    }
-
-    private func chip(_ source: MappingRuntime?) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: input.kind.icon).font(.system(size: 9))
-                .foregroundStyle(source?.isActive == true ? Theme.modulation : Theme.textDim)
-            Text(input.label).font(Theme.labelFont).foregroundStyle(Theme.textDim)
-            Text(source.map { $0.isActive ? $0.sourceLabel : "waiting" } ?? "None")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(source == nil ? Theme.textDim : Theme.text)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 6)
-        .frame(height: 18)
-        .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
-        .contentShape(Rectangle())
-    }
-}
-
-/// A trigger input's pad, such as the Cutter's Cut or a Video's Jump. Click it to fire it by
-/// hand. While an output that can fire it is waiting to be mapped (a trigger, or a value, which
-/// fires it when it rises past ½), click it to map that output (Shift-click to keep mapping),
-/// or drop one on it. It flashes each time it fires, and names what's mapped into it.
-struct TriggerPad: View {
-    @Environment(Engine.self) private var engine
-    let scene: RenderScene
-    let input: TriggerInput
-
-    var body: some View {
-        let sources = scene.mappings.filter { $0.target == input.key }
-        let waiting = engine.mapSource.flatMap { engine.kind(of: $0).connects(to: .trigger) ? $0 : nil }
-        let hover = engine.dropKnob == input.key
-        Button {
-            if waiting != nil {
-                engine.mapWaiting(to: input.key, keepMapping: NSEvent.modifierFlags.contains(.shift))
-            } else {
-                input.fire()
-            }
-        } label: {
-            HStack(spacing: 4) {
-                TriggerFlash(lastFired: { input.lastFired }, icon: true)
-                Text(input.label).font(Theme.labelFont).foregroundStyle(Theme.text)
-                if !sources.isEmpty {
-                    Text(sources.count > 1 ? "\(sources.count) mapped" : sources[0].isActive ? sources[0].sourceLabel : "waiting")
-                        .font(.system(size: 9))
-                        .foregroundStyle(Theme.textDim)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 6)
-            .frame(height: 18)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.modulation, lineWidth: waiting != nil || hover ? (hover ? 2 : 1) : 0))
-        .chainFrame(ChainDropDelegate.knobKey(input.key))
-        .help(waiting != nil ? "Click to map \(engine.sourceLabel(waiting!)) onto \(input.label)"
-                             : "\(input.label): a trigger input. Click to fire it. Map a trigger, or a value that fires it when it rises past ½ (an LFO, a kick, a MIDI pad).")
-    }
 }
 
 /// Lights up for a moment each time something fires: a trigger output's meter, or a pad's bolt.

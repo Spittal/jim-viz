@@ -54,10 +54,8 @@ struct DeviceChain: View {
                                 .chainFrame("device:input:\(p.id):picture")
                         }
                     }
-                    Color.clear.frame(width: 4).frame(maxHeight: .infinity)
-                        .chainFrame("inputs.end")
 
-                    sectionDivider
+                    sectionDivider("inputs.end")
 
                     // Modulation
                     if !scene.modulators.isEmpty {
@@ -72,21 +70,14 @@ struct DeviceChain: View {
                                 }
                                 .chainFrame("device:modulation:\(mod.id):\(mod.type.rawValue)")
                         }
-                        Color.clear.frame(width: 4).frame(maxHeight: .infinity)
-                            .chainFrame("modulators.end")
-                        sectionDivider
+                        sectionDivider("modulators.end")
                     }
 
                     // Generation
                     if let cam = scene.camera {
                         DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera, key: "camera"), select: "camera",
                                     onClose: { engine.removeCamera() }) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                if let triggers = scene.cameraMotion?.triggerInputs, !triggers.isEmpty {
-                                    HStack(spacing: 4) { ForEach(triggers) { TriggerPad(scene: scene, input: $0) } }
-                                }
-                                KnobGrid(params: cam.params, prefix: "camera")
-                            }
+                            KnobGrid(params: cam.params, prefix: "camera")
                         }
                         .contextMenu {
                             Button("Remove", role: .destructive) { engine.removeCamera() }
@@ -109,15 +100,7 @@ struct DeviceChain: View {
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
                         DevicePanel(title: "Generator", subtitle: gen.label ?? gen.type,
                                     accent: slotColor(.generator, key: gen.key), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                // Stream sockets only show while a stream of their kind is waiting to be mapped.
-                                let waiting = engine.mapSource.map { engine.kind(of: $0) }
-                                let sockets = scene.streamInputs.filter { $0.deviceKey == gen.key && $0.kind == waiting }
-                                if !sockets.isEmpty {
-                                    HStack(spacing: 4) { ForEach(sockets) { StreamSocket(scene: scene, input: $0) } }
-                                }
-                                KnobGrid(params: gen.bank.params, prefix: gen.key)
-                            }
+                            KnobGrid(params: gen.bank.params, prefix: gen.key)
                         }
                         .contextMenu {
                             Button("Move Left") { engine.moveGenerator(key: gen.key, by: -1) }.disabled(index == 0)
@@ -127,10 +110,8 @@ struct DeviceChain: View {
                         }
                         .chainFrame("device:generator:\(gen.key):\(gen.type)")
                     }
-                    Color.clear.frame(width: 4).frame(maxHeight: .infinity)
-                        .chainFrame("generators.end")
 
-                    sectionDivider
+                    sectionDivider("generators.end")
 
                     // Effects
                     ForEach(Array(scene.effects.enumerated()), id: \.element.id) { index, fx in
@@ -170,8 +151,11 @@ struct DeviceChain: View {
         .background(Theme.chainBackground)
     }
 
-    private var sectionDivider: some View {
+    /// The line between chain sections, with the same gap either side. It marks where its
+    /// section ends, for the insertion line when dropping at the end of a section.
+    private func sectionDivider(_ endKey: String) -> some View {
         Rectangle().fill(Theme.deviceBorder).frame(width: 2).padding(.vertical, 4)
+            .chainFrame(endKey)
     }
 
     private func isSlot(_ kind: DeviceKind) -> Bool { dropTarget == .replace(kind) }
@@ -206,7 +190,7 @@ struct DeviceChain: View {
                 .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
             let targetKey = i < genKeys.count ? genKeys[i] : "generators.end"
             if let frame = frames[targetKey] {
-                let x = i < genKeys.count ? (frame.minX - 4.5) : (frame.minX - 1.5)
+                let x = frame.minX - 4.5
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Theme.accent)
                     .frame(width: 3, height: frame.height)
@@ -219,7 +203,7 @@ struct DeviceChain: View {
                 .sorted { (frames[$0]?.minX ?? 0) < (frames[$1]?.minX ?? 0) }
             let targetKey = i < modKeys.count ? modKeys[i] : "modulators.end"
             if let frame = frames[targetKey] {
-                let x = i < modKeys.count ? (frame.minX - 4.5) : (frame.minX - 1.5)
+                let x = frame.minX - 4.5
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Theme.accent)
                     .frame(width: 3, height: frame.height)
@@ -277,6 +261,8 @@ struct KnobGrid: View {
                             Text(title.uppercased())
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
                                 .padding(.leading, 2)
                             if isMotionGroup(title) {
                                 ResetMotionButton {
@@ -295,6 +281,8 @@ struct KnobGrid: View {
                             }
                         }
                     }
+                    // Centred under the group's title when the title is the wider of the two.
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -396,6 +384,26 @@ struct DevicePanel<Content: View>: View {
 
     private var collapsed: Bool { select.map(engine.isCollapsed) ?? false }
 
+    /// The device's inputs and outputs, if it has any.
+    private var io: DeviceIO? {
+        guard let select, let scene = engine.current else { return nil }
+        let io = DeviceIO(scene: scene, key: select)
+        return io.isEmpty ? nil : io
+    }
+
+    private var ioOn: Bool { select.map(engine.isIOShown) ?? false }
+
+    /// Inputs show while IO is on, and also while an output they can take is waiting to be
+    /// mapped (or is being dragged), so there's something to click or drop it on.
+    private func showInputs(_ io: DeviceIO) -> Bool {
+        guard io.hasInputs else { return false }
+        return ioOn || engine.mapSource.map { io.accepts(engine.kind(of: $0)) } ?? false
+    }
+
+    private var ioDivider: some View {
+        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1).padding(.vertical, 6)
+    }
+
     var body: some View {
         let on = isOn?.wrappedValue ?? true
         Group {
@@ -404,10 +412,26 @@ struct DevicePanel<Content: View>: View {
             } else {
                 VStack(spacing: 0) {
                     header
-                    content
-                        .padding(6)
-                        .opacity(on ? 1 : 0.4)
-                    Spacer(minLength: 0)
+                    HStack(alignment: .top, spacing: 0) {
+                        if let io, showInputs(io) {
+                            IOColumn(title: "IN") {
+                                ForEach(io.streamInputs) { StreamInputTag(scene: engine.current!, input: $0) }
+                                ForEach(io.triggerInputs) { TriggerInputTag(scene: engine.current!, input: $0) }
+                            }
+                            ioDivider
+                        }
+                        content
+                            .padding(6)
+                            .opacity(on ? 1 : 0.4)
+                        if let io, ioOn, io.hasOutputs {
+                            ioDivider
+                            IOColumn(title: "OUT") {
+                                ForEach(io.streamOutputs) { StreamOutputTag(scene: engine.current!, stream: $0) }
+                                ForEach(io.outputs) { OutputTag(scene: engine.current!, output: $0) }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
         }
@@ -500,6 +524,20 @@ struct DevicePanel<Content: View>: View {
                     .foregroundStyle(Theme.textDim)
             }
             Spacer(minLength: 4)
+            if let select, io != nil {
+                Button { engine.toggleIO(select) } label: {
+                    Text("IO")
+                        .font(.system(size: 8, weight: .heavy))
+                        .foregroundStyle(ioOn ? Theme.chainBackground : Theme.textDim)
+                        .padding(.horizontal, 3)
+                        .frame(height: 12)
+                        .background(RoundedRectangle(cornerRadius: 2).fill(ioOn ? Theme.modulation : .clear))
+                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(ioOn ? .clear : Theme.textDim, lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(ioOn ? "Hide inputs and outputs" : "Show inputs and outputs")
+            }
             if let settings {
                 Button { showSettings.toggle() } label: {
                     Image(systemName: "slider.horizontal.3").font(.system(size: 9, weight: .semibold))
@@ -534,28 +572,35 @@ struct PaletteEditor: View {
     let palette: PaletteModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             // The palette as it renders, with its inputs (and their modulation) applied.
             let shown = palette.colors.map { c in PaletteParams.adjust(c) { palette.bank[$0]?.display ?? 1 } }
-            LinearGradient(colors: shown.map(Self.color), startPoint: .leading, endPoint: .trailing)
-                .frame(width: 150, height: 14)
+            LinearGradient(colors: shown.map(Self.color), startPoint: .top, endPoint: .bottom)
+                .frame(width: 14)
+                .frame(maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 2))
                 .help("The palette as it renders, after red, green, blue, hue, saturation and brightness")
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 6), count: 4), alignment: .leading, spacing: 6) {
-                ForEach(palette.colors.indices, id: \.self) { i in
-                    ColorWell(color: palette.colors[i]) { updateColor(at: i, to: $0) }
-                        .frame(width: 28, height: 20)
+            VStack(alignment: .leading, spacing: 4) {
+                ScrollView(.vertical) {
+                    VStack(spacing: 4) {
+                        ForEach(palette.colors.indices, id: \.self) { i in
+                            ColorWell(color: palette.colors[i]) { updateColor(at: i, to: $0) }
+                                .frame(width: 34, height: 16)
+                        }
+                    }
                 }
+                .scrollIndicators(.never)
+                HStack(spacing: 4) {
+                    Button { replaceColors(palette.colors + [palette.colors.last ?? .one]) } label: { Image(systemName: "plus") }
+                    Button { replaceColors(Array(palette.colors.dropLast())) } label: { Image(systemName: "minus") }
+                        .disabled(palette.colors.count <= 2)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
             }
-            HStack(spacing: 4) {
-                Button { replaceColors(palette.colors + [palette.colors.last ?? .one]) } label: { Image(systemName: "plus") }
-                Button { replaceColors(Array(palette.colors.dropLast())) } label: { Image(systemName: "minus") }
-                    .disabled(palette.colors.count <= 2)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .frame(width: 34)
         }
-        .frame(width: 150, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func updateColor(at index: Int, to color: SIMD3<Float>) {

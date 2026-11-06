@@ -1054,6 +1054,10 @@ enum SelfCheck {
         guard engine.isCollapsed("generator"), !engine.isCollapsed("camera") else { return "device not folded" }
         engine.toggleCollapsed("generator")
         guard !engine.isCollapsed("generator") else { return "device not unfolded" }
+        engine.toggleIO("generator")
+        guard engine.isIOShown("generator"), !engine.isIOShown("camera") else { return "device IO not shown" }
+        engine.toggleIO("generator")
+        guard !engine.isIOShown("generator") else { return "device IO not hidden" }
         engine.apply(.camera, "orbit", preset: "drift")
         guard engine.current?.cameraLabel == "Drift", engine.current?.camera?["distance"]?.base == 9 else { return "camera preset not applied" }
         engine.apply(.palette, "palette", preset: "ice")

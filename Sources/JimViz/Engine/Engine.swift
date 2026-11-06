@@ -225,6 +225,17 @@ final class Engine {
         if collapsed.contains(k) { collapsed.remove(k) } else { collapsed.insert(k) }
     }
 
+    /// Devices showing their IO columns (inputs left, outputs right), by scene file and chain
+    /// key. Kept for the session, like folding.
+    private var ioShown: Set<String> = []
+
+    func isIOShown(_ key: String) -> Bool { ioShown.contains("\(currentURL?.path ?? ""):\(key)") }
+
+    func toggleIO(_ key: String) {
+        let k = "\(currentURL?.path ?? ""):\(key)"
+        if ioShown.contains(k) { ioShown.remove(k) } else { ioShown.insert(k) }
+    }
+
     /// Selects a device, unless mapping or learning, where clicks land on knobs in other devices
     /// and the inspector should stay on the device being mapped from.
     func selectDevice(_ key: String?) {

@@ -31,10 +31,6 @@ struct ClockDevice: View {
                             .font(Theme.valueFont)
                             .foregroundStyle(Theme.textDim)
                     }
-                    Button("First Beat") { state.firstBeat() }
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                        .help("Press on the first beat of a phrase. The nearest beat becomes bar 1, beat 1.")
                     Text(status(state))
                         .font(Theme.labelFont)
                         .foregroundStyle(Theme.textDim)

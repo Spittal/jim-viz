@@ -91,7 +91,9 @@ Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Pale
   - double-click a device header to fold it.
 - **Selecting a device** highlights it, and the right-hand inspector shows its outputs,
   inputs and mappings.
-- **Keep outputs and mapping UI in the inspector,** not on the device panels.
+- **Keep mapping settings in the inspector,** not on the device panels. A device's inputs
+  and outputs show as tags only in its IO columns, behind the **IO** toggle in its header
+  (inputs left, outputs right, each scrolling vertically). Don't put IO tags among the knobs.
 - **Device settings** go in a popover button in the device header, next to the close X.
 - **No empty-state "+ drop here" placeholders.**
 - **Errors go in the status bar.** For example, a shader that fails to compile shows its
