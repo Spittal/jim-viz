@@ -50,6 +50,19 @@ final class ContentStore {
         shadersDir.appendingPathComponent("effects/\(name).metal")
     }
 
+    /// A lens tool's shader (`lenses/distortion.metal`), which draws an ST map.
+    func lensShader(_ name: String) -> URL {
+        shadersDir.appendingPathComponent("lenses/\(name).metal")
+    }
+
+    func availableLenses() -> [String] {
+        let dir = shadersDir.appendingPathComponent("lenses")
+        let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension == "metal" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted()
+    }
+
     var commonShader: URL { shadersDir.appendingPathComponent("common.metal") }
 
     /// Processing for the Webcam input; its `// @param`s are the Webcam's knobs.

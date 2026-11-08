@@ -53,6 +53,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | audio | Audio In · Audio Out | Clock · Audio |
 | clock | Clock · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
 | trigger | Clock · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Clock · First Beat |
+| stmap | Lens · ST Map (Nuke convention: s, t in red, green; t bottom to top) | Camera · Lens, which reprojects the rendered picture before the effects |
 
 - A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%
   and an invert toggle for the minus.
@@ -66,7 +67,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 The device chain reads like an Ableton track, and the picture is built left to right:
 
 ```
-Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Palette → Generator → Effects…
+Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens → Palette → Generator → Effects…
 ```
 
 - Inputs and modulators produce signals.
@@ -74,7 +75,7 @@ Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Pale
 - Each effect processes the previous effect's output (`src`), in chain order. Reordering
   effects changes the image.
 - Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
-  `mod.<id>`, `camera`, `palette`, `generator` (the first generator) and `generator.<id>` (the
+  `mod.<id>`, `camera`, `lens`, `palette`, `generator` (the first generator) and `generator.<id>` (the
   rest), `post.<id>`.
 - **A scene** is one such chain plus its mappings, saved as JSON in `Content/Scenes`.
 - **Switching scenes** renders the outgoing and incoming scenes at once and blends them.

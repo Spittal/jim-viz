@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// The kinds of device a scene's chain holds, left to right.
 enum DeviceKind: String, CaseIterable {
-    case input, modulation, camera, palette, generator, effect
+    case input, modulation, camera, lens, palette, generator, effect
 }
 
 /// Something being dragged onto the device chain: a browser item, an effect being moved,
@@ -56,7 +56,7 @@ extension View {
 
 /// Where a hovering drag would land.
 enum ChainDropTarget: Equatable {
-    /// Replaces a single-slot device in the chain (cardinality == .one: camera, palette).
+    /// Replaces a single-slot device in the chain (cardinality == .one: camera, lens, palette).
     case replace(DeviceKind)
     /// Appends a multi-instance device to the chain (cardinality == .many: generator, modulation, input).
     case append(DeviceKind)
@@ -207,7 +207,7 @@ struct ChainDropDelegate: DropDelegate {
                 }.count
                 return .inputIndex(index)
 
-            case .camera, .palette:
+            case .camera, .lens, .palette:
                 return .replace(kind)
             }
         }
@@ -233,6 +233,7 @@ extension Engine {
             case .modulation: replaceModulator(id: key, tool: tool, preset: preset)
             case .input: replaceInput(key: key, tool: tool, preset: preset)
             case .camera: apply(.camera, tool, preset: preset)
+            case .lens: apply(.lens, tool, preset: preset)
             case .palette: apply(.palette, tool, preset: preset)
             }
         case (.device(.generator, let tool, let preset), .generatorIndex(let i)):

@@ -9,12 +9,15 @@ import QuartzCore
 /// - palette: a Palette's gradient, with its inputs applied.
 /// - audio: Audio In's audio stream, frame by frame, for the Clock's beat tracking.
 /// - clock: Clock's tempo / beat sync stream, for syncing LFOs and shaders' rate knobs.
+/// - stmap: a lens's ST map, Nuke's convention: each pixel holds where in the source picture
+///   to read, s left to right and t bottom to top, 0...1 across the frame. Goes into the
+///   Camera's Lens input, which reprojects the rendered picture through it.
 /// Video, spectrum and palette are textures a shader declares an input for; audio goes only
 /// into the Clock's Audio input; clock sync goes into an LFO's Sync input or a clock input a
 /// shader declares. Nothing reaches a shader, the Clock, or an LFO except through a mapping:
 /// no shared audio, clock or colors.
 enum IOKind: String {
-    case value, trigger, video, spectrum, palette, audio, clock
+    case value, trigger, video, spectrum, palette, audio, clock, stmap
 
     var isStream: Bool { self != .value && self != .trigger }
 
@@ -23,11 +26,12 @@ enum IOKind: String {
     /// pad can fire one).
     func connects(to input: IOKind) -> Bool { self == input || (self == .value && input == .trigger) }
 
-    /// As written in messages: "video", "spectrum", "palette", "values", "triggers", "clock".
+    /// As written in messages: "video", "spectrum", "palette", "values", "triggers", "clock", "ST map".
     var noun: String {
         switch self {
         case .value: return "values"
         case .trigger: return "triggers"
+        case .stmap: return "ST map"
         default: return rawValue
         }
     }
@@ -51,12 +55,13 @@ enum IOKind: String {
         case .palette: return "paintpalette"
         case .audio: return "speaker.wave.2"
         case .clock: return "clock"
+        case .stmap: return "camera.aperture"
         }
     }
 
     /// The shader declaration that makes an input of this kind: `// @video name Label`.
-    /// Values, triggers and audio have none.
-    var directive: String? { isStream && self != .audio ? "// @\(rawValue) " : nil }
+    /// Values, triggers, audio and ST maps (only the Camera takes one) have none.
+    var directive: String? { isStream && self != .audio && self != .stmap ? "// @\(rawValue) " : nil }
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
@@ -88,6 +93,8 @@ final class StreamOutput: Identifiable {
     static let paletteKey = "palette.colors"
     static let audioKey = "audio.out"
     static let clockSyncKey = "clock.sync"
+    /// A lens's ST map, which goes into the Camera's Lens input (`StreamInput.cameraLensKey`).
+    static let stmapKey = "lens.stmap"
     static let harmonicSpectrumKey = "audio.harmonicSpectrum"
     static let percussiveSpectrumKey = "audio.percussiveSpectrum"
     /// Audio In's spectrum outputs and their names.
@@ -100,6 +107,7 @@ final class StreamOutput: Identifiable {
         if key == paletteKey { return .palette }
         if key == audioKey { return .audio }
         if key == clockSyncKey { return .clock }
+        if key == stmapKey { return .stmap }
         // Video and depth come from video inputs (`webcam.<id>.video`, `picture.<id>.depth`);
         // elsewhere `.depth` is a knob, like an LFO's.
         let parts = key.split(separator: ".")
@@ -142,6 +150,8 @@ struct StreamInputDef: Hashable {
 struct StreamInput: Identifiable, Hashable {
     /// The Clock's Audio input, which takes Audio In's Audio Out to follow the beat.
     static let clockAudioKey = "clock.audio"
+    /// The Camera's Lens input, which takes a lens's ST map and reprojects the picture through it.
+    static let cameraLensKey = "camera.lens"
 
     let key: String
     let label: String

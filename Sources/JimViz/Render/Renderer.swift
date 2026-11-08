@@ -235,6 +235,10 @@ final class RenderScene {
     let cameraMotion: CameraMotion?
     let cameraPreset: String?
     let cameraLabel: String?
+    /// The camera effect after the Camera: a lens writing an ST map.
+    let lens: LensRuntime?
+    /// The ST map the Camera reprojects its picture through, while one is mapped into its Lens input.
+    let cameraLens: StreamOutput?
     let effects: [EffectRuntime]
     let palette: PaletteModel?
     let palettePreset: String?
@@ -247,7 +251,7 @@ final class RenderScene {
     let banksByPath: [String: ParamBank]
     var hasAudioInput: Bool { audioIn != nil }
     var hasClock: Bool { clock != nil }
-    /// Every device's chain key, left to right: inputs, `camera`, `palette`, generators, `post.<id>`.
+    /// Every device's chain key, left to right: inputs, `camera`, `lens`, `palette`, generators, `post.<id>`.
     let deviceKeys: [String]
     /// The stream feeding each generator's and effect's inputs, by generator key and effect id.
     let generatorSources: [String: [StreamOutput?]]
@@ -263,7 +267,7 @@ final class RenderScene {
          inputs: [InputDevice], modulators: [ModulatorRuntime],
          streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
          camera: ParamBank?, cameraMotion: CameraMotion?, cameraPreset: String?, cameraLabel: String?,
-         effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
+         lens: LensRuntime?, effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
          outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
         self.name = name; self.generators = generators
         self.inputs = inputs
@@ -288,6 +292,7 @@ final class RenderScene {
             .map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
         streamInputs = (clock != nil ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
             + syncInputs
+            + (camera != nil ? [StreamInput(key: StreamInput.cameraLensKey, label: "Lens", kind: .stmap)] : [])
             + generators.flatMap { gen in gen.inputs.map { StreamInput(key: "\(gen.key).\($0.name)", label: $0.label, kind: $0.kind) } }
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
         generatorSources = Dictionary(generators.map { gen in (gen.key, gen.inputs.map { streamBindings["\(gen.key).\($0.name)"] }) },
@@ -298,10 +303,12 @@ final class RenderScene {
         triggerInputs = (clock.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
             + modulators.compactMap(\.resetTrigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
+        self.lens = lens
+        cameraLens = streamBindings[StreamInput.cameraLensKey]
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
-        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
+        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (lens != nil ? [LensRuntime.key] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
     }
 
     /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
@@ -365,6 +372,38 @@ final class Renderer {
     static let depthSize = (width: 384, height: 216)
     private var transitionPipeline: MTLRenderPipelineState!
     private var webcamBgPipeline: MTLRenderPipelineState!
+    /// The Camera's Lens: reads the picture through an ST map.
+    private var reprojectPipeline: MTLRenderPipelineState!
+    /// The picture after the Camera's Lens, which the post chain starts from.
+    private var lensTex: MTLTexture!
+
+    private func makeReprojectPipeline() {
+        let src = """
+        #include <metal_stdlib>
+        using namespace metal;
+        struct FXOut { float4 position [[position]]; float2 uv; };
+        vertex FXOut reproject_vertex(uint vid [[vertex_id]]) {
+            float2 p = float2((vid << 1) & 2, vid & 2);
+            FXOut o; o.position = float4(p * 2 - 1, 0, 1); o.uv = float2(p.x, 1 - p.y); return o;
+        }
+        // An ST map holds s left to right and t bottom to top; outside 0...1 is off the frame.
+        fragment float4 reproject_fragment(FXOut in [[stage_in]],
+                                           texture2d<float> src [[texture(0)]],
+                                           texture2d<float> stmap [[texture(1)]]) {
+            constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
+            constexpr sampler linear(filter::linear, address::clamp_to_edge);
+            float2 st = stmap.sample(nearest, in.uv).rg;
+            if (any(st < 0) || any(st > 1) || !all(isfinite(st))) return float4(0);
+            return src.sample(linear, float2(st.x, 1 - st.y));
+        }
+        """
+        let lib = try! device.makeLibrary(source: src, options: nil)
+        let d = MTLRenderPipelineDescriptor()
+        d.vertexFunction = lib.makeFunction(name: "reproject_vertex")
+        d.fragmentFunction = lib.makeFunction(name: "reproject_fragment")
+        d.colorAttachments[0].pixelFormat = Self.workFormat
+        reprojectPipeline = try! device.makeRenderPipelineState(descriptor: d)
+    }
 
     private func makeWebcamBgPipeline() {
         let src = """
@@ -432,6 +471,7 @@ final class Renderer {
         makePresentPipeline()
         makeTransitionPipeline()
         makeWebcamBgPipeline()
+        makeReprojectPipeline()
     }
 
     /// Textures for an Audio In's spectrum, silent to start. Call on main, when it is built.
@@ -461,11 +501,21 @@ final class Renderer {
         msaaColor = tex(Self.workFormat, samples: Self.sampleCount, usage: .renderTarget, memoryless: true)
         msaaDepth = tex(.depth32Float, samples: Self.sampleCount, usage: .renderTarget, memoryless: true)
         sceneTex = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
+        lensTex = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         transitionFrom = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         transitionTo = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         ping = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         pong = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
         history = tex(Self.workFormat, usage: [.renderTarget, .shaderRead])
+    }
+
+    /// A lens's ST map, at the output size. Call on main, when the lens is built.
+    func makeSTMapTexture() -> MTLTexture {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: LensRuntime.format, width: outputSize.width,
+                                                         height: outputSize.height, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = .private
+        return device.makeTexture(descriptor: d)!
     }
 
     /// Textures for a self-history effect. Call on main, when the effect is built.
@@ -572,8 +622,10 @@ final class Renderer {
     }
 
     /// A full-screen pass: `fx_vertex` with the named fragment function, into a work texture.
-    /// Effects name theirs `effect`; the webcam processing shader has `webcam` and `webcam_depth`.
-    func makeFullscreenPipeline(_ shader: CompiledShader, fragment: String) throws -> MTLRenderPipelineState {
+    /// Effects name theirs `effect`; the webcam processing shader has `webcam` and `webcam_depth`;
+    /// lenses have `lens`, drawn into an ST map.
+    func makeFullscreenPipeline(_ shader: CompiledShader, fragment: String,
+                                pixelFormat: MTLPixelFormat = workFormat) throws -> MTLRenderPipelineState {
         guard let v = shader.library.makeFunction(name: "fx_vertex"),
               let f = shader.library.makeFunction(name: fragment) else {
             throw ShaderError(file: shader.url.lastPathComponent, message: "needs a fragment function named \(fragment)")
@@ -581,7 +633,7 @@ final class Renderer {
         let d = MTLRenderPipelineDescriptor()
         d.vertexFunction = v
         d.fragmentFunction = f
-        d.colorAttachments[0].pixelFormat = Self.workFormat
+        d.colorAttachments[0].pixelFormat = pixelFormat
         do {
             return try device.makeRenderPipelineState(descriptor: d)
         } catch {
@@ -777,8 +829,15 @@ final class Renderer {
             enc.endEncoding()
         }
 
-        // Post chain, ping-ponging between two targets.
+        // The Camera's Lens: the picture, reprojected through the ST map mapped into it.
         var src: MTLTexture = sceneTex
+        if let lens = scene.lens, scene.cameraLens === lens.output, lens.pipeline != nil {
+            if lens.needsDraw() { encodeLens(cmd, lens, f) }
+            encodeReproject(cmd, from: sceneTex, through: lens.stmap, into: lensTex)
+            src = lensTex
+        }
+
+        // Post chain, ping-ponging between two targets.
         for fx in scene.effects where fx.enabled {
             guard let pipeline = fx.pipeline else { continue }
             var dst: MTLTexture = src === ping ? pong! : ping!
@@ -810,6 +869,39 @@ final class Renderer {
             blit.copy(from: src, to: target)
             blit.endEncoding()
         }
+    }
+
+    /// Draws a lens's ST map from its knobs. It reads no time, so it's drawn only when they change.
+    private func encodeLens(_ cmd: MTLCommandBuffer, _ lens: LensRuntime, _ f: FrameUniforms) {
+        guard let pipeline = lens.pipeline else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = lens.stmap
+        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.label = "lens"
+        var lf = f
+        lf.inputs = 0
+        enc.setRenderPipelineState(pipeline)
+        enc.setFragmentBytes(&lf, length: MemoryLayout<FrameUniforms>.stride, index: 0)
+        lens.bank.withPacked { enc.setFragmentBytes($0, length: $1, index: 1) }
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
+    }
+
+    /// Reads `source` through an ST map into `target`. Off-frame lookups are transparent black.
+    private func encodeReproject(_ cmd: MTLCommandBuffer, from source: MTLTexture, through stmap: MTLTexture, into target: MTLTexture) {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.label = "camera.lens"
+        enc.setRenderPipelineState(reprojectPipeline)
+        enc.setFragmentTexture(source, index: 0)
+        enc.setFragmentTexture(stmap, index: 1)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 
     /// Draws both scenes, each into its own texture, and blends them into `history`.

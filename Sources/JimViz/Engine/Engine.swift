@@ -59,6 +59,7 @@ final class Engine {
     private enum CacheEntry {
         case generator(CompiledShader, mesh: MTLRenderPipelineState, blend: MTLRenderPipelineState?, background: MTLRenderPipelineState)
         case effect(CompiledShader, MTLRenderPipelineState)
+        case lens(CompiledShader, MTLRenderPipelineState)
         case webcam(CompiledShader, MTLRenderPipelineState, depth: MTLRenderPipelineState)
     }
 
@@ -413,6 +414,10 @@ final class Engine {
         return CameraSlot(type: tool, preset: id, params: params)
     }
 
+    private func lensSlot(_ tool: String, preset id: String?) -> LensSlot {
+        LensSlot(type: tool, preset: id, params: id.flatMap { store.preset(.lens, tool, $0)?.params })
+    }
+
     private func paletteSlot(preset id: String?) -> PaletteSlot {
         let colors = id.flatMap { store.preset(.palette, "palette", $0)?.colors } ?? Tools.defaultPalette
         return PaletteSlot(preset: id, colors: colors)
@@ -468,6 +473,10 @@ final class Engine {
             let slot = cameraSlot(tool, preset: preset)
             edit("Camera: \(label)") { $0.camera = slot }
             selectDevice("camera")
+        case .lens:
+            let slot = lensSlot(tool, preset: preset)
+            edit("Lens: \(label)") { $0.lens = slot }
+            selectDevice(LensRuntime.key)
         case .palette:
             var slot = paletteSlot(preset: preset)
             // A preset brings colours; the palette's inputs stay as they are.
@@ -536,6 +545,11 @@ final class Engine {
     func removeCamera() {
         if selectedDevice == "camera" { selectDevice(nil) }
         edit("Removed Camera") { $0.camera = nil }
+    }
+
+    func removeLens() {
+        if selectedDevice == LensRuntime.key { selectDevice(nil) }
+        edit("Removed Lens") { $0.lens = nil }
     }
 
     func removePalette() {
@@ -619,6 +633,8 @@ final class Engine {
         selectDevice(nil)
         if key == "camera" {
             removeCamera()
+        } else if key == LensRuntime.key {
+            removeLens()
         } else if key == "palette" {
             removePalette()
         } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
@@ -770,6 +786,7 @@ final class Engine {
         switch parts.first {
         case "generator": device = current?.generatorLabel ?? "Generator"
         case "camera": device = "Camera"
+        case "lens": device = "Lens"
         case "audio": device = "Audio In"
         case "clock": device = "Clock"
         case "post", "mod": device = parts.count > 2 ? parts[1] : target
@@ -948,6 +965,7 @@ final class Engine {
         case "audio": return "Audio In"
         case "clock": return "Clock"
         case "camera": return "Camera"
+        case "lens": return current?.lens?.label ?? "Lens"
         case "palette": return "Palette"
         case "generator": return current?.generatorLabel ?? "Generator"
         case _ where key.hasPrefix("generator."):
@@ -973,7 +991,7 @@ final class Engine {
         for slot in file.generators {
             let slotKey = slot.key
             let slotId = slot.id ?? "generator"
-            guard case let .generator(shader, meshPipe, blendPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
+            guard case let .generator(shader, meshPipe, blendPipe, bgPipe)? = compiled(store.generatorShader(slot.type), as: .generator) else {
                 return nil
             }
             guard let mesh = shader.mesh else {
@@ -1020,6 +1038,25 @@ final class Engine {
             cameraLabel = nil
         }
 
+        // The camera effect: a lens, drawing an ST map. While its shader fails to compile the
+        // lens keeps the knobs and pipeline it had.
+        var lens: LensRuntime?
+        errors["lens"] = nil
+        if let slot = file.lens {
+            guard store.availableLenses().contains(slot.type) else {
+                errors["lens"] = "unknown lens type \(slot.type)"
+                return nil
+            }
+            let old = reuse?.lens?.type == slot.type ? reuse?.lens : nil
+            var defs: [ParamDef] = [], pipeline: MTLRenderPipelineState?
+            if case let .lens(shader, p)? = compiled(store.lensShader(slot.type), as: .lens) { defs = shader.params; pipeline = p }
+            else if let old { defs = old.bank.params.map(\.def); pipeline = old.pipeline }
+            let bank = ParamBank(defs: defs, values: slot.params ?? [:], reuse: old?.preset == slot.preset ? old?.bank : nil)
+            lens = LensRuntime(type: slot.type, preset: slot.preset,
+                               label: presetName(.lens, slot.type, slot.preset) ?? Tools.label(.lens, slot.type),
+                               bank: bank, pipeline: pipeline, stmap: reuse?.lens?.stmap ?? renderer.makeSTMapTexture())
+        }
+
         // Modulation: LFOs, Maths and Macros.
         var modulators: [ModulatorRuntime] = []
         errors["modulator"] = nil
@@ -1049,7 +1086,7 @@ final class Engine {
             var pipeline: MTLRenderPipelineState?
             var selfHistory = false
             var fxInputs: [StreamInputDef] = []
-            if case let .effect(shader, p)? = compiled(store.effectShader(fx.effect), generator: false) {
+            if case let .effect(shader, p)? = compiled(store.effectShader(fx.effect), as: .effect) {
                 defs = shader.params; pipeline = p; selfHistory = shader.selfHistory; fxInputs = shader.inputs
             } else if let old {
                 defs = old.bank.params.map(\.def); pipeline = old.pipeline; selfHistory = old.selfHistory
@@ -1161,6 +1198,7 @@ final class Engine {
             }
         }
         if let camera { banks["camera"] = camera }
+        if let lens { banks[LensRuntime.key] = lens.bank }
         if let paletteBank { banks["palette"] = paletteBank }
         for gen in generators { banks[gen.key] = gen.bank }
         if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
@@ -1185,6 +1223,7 @@ final class Engine {
             case .midi: break
             }
         }
+        if let lens { streamOutputs.append(lens.output) }
         if let palette {
             let gpu = palette.gpu
             streamOutputs.append(StreamOutput(StreamOutput.paletteKey, "Colours", device: "Palette", kind: .palette) { gpu.current })
@@ -1193,6 +1232,7 @@ final class Engine {
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
         if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .audio) }
         for mod in modulators where mod.type == .lfo { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
+        if camera != nil { streamInputs[StreamInput.cameraLensKey] = ("Camera · Lens", .stmap) }
         for gen in generators {
             for v in gen.inputs {
                 streamInputs["\(gen.key).\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)
@@ -1217,6 +1257,7 @@ final class Engine {
             if source.hasPrefix("clock.") { return "Needs Clock in the chain" }
             if source.hasPrefix("camera.") { return "Needs Camera in the chain" }
             if source.hasPrefix("palette.") { return "Needs Palette in the chain" }
+            if source.hasPrefix("lens.") { return "Needs a Lens in the chain" }
             if source.hasPrefix("mod.") { return "\(device.dropFirst(4)) isn't in this scene" }
             if source.hasPrefix("webcam.") { return "Needs its Webcam in the chain" }
             if source.hasPrefix("video.") { return "Needs its Video in the chain" }
@@ -1250,6 +1291,7 @@ final class Engine {
                 case .palette: fallbackLabel = "Palette · Colours"
                 case .audio: fallbackLabel = "Audio In · Audio Out"
                 case .clock: fallbackLabel = "Clock · Sync"
+                case .stmap: fallbackLabel = "Lens · ST Map"
                 default: fallbackLabel = spec.source.hasSuffix(".depth") ? "Webcam · Depth" : "Webcam · Video"
                 }
                 mappings.append(MappingRuntime(
@@ -1301,6 +1343,7 @@ final class Engine {
             switch parts.first {
             case "generator": device = generatorLabel ?? "Generator"
             case "camera": device = "Camera"
+            case "lens": device = "Lens"
             case "audio": device = "Audio In"
             case "clock": device = "Clock"
             default: device = parts.count > 2 ? parts[1] : (parts.first ?? spec.target)
@@ -1329,7 +1372,7 @@ final class Engine {
         let scene = RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
                                 streamOutputs: streamOutputs, streamBindings: streamBindings,
                                 camera: camera, cameraMotion: cameraMotion, cameraPreset: cameraPreset, cameraLabel: cameraLabel,
-                                effects: effects, palettePreset: palettePreset,
+                                lens: lens, effects: effects, palettePreset: palettePreset,
                                 palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
                                 banksByPath: banks)
         // The depth model runs only for video sources whose Depth goes somewhere.
@@ -1368,18 +1411,23 @@ final class Engine {
         }
     }
 
+    private enum ShaderRole { case generator, effect, lens }
+
     /// Compiles a shader, or returns the cached result. Records errors per file.
-    private func compiled(_ url: URL, generator: Bool) -> CacheEntry? {
+    private func compiled(_ url: URL, as role: ShaderRole) -> CacheEntry? {
         let key = url.standardizedFileURL
         if let hit = cache[key] { return hit }
         do {
             let shader = try compiler.compile(url)
             let entry: CacheEntry
-            if generator {
+            switch role {
+            case .generator:
                 let p = try renderer.makeGeneratorPipelines(shader)
                 entry = .generator(shader, mesh: p.mesh, blend: p.blend, background: p.background)
-            } else {
+            case .effect:
                 entry = .effect(shader, try renderer.makeFullscreenPipeline(shader, fragment: "effect"))
+            case .lens:
+                entry = .lens(shader, try renderer.makeFullscreenPipeline(shader, fragment: "lens", pixelFormat: LensRuntime.format))
             }
             cache[key] = entry
             errors[url.lastPathComponent] = nil
@@ -1396,6 +1444,7 @@ final class Engine {
         if let cam = scene.camera {
             file.camera?.params = cam.baseValues
         }
+        if let lens = scene.lens { file.lens?.params = lens.bank.baseValues }
         for i in file.modulators.indices {
             guard let m = scene.modulators.first(where: { $0.id == file.modulators[i].id }) else { continue }
             file.modulators[i].params = m.bank.baseValues
@@ -1464,7 +1513,7 @@ final class Engine {
                 // Shared code (common.metal, `_` include files) recompiles everything.
                 if url.lastPathComponent == "common.metal" || url.lastPathComponent.hasPrefix("_") { cache.removeAll() }
                 // A new or removed generator changes the browser.
-                if url.path.contains("/Shaders/generators/") { refreshTools() }
+                if url.path.contains("/Shaders/generators/") || url.path.contains("/Shaders/lenses/") { refreshTools() }
                 cache[url.standardizedFileURL] = nil
             } else if url.pathExtension == "json" {
                 if url.standardizedFileURL == currentURL?.standardizedFileURL { sceneChanged = true }

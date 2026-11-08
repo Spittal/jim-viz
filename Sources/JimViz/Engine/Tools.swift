@@ -11,7 +11,7 @@ enum ToolCardinality: String, CaseIterable, Codable, Hashable {
 struct Tool: Identifiable, Hashable {
     var id: String { "\(kind.rawValue):\(name)" }
     let kind: DeviceKind
-    /// Tool id: `audio`, `clock`, `midi`, a camera rig (`orbit`, `static`…), `palette`, a generator shader or an effect shader name.
+    /// Tool id: `audio`, `clock`, `midi`, a camera rig (`orbit`, `static`…), a lens shader, `palette`, a generator shader or an effect shader name.
     let name: String
     let label: String
     let cardinality: ToolCardinality
@@ -41,6 +41,7 @@ enum Tools {
         case (.input, "video"): return "Video"
         case (.input, "picture"): return "Picture"
         case (.camera, _): return CameraRig(rawValue: name)?.label ?? humanize(name)
+        case (.lens, "distortion"): return "Lens Distortion"
         case (.palette, _): return "Palette"
         case (.generator, "wheel"): return "Water Wheel"
         case (.effect, "kaleido"): return "Kaleidoscope"
@@ -65,6 +66,7 @@ enum Tools {
         case (.input, "audio"): return .one
         case (.input, "clock"): return .one
         case (.camera, _): return .one
+        case (.lens, _): return .one
         case (.palette, _): return .one
         case (.generator, _): return .many
         case (.modulation, _): return .many
@@ -73,7 +75,7 @@ enum Tools {
         }
     }
 
-    /// Every tool, in chain order: inputs, modulation, cameras, palettes, generators, effects.
+    /// Every tool, in chain order: inputs, modulation, cameras, lenses, palettes, generators, effects.
     static func all(_ store: ContentStore) -> [Tool] {
         func tool(_ kind: DeviceKind, _ name: String, category: String? = nil) -> Tool {
             let presets = store.presetIDs(kind, name).map { id -> PresetInfo in
@@ -86,7 +88,8 @@ enum Tools {
         return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"),
                 tool(.input, "video"), tool(.input, "picture"),
                 tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro")]
-            + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + [tool(.palette, "palette")]
+            + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + store.availableLenses().map { tool(.lens, $0) }
+            + [tool(.palette, "palette")]
             + store.generatorTypes().map { tool(.generator, $0.name, category: $0.category) }
             + store.availableEffects().map { tool(.effect, $0) }
     }

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Ableton-style device browser. Tools are grouped by section (Inputs, Modulation, Cameras,
-/// Colour, one per generator category such as Low Poly, Effects); the Generation filter shows
-/// Cameras, Colour and the generator categories;
+/// Camera Effects, Colour, one per generator category such as Low Poly, Effects); the
+/// Generation filter shows Cameras, Camera Effects, Colour and the generator categories;
 /// each tool expands to show its presets. Drag a tool or a preset onto the chain, double-click
 /// it, or hover and click +. A tool on its own loads with default settings.
 struct DeviceBrowser: View {
@@ -45,6 +45,8 @@ struct DeviceBrowser: View {
                     if show(.modulation) { section("Modulation", [.modulation]) }
                     if show(.generation) {
                         section("Cameras", [.camera])
+                        // Camera effects: lenses, whose ST map the Camera reprojects through.
+                        section("Camera Effects", [.lens])
                         // Colour sources: palettes now, later anything else that makes colours.
                         section("Colour", [.palette])
                         ForEach(generatorCategories, id: \.self) { category in
@@ -130,6 +132,7 @@ struct DeviceBrowser: View {
         switch tool.kind {
         case .input: return tool.name == "audio" ? scene.hasAudioInput : tool.name == "clock" ? scene.hasClock : false
         case .camera: return scene.cameraMotion?.rig.rawValue == tool.name
+        case .lens: return scene.lens?.type == tool.name
         case .palette: return scene.palette != nil
         case .generator: return scene.generators.contains { $0.type == tool.name }
         default: return false
@@ -140,6 +143,7 @@ struct DeviceBrowser: View {
         guard let scene = engine.current else { return false }
         switch tool.kind {
         case .camera: return scene.cameraMotion?.rig.rawValue == tool.name && scene.cameraPreset == preset.id
+        case .lens: return scene.lens?.type == tool.name && scene.lens?.preset == preset.id
         case .palette: return scene.palette != nil && scene.palettePreset == preset.id
         case .generator: return scene.generators.contains { $0.type == tool.name && $0.preset == preset.id }
         case .input:
@@ -168,6 +172,7 @@ struct DeviceBrowser: View {
             }
         case .modulation: return tool.name == "math" ? "function" : tool.name == "macro" ? "dial.medium" : "waveform.path"
         case .camera: return CameraRig(rawValue: tool.name)?.icon ?? "camera.viewfinder"
+        case .lens: return "camera.aperture"
         case .palette: return "paintpalette"
         case .generator:
             switch tool.name {

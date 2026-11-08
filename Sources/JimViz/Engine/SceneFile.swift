@@ -14,7 +14,7 @@ struct Preset: Codable {
 // MARK: - Scene
 
 /// A scene is a composed device chain, left to right:
-/// inputs (Audio In, Clock, MIDI, Webcam) → modulation (LFOs) → camera, palette, generators → effects.
+/// inputs (Audio In, Clock, MIDI, Webcam) → modulation (LFOs) → camera, lens, palette, generators → effects.
 /// Plus mappings, which route any tool's outputs (and MIDI controls) to any knob.
 /// Each device names its tool and the preset it was loaded from; the preset's values are
 /// copied in, so a scene never depends on (or changes) a preset file.
@@ -27,6 +27,8 @@ struct SceneFile: Codable, Equatable {
     /// LFOs and Maths. Any number.
     var modulators: [ModulatorSpec]
     var camera: CameraSlot?
+    /// The camera effect: a lens whose ST map the Camera's Lens input can take.
+    var lens: LensSlot? = nil
     var palette: PaletteSlot?
     /// Generators, in chain order. The first is keyed `generator`, the rest `generator.<id>`.
     var generators: [GeneratorSlot]
@@ -49,6 +51,7 @@ extension SceneFile {
         inputs = try c.decodeIfPresent([InputSpec].self, forKey: .inputs) ?? []
         modulators = try c.decodeIfPresent([ModulatorSpec].self, forKey: .modulators) ?? []
         camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera)
+        lens = try c.decodeIfPresent(LensSlot.self, forKey: .lens)
         palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette)
         generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators) ?? []
         effects = try c.decodeIfPresent([EffectSpec].self, forKey: .effects) ?? []
@@ -98,6 +101,15 @@ struct CameraSlot: Codable, Equatable {
     var type: String
     /// Preset it was loaded from, for display.
     var preset: String?
+    var params: [String: Float]?
+}
+
+struct LensSlot: Codable, Equatable {
+    /// Lens tool: a shader in Shaders/lenses, without extension (`distortion`).
+    var type: String
+    /// Preset it was loaded from, for display.
+    var preset: String?
+    /// Knob values; unlisted knobs use the shader's defaults.
     var params: [String: Float]?
 }
 

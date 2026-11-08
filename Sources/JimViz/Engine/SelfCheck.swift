@@ -1830,6 +1830,12 @@ enum SelfCheck {
             print("ok   cameras (presets, poses, static, orbit snap, cutter trigger, unknown type fails)")
         }
 
+        if let problem = checkLens(engine: engine) {
+            print("FAIL lens: \(problem)"); failures += 1
+        } else {
+            print("ok   lens (camera effect, starts unmapped, ST map typed into Camera · Lens, model, distort/undistort, reprojects)")
+        }
+
         if let problem = checkTriggers(engine: engine) {
             print("FAIL triggers: \(problem)"); failures += 1
         } else {
@@ -2529,5 +2535,113 @@ extension SelfCheck {
         writer.finishWriting { done.signal() }
         done.wait()
         return writer.status == .completed ? nil : "test clip: \(writer.error?.localizedDescription ?? "not written")"
+    }
+}
+
+extension SelfCheck {
+    /// The lens: listed as a camera effect, starts unmapped, its ST map is typed (only into the
+    /// Camera's Lens input), the model's values at known points, and the Camera reprojecting
+    /// through it: identity leaves the picture alone, barrel blacks out the corners.
+    static func checkLens(engine: Engine) -> String? {
+        guard engine.tools.contains(where: { $0.kind == .lens && $0.name == "distortion" && $0.label == "Lens Distortion" }) else {
+            return "Lens Distortion isn't listed as a camera effect"
+        }
+        func file(_ params: [String: Float], mapped: Bool, lens: String = "distortion") -> SceneFile {
+            SceneFile(name: "lens", inputs: [], modulators: [],
+                      camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
+                      lens: LensSlot(type: lens, params: params),
+                      palette: nil,
+                      generators: [GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0])],
+                      effects: [],
+                      mappings: mapped ? [MappingSpec(source: StreamOutput.stmapKey, target: StreamInput.cameraLensKey)] : [])
+        }
+        guard let unmapped = engine.build(file([:], mapped: false), reuse: nil), let lens = unmapped.lens else { return "lens scene didn't build" }
+        guard lens.pipeline != nil, unmapped.cameraLens == nil,
+              unmapped.streamInputs.contains(where: { $0.key == StreamInput.cameraLensKey && $0.kind == .stmap }),
+              unmapped.streamOutputs.contains(where: { $0.key == StreamOutput.stmapKey && $0.kind == .stmap }),
+              unmapped.deviceKeys == ["camera", "lens", "generator"] else { return "lens should follow the Camera, with an ST map output and the Camera a Lens input, unmapped" }
+        guard engine.build(file([:], mapped: false, lens: "bogus"), reuse: nil) == nil, engine.errors["lens"] != nil else {
+            return "unknown lens type loaded without an error"
+        }
+        guard StreamOutput.kind(ofKey: StreamOutput.stmapKey) == .stmap, IOKind.stmap.directive == nil,
+              !IOKind.stmap.connects(to: .video), !IOKind.video.connects(to: .stmap), !IOKind.value.connects(to: .stmap) else {
+            return "ST maps aren't their own kind"
+        }
+
+        // Through the engine: typed mappings, and a newly added lens starts unmapped.
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-lens.json")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+            engine.load(fixtureA, animated: false)
+        }
+        var bare = file([:], mapped: false)
+        bare.lens = nil
+        guard (try? bare.write(to: url)) != nil else { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        engine.load(url, animated: false)
+        engine.apply(.lens, "distortion")
+        guard let added = engine.current, added.lens != nil, added.cameraLens == nil, added.mappings.isEmpty else { return "new lens connected itself" }
+        engine.addMapping(source: StreamOutput.stmapKey, target: "generator.bgGlow")
+        engine.addMapping(source: "camera.angle", target: StreamInput.cameraLensKey)
+        guard engine.current?.mappings.isEmpty == true else { return "ST map mapped across kinds" }
+        engine.addMapping(source: StreamOutput.stmapKey, target: StreamInput.cameraLensKey)
+        guard engine.current?.cameraLens === engine.current?.lens?.output else { return "ST map didn't map into the Camera's Lens" }
+        engine.apply(.modulation, "lfo")
+        engine.addMapping(source: "mod.lfo.out", target: "lens.k1")
+        guard engine.current?.mappings.contains(where: { $0.target == "lens.k1" && $0.problem == nil }) == true else { return "lens knobs can't be mapped" }
+        engine.removeLens()
+        guard engine.current?.cameraLens == nil,
+              engine.current?.mappings.first(where: { $0.target == StreamInput.cameraLensKey })?.problem == "Needs a Lens in the chain" else {
+            return "Camera still reprojects without a Lens"
+        }
+
+        // The model, read back from the ST map: s, t at the centre and the top-left corner.
+        func stmap(_ params: [String: Float]) -> (centre: SIMD2<Float>, corner: SIMD2<Float>)? {
+            guard let s = engine.build(file(params, mapped: true), reuse: nil), let tex = s.lens?.stmap else { return nil }
+            _ = engine.renderOffscreen(s, frames: 1, snapshot: nil)
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: tex.pixelFormat, width: tex.width, height: tex.height, mipmapped: false)
+            d.storageMode = .shared
+            guard let copy = engine.device.makeTexture(descriptor: d), let cmd = engine.renderer.queue.makeCommandBuffer(),
+                  let blit = cmd.makeBlitCommandEncoder() else { return nil }
+            blit.copy(from: tex, to: copy); blit.endEncoding(); cmd.commit(); cmd.waitUntilCompleted()
+            func at(_ x: Int, _ y: Int) -> SIMD2<Float> {
+                var px = SIMD2<Float>.zero
+                copy.getBytes(&px, bytesPerRow: tex.width * 8, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
+                return px
+            }
+            return (at(tex.width / 2, tex.height / 2), at(0, 0))
+        }
+        let w = Float(engine.renderer.outputSize.width), h = Float(engine.renderer.outputSize.height)
+        let centreST = SIMD2<Float>((w / 2 + 0.5) / w, 1 - (h / 2 + 0.5) / h), cornerST = SIMD2<Float>(0.5 / w, 1 - 0.5 / h)
+        guard let flat = stmap(["k1": 0]), simd_length(flat.centre - centreST) < 1e-5, simd_length(flat.corner - cornerST) < 1e-5 else {
+            return "a lens with no distortion isn't an identity ST map"
+        }
+        // Barrel (k1 -0.5): distorting can't reach the corner (black), undistorting reads halfway in.
+        guard let barrel = stmap(["k1": -0.5]), simd_length(barrel.centre - centreST) < 1e-4, barrel.corner == SIMD2(-1, -1) else {
+            return "barrel distortion didn't black out the corner"
+        }
+        guard let undistort = stmap(["k1": -0.5, "direction": 1]), simd_length(undistort.corner - (cornerST + SIMD2(0.5, 0.5)) / 2) < 1e-3 else {
+            return "undistort didn't read the corner from halfway in"
+        }
+        // Mild barrel: distorting reads the corner from beyond the frame (it squeezes more in),
+        // undistorting from inside it.
+        guard let mild = stmap(["k1": -0.2, "k2": 0.05]), let back = stmap(["k1": -0.2, "k2": 0.05, "direction": 1]),
+              mild.corner.x < 0, mild.corner.x > -0.2, back.corner.x > cornerST.x else {
+            return "mild barrel reads the corner from the wrong side"
+        }
+
+        // The picture: identity changes nothing; barrel through the Camera blacks out its corners.
+        func picture(_ params: [String: Float], mapped: Bool) -> SIMD3<Float>? {
+            guard let s = engine.build(file(params, mapped: mapped), reuse: nil) else { return nil }
+            _ = engine.renderOffscreen(s, frames: 2, snapshot: nil)
+            return engine.averageColor(engine.renderer.history)
+        }
+        guard let straight = picture([:], mapped: false), let identity = picture(["k1": 0], mapped: true),
+              let warped = picture(["k1": -0.5], mapped: true) else { return "lens scene didn't render" }
+        guard simd_length(straight - identity) < 0.002 else { return "identity lens changed the picture: \(straight) → \(identity)" }
+        guard simd_reduce_add(warped) < simd_reduce_add(straight) - 0.01 else { return "barrel lens didn't change the picture: \(straight) → \(warped)" }
+        return nil
     }
 }

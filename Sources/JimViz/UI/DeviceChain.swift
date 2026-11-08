@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The scene's device chain, processed left to right in three sections:
-/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, palette,
+/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, lens, palette,
 /// one generator) | EFFECTS.
 /// Devices come from the browser by drag or double-click; effects reorder by dragging their header.
 /// Click a device to select it: the inspector then shows its outputs and mappings.
@@ -83,6 +83,21 @@ struct DeviceChain: View {
                             Button("Remove", role: .destructive) { engine.removeCamera() }
                         }
                         .chainFrame("device:camera:camera:\(scene.cameraMotion?.rig.rawValue ?? "orbit")")
+                    }
+                    if let lens = scene.lens {
+                        DevicePanel(title: "Lens", subtitle: lens.label, failed: lens.pipeline == nil,
+                                    accent: slotColor(.lens, key: LensRuntime.key), select: LensRuntime.key,
+                                    onClose: { engine.removeLens() }) {
+                            if lens.pipeline == nil {
+                                Text("shader error").font(Theme.labelFont).foregroundStyle(Theme.error).frame(width: 60, height: 60)
+                            } else {
+                                KnobGrid(params: lens.bank.params, prefix: LensRuntime.key)
+                            }
+                        }
+                        .contextMenu {
+                            Button("Remove", role: .destructive) { engine.removeLens() }
+                        }
+                        .chainFrame("device:lens:lens:\(lens.type)")
                     }
                     if let pal = scene.palette {
                         DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette, key: "palette"), select: "palette",

@@ -164,6 +164,7 @@ struct StreamInputTag: View {
                         case .audio: Text("Add Audio In to get audio")
                         case .clock: Text("Add a Clock to get sync")
                         case .palette: Text("Add a Palette to get colours")
+                        case .stmap: Text("Add a Lens to get an ST map")
                         default: Text("Add a Webcam, Video or Picture to get video")
                         }
                     }

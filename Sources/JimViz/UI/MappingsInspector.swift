@@ -184,7 +184,7 @@ private struct DeviceInspector: View {
             InspectorSection("Inputs", key: "video-in") {
                 ForEach(sockets) { StreamInputTag(scene: scene, input: $0) }
                 if !sockets.isEmpty {
-                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock. Unmapped, video and spectrum are off, the palette is grey, LFOs and rate knobs run free, and the Clock doesn't follow the audio.")
+                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock, an ST Map from a Lens. Unmapped, video and spectrum are off, the palette is grey, LFOs and rate knobs run free, the Clock doesn't follow the audio, and the Camera sees straight.")
                 }
                 ForEach(triggers) { TriggerInputTag(scene: scene, input: $0) }
                 if !triggers.isEmpty {
@@ -207,6 +207,7 @@ private struct DeviceInspector: View {
         case _ where key.hasPrefix("video."): return "Input · Video"
         case _ where key.hasPrefix("picture."): return "Input · Picture"
         case "camera", "palette", "generator": return "Generation"
+        case "lens": return "Generation · Camera Effect"
         default:
             if key.hasPrefix("mod.") {
                 return "Modulation · " + (engine.current?.modulators.first { "mod.\($0.id)" == key }?.type.label ?? "")
