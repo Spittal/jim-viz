@@ -73,8 +73,9 @@ Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Pale
 - The generator renders the scene.
 - Each effect processes the previous effect's output (`src`), in chain order. Reordering
   effects changes the image.
-- Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `mod.<id>`, `camera`, `palette`,
-  `generator`, `post.<id>`.
+- Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
+  `mod.<id>`, `camera`, `palette`, `generator` (the first generator) and `generator.<id>` (the
+  rest), `post.<id>`.
 - **A scene** is one such chain plus its mappings, saved as JSON in `Content/Scenes`.
 - **Switching scenes** renders the outgoing and incoming scenes at once and blends them.
   Today that's a crossfade.
@@ -183,5 +184,3 @@ scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
 - **Core ML compiled model:** cached in `~/Library/Caches/jim-viz`. Loading it from a fresh
   temp path costs about 5 s every launch.
 - **Shader `Frame` layout** must match `FrameUniforms` in `Render/MathUtil.swift`.
-- **README's "Layout" section is out of date:** it's missing `Clock/`, `Database/`, `MIDI/`
-  and `Video/`.

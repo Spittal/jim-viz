@@ -76,6 +76,7 @@
       }
     }
   ],
+  "generators" : [],
   "inputs" : [
     {
       "device" : "system",
@@ -109,7 +110,7 @@
         "exposure" : 0,
         "inPoint" : 0.04465332,
         "mirror" : 1,
-        "outPoint" : 1,
+        "outPoint" : 0.9056152,
         "panX" : 0,
         "panY" : -0.00092773436,
         "posterize" : 0,
@@ -156,9 +157,7 @@
       "target" : "video.video.rotate"
     }
   ],
-  "modulators" : [
-
-  ],
+  "modulators" : [],
   "name" : "BOTA",
   "palette" : {
     "colors" : [

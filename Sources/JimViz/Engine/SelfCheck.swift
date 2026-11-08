@@ -194,15 +194,13 @@ enum SelfCheck {
     /// Outputs, modulation and MIDI mappings, LFOs, copy/paste and duplicate. Nothing is saved
     /// except the duplicate, which is deleted again.
     private static func checkMappings(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else {
-            return "test scene missing"
-        }
+        let url = fixtureA!
         // Its own empty scene (camera, no generator) to paste into, so the check never
         // depends on scenes you might rename or delete.
         let emptyURL = engine.store.scenesDir.appendingPathComponent("selfcheck-empty.json")
         let empty = SceneFile(name: "Self-check Empty", inputs: [InputSpec(type: "clock")], modulators: [],
                               camera: CameraSlot(type: "orbit"), palette: PaletteSlot(colors: Tools.defaultPalette),
-                              generator: nil, effects: [], mappings: [])
+                              generators: [], effects: [], mappings: [])
         do { try empty.write(to: emptyURL) } catch { return "could not write the test scene" }
         engine.store.markSeen(emptyURL)
         engine.refreshSceneList()
@@ -504,11 +502,11 @@ enum SelfCheck {
         defer {
             try? FileManager.default.removeItem(at: url)
             engine.refreshSceneList()
-            if let kaleido = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) { engine.load(kaleido, animated: false) }
+            engine.load(fixtureA, animated: false)
         }
         func write(_ type: String) -> Bool {
             let file = SceneFile(name: "Self-check Camera", inputs: [], modulators: [], camera: CameraSlot(type: type),
-                                 palette: PaletteSlot(colors: Tools.defaultPalette), generator: nil, effects: [], mappings: [])
+                                 palette: PaletteSlot(colors: Tools.defaultPalette), generators: [], effects: [], mappings: [])
             guard (try? file.write(to: url)) != nil else { return false }
             engine.store.markSeen(url)
             engine.refreshSceneList()
@@ -528,7 +526,7 @@ enum SelfCheck {
     /// Nothing reaches a shader except through a mapping: the palette and spectrum are typed
     /// outputs, and unmapped means grey and still.
     private static func checkStreams(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
@@ -581,11 +579,9 @@ enum SelfCheck {
     /// The crossfade's timing, and that it really blends the outgoing scene into the incoming
     /// one: at the start the picture is the outgoing scene, at the end the incoming one.
     private static func checkTransitions(engine: Engine) -> String? {
-        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }),
-              let urlB = engine.sceneURLs.first(where: { $0.lastPathComponent == "sammy-style.json" }),
-              let fileA = try? SceneFile.load(urlA), let fileB = try? SceneFile.load(urlB),
+        guard let fileA = try? SceneFile.load(fixtureA), let fileB = try? SceneFile.load(fixtureB),
               let sceneA = engine.build(fileA, reuse: nil), let sceneB = engine.build(fileB, reuse: nil) else {
-            return "test scenes missing"
+            return "test scenes didn't build"
         }
 
         let controller = TransitionController()
@@ -633,7 +629,7 @@ enum SelfCheck {
 
     /// The Clock follows audio only through a mapping: Audio In · Audio Out into Clock · Audio.
     private static func checkClockAudio(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let scene = engine.current, scene.hasClock, scene.hasAudioInput else { return "test scene needs Audio In and Clock" }
@@ -730,9 +726,8 @@ enum SelfCheck {
     /// beat, nothing is broadcast to scenes without them, a switch continues levels and the
     /// beat, and hardware stays off without a device that uses it.
     private static func checkEncapsulation(engine: Engine) -> String? {
-        guard let urlA = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }),
-              let urlB = engine.sceneURLs.first(where: { $0.lastPathComponent == "sammy-style.json" }),
-              let fileB = try? SceneFile.load(urlB) else { return "test scenes missing" }
+        let urlA = fixtureA!
+        guard let fileB = try? SceneFile.load(fixtureB) else { return "test scene B didn't load" }
         engine.load(urlA, animated: false)
         defer { engine.load(urlA, animated: false) }
         guard let a = engine.current, let audioA = a.audioIn, let clockA = a.clock else { return "test scene needs Audio In and Clock" }
@@ -769,7 +764,7 @@ enum SelfCheck {
         guard engine.current?.audioIn?.capture === audioA.capture else { return "switching back didn't reuse the source's capture" }
         for device in [nil, "bogus"] as [String?] {
             let file = SceneFile(name: "x", inputs: [InputSpec(type: "audio", device: device)], modulators: [],
-                                 camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+                                 camera: nil, palette: nil, generators: [], effects: [], mappings: [])
             guard engine.build(file, reuse: nil) == nil, engine.errors["input"]?.hasPrefix("Audio In needs a device") == true else {
                 return "Audio In built without a valid source (\(device ?? "none"))"
             }
@@ -805,7 +800,7 @@ enum SelfCheck {
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "kaleido.json missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         for target in Set(engine.current?.mappings.map(\.target) ?? []) where target.hasPrefix("generator") {
@@ -917,7 +912,7 @@ enum SelfCheck {
             let file = SceneFile(name: "face", inputs: [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": eye.x, "y": eye.y, "z": eye.z, "fov": 55]),
                                  palette: nil,
-                                 generator: GeneratorSlot(id: nil, type: "face", preset: nil, params: base.merging(params) { $1 }),
+                                 generators: [GeneratorSlot(id: nil, type: "face", preset: nil, params: base.merging(params) { $1 })],
                                  effects: [], mappings: [])
             guard let s = engine.build(file, reuse: nil), let gen = s.generator, s.mappings.isEmpty, s.streamBindings.isEmpty else { return nil }
             _ = engine.renderOffscreen(s, frames: 2, snapshot: name.flatMap { snapshotDir?.appendingPathComponent($0) })
@@ -950,7 +945,7 @@ enum SelfCheck {
                              camera: CameraSlot(type: "static", preset: nil,
                                                 params: ["x": 8, "y": 2.2, "z": 0, "lookX": -6, "lookY": 0.6, "fov": 50]),
                              palette: PaletteSlot(colors: ["#12002A", "#FF2E88", "#FFD23F"]),
-                             generator: GeneratorSlot(id: nil, type: "drive", preset: nil, params: [:]),
+                             generators: [GeneratorSlot(id: nil, type: "drive", preset: nil, params: [:])],
                              effects: [], mappings: [])
         guard let scene = engine.build(file, reuse: nil), let gen = scene.generator else {
             return "didn't build: \(engine.errorSummary ?? "")"
@@ -999,7 +994,7 @@ enum SelfCheck {
             let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "clock")] : [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
                                  palette: nil,
-                                 generator: GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 }),
+                                 generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 })],
                                  effects: [],
                                  mappings: synced ? [MappingSpec(source: "clock.sync", target: "generator.sync")] : [])
             return engine.build(file, reuse: nil)
@@ -1055,7 +1050,7 @@ enum SelfCheck {
         guard abs((syncedTempo.phase - doubled.phase) - (clock.beat - doubled.beat)) < 0.05 else { return "synced, tempo 2 isn't double time" }
         // A value can't go into Sync, and Sync can't go onto a knob.
         var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "clock")], modulators: [], camera: nil, palette: nil,
-                              generator: GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:]), effects: [], mappings: [])
+                              generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:])], effects: [], mappings: [])
         wrong.mappings = [MappingSpec(source: "clock.pulse", target: "generator.sync"),
                           MappingSpec(source: "clock.sync", target: "generator.tempo")]
         guard let bad = engine.build(wrong, reuse: nil), bad.mappings.allSatisfy({ $0.problem != nil }),
@@ -1071,7 +1066,7 @@ enum SelfCheck {
             let file = SceneFile(name: "instancing", inputs: [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 12, "y": 0, "z": 0, "fov": 55]),
                                  palette: nil,
-                                 generator: GeneratorSlot(id: nil, type: geo, preset: nil, params: base.merging(params) { $1 }),
+                                 generators: [GeneratorSlot(id: nil, type: geo, preset: nil, params: base.merging(params) { $1 })],
                                  effects: [], mappings: [])
             return engine.build(file, reuse: nil)
         }
@@ -1138,7 +1133,7 @@ enum SelfCheck {
             let file = SceneFile(name: "composite", inputs: [InputSpec(type: "video", id: "layer")], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
                                  palette: nil,
-                                 generator: GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0]),
+                                 generators: [GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0])],
                                  effects: [EffectSpec(effect: "composite", id: "composite", enabled: enabled,
                                                       params: ["mode": mode, "amount": amount])],
                                  mappings: mapped ? [MappingSpec(source: "video.layer.video", target: "post.composite.layer")] : [])
@@ -1179,10 +1174,8 @@ enum SelfCheck {
     /// Edits a scene's chain in memory and checks the result. Nothing is saved.
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
-              decoded.generator == nil, decoded.effects.isEmpty else { return "minimal scene JSON did not decode" }
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else {
-            return "kaleido.json missing"
-        }
+              decoded.generators.isEmpty, decoded.effects.isEmpty else { return "minimal scene JSON did not decode" }
+        let url = fixtureA!
         let presetURL = engine.store.presetsDir(.effect, "glow").appendingPathComponent("bloom.json")
         let presetBefore = try? Data(contentsOf: presetURL)
         engine.load(url, animated: false)
@@ -1193,7 +1186,7 @@ enum SelfCheck {
         while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
         guard engine.current?.generator == nil else { return "generator not removed" }
         engine.apply(.generator, "sphere")
-        guard engine.current?.generator?.mesh == .sphere, engine.current?.generatorPreset == nil else { return "bare generator tool not loaded" }
+        guard engine.current?.generator?.mesh == .sphere, engine.current?.generator?.preset == nil else { return "bare generator tool not loaded" }
 
         // Multiple generators: adding a second generator, moving it, and removing it.
         engine.selectDevice("camera")
@@ -1306,7 +1299,7 @@ enum SelfCheck {
 
         // Scene deletion.
         let delURL = engine.store.scenesDir.appendingPathComponent("selfcheck-test-delete.json")
-        let tempScene = SceneFile(name: "Temp Delete", inputs: [], modulators: [], camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+        let tempScene = SceneFile(name: "Temp Delete", inputs: [], modulators: [], camera: nil, palette: nil, generators: [], effects: [], mappings: [])
         do {
             try tempScene.write(to: delURL)
             engine.refreshSceneList()
@@ -1333,7 +1326,7 @@ enum SelfCheck {
     /// A red test frame stands in for the camera: it should come out of the webcam's
     /// processing and show up behind the mesh when the generator's video bg is up.
     private static func checkWebcam(engine: Engine, snapshotDir: URL?) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         engine.apply(.input, "webcam")
@@ -1420,7 +1413,7 @@ enum SelfCheck {
     }
 
     private static func checkVideoInput(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         engine.apply(.input, "video")
@@ -1459,6 +1452,15 @@ enum SelfCheck {
         guard engine.current?.mappings.first(where: { $0.source == "video.video.motion" })?.isActive == true else {
             return "video motion output not mappable"
         }
+        // Depth runs only while its output goes somewhere.
+        engine.addMapping(source: "video.video.depth", target: "generator.texVideo")
+        guard let withDepth = engine.current?.videos.first, withDepth.depthMapped, withDepth.feed.depthWanted else {
+            return "video depth not running while mapped"
+        }
+        engine.addMapping(source: "video.video.video", target: "generator.texVideo")
+        guard let noDepth = engine.current?.videos.first, !noDepth.depthMapped, !noDepth.feed.depthWanted else {
+            return "video depth still running after unmapping"
+        }
 
         // Test actual video decoding from file
         let tempVideoURL = FileManager.default.temporaryDirectory.appendingPathComponent("selfcheck-loop-\(UUID().uuidString).mp4")
@@ -1489,7 +1491,7 @@ enum SelfCheck {
     }
 
     private static func checkPictureInput(engine: Engine) -> String? {
-        guard let url = engine.sceneURLs.first(where: { $0.lastPathComponent == "kaleido.json" }) else { return "test scene missing" }
+        let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         engine.apply(.input, "picture")
@@ -1527,6 +1529,14 @@ enum SelfCheck {
         engine.addMapping(source: "picture.picture.brightness", target: "generator.spin")
         guard engine.current?.mappings.first(where: { $0.source == "picture.picture.brightness" })?.isActive == true else {
             return "picture brightness output not mappable"
+        }
+        engine.addMapping(source: "picture.picture.depth", target: "generator.texVideo")
+        guard let withDepth = engine.current?.pictures.first, withDepth.depthMapped, withDepth.feed.depthWanted else {
+            return "picture depth not running while mapped"
+        }
+        engine.addMapping(source: "picture.picture.video", target: "generator.texVideo")
+        guard let noDepth = engine.current?.pictures.first, !noDepth.depthMapped, !noDepth.feed.depthWanted else {
+            return "picture depth still running after unmapping"
         }
 
         // Test actual picture decoding from file
@@ -1602,41 +1612,30 @@ enum SelfCheck {
     /// half, far on the right): it should come out of the depth pass framed like the video
     /// (mirrored, so near on the right), raise the field, and stop when unmapped.
     private static func checkDepth(engine: Engine, snapshotDir: URL?) -> String? {
-        let url: URL
-        let temporaryURL: URL?
-        if let existing = engine.sceneURLs.first(where: { $0.lastPathComponent == "05-depth-field.json" }) {
-            url = existing
-            temporaryURL = nil
-        } else {
-            let temp = engine.store.scenesDir.appendingPathComponent("selfcheck-depth.json")
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-depth.json")
+        do {
             let sceneFile = SceneFile(
                 name: "Self-Check Depth",
                 inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
                 modulators: [],
                 camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
                 palette: PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
-                generator: GeneratorSlot(type: "plane", params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6]),
+                generators: [GeneratorSlot(type: "plane", params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6])],
                 effects: [EffectSpec(effect: "glitch", id: "glitch"), EffectSpec(effect: "glow", id: "glow"), EffectSpec(effect: "film", id: "film")],
                 mappings: [
                     MappingSpec(source: "webcam.webcam.depth", target: "generator.depthVideo"),
                     MappingSpec(source: "webcam.webcam.video", target: "generator.texVideo")
                 ]
             )
-            do {
-                try sceneFile.write(to: temp)
-                engine.store.markSeen(temp)
-                engine.refreshSceneList()
-                url = temp
-                temporaryURL = temp
-            } catch {
-                return "could not write selfcheck-depth scene"
-            }
+            try sceneFile.write(to: url)
+            engine.store.markSeen(url)
+            engine.refreshSceneList()
+        } catch {
+            return "could not write selfcheck-depth scene"
         }
         defer {
-            if let temporaryURL {
-                try? FileManager.default.removeItem(at: temporaryURL)
-                engine.refreshSceneList()
-            }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
         }
         engine.load(url, animated: false)
         guard let scene = engine.current, let cam = scene.webcams.first, let gen = scene.generator else { return "depth scene didn't build" }
@@ -1732,8 +1731,62 @@ enum SelfCheck {
         return (nil, String(format: "first depth after %.1f s, %.0f ms per frame", Date().timeIntervalSince(start), est.milliseconds))
     }
 
+    /// The scenes the checks load and edit, written to Content/Scenes for the run and removed
+    /// after, so nothing depends on scenes you might rename or delete. A: Audio In, Clock, an
+    /// LFO synced to the Clock, an orbit camera, a palette, a sphere with the palette and
+    /// spectrum mapped in, five value mappings and five effects. B: a different look, with the
+    /// same Audio In and Clock.
+    nonisolated(unsafe) private static var fixtureA: URL!
+    nonisolated(unsafe) private static var fixtureB: URL!
+
+    private static func writeFixtures(_ engine: Engine) throws {
+        let a = SceneFile(
+            name: "Self-check A",
+            inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
+            modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["rate": 18])],
+            camera: CameraSlot(type: "orbit", params: ["distance": 6, "height": 1.2, "orbitSpeed": 0.2, "sway": 0.3]),
+            palette: PaletteSlot(colors: ["#07040F", "#3B0A5C", "#B5177A", "#FF5E5B", "#FFD8A8"]),
+            generators: [GeneratorSlot(type: "sphere", params: ["explode": 0.1, "noiseAmount": 0.25, "scale": 1.4, "spin": 0.15,
+                                                                "tumble": 0.3, "spectrum": 0.35, "wire": 0.6])],
+            effects: [EffectSpec(effect: "feedback", id: "feedback", params: ["amount": 0.82, "zoom": 1.02]),
+                      EffectSpec(effect: "glow", id: "glow", params: ["amount": 0.7]),
+                      EffectSpec(effect: "film", id: "film"),
+                      EffectSpec(effect: "kaleido", id: "kaleido", params: ["segments": 6, "spin": 0.1]),
+                      EffectSpec(effect: "chroma", id: "chroma", params: ["amount": 0.004])],
+            mappings: [MappingSpec(source: "audio.kick", target: "generator.explode", amount: 0.25),
+                       MappingSpec(source: "audio.snare", target: "post.chroma.amount", amount: 0.3),
+                       MappingSpec(source: "audio.bass", target: "generator.scale", amount: 0.06),
+                       MappingSpec(source: "mod.lfo.out", target: "generator.twist", amount: 0.2),
+                       MappingSpec(source: "clock.bar", target: "generator.colorShift", amount: 0.25),
+                       MappingSpec(source: StreamOutput.clockSyncKey, target: "mod.lfo.sync"),
+                       MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal"),
+                       MappingSpec(source: StreamOutput.spectrumKey, target: "generator.spec")])
+        let b = SceneFile(
+            name: "Self-check B",
+            inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
+            modulators: [],
+            camera: CameraSlot(type: "static", params: ["x": 5, "y": 1, "z": 2, "fov": 60]),
+            palette: PaletteSlot(colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
+            generators: [GeneratorSlot(type: "cube", params: ["bgGlow": 1.5, "divisions": 3, "inflate": 0.4, "scale": 1.2])],
+            effects: [EffectSpec(effect: "glow", id: "glow")],
+            mappings: [MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal")])
+        fixtureA = engine.store.scenesDir.appendingPathComponent("selfcheck-a.json")
+        fixtureB = engine.store.scenesDir.appendingPathComponent("selfcheck-b.json")
+        try a.write(to: fixtureA)
+        try b.write(to: fixtureB)
+        engine.store.markSeen(fixtureA)
+        engine.store.markSeen(fixtureB)
+        engine.refreshSceneList()
+    }
+
+    private static func removeFixtures(_ engine: Engine) {
+        for url in [fixtureA, fixtureB].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
+        engine.refreshSceneList()
+    }
+
     private static func run(snapshotDir: URL?, audioPath: String?) -> Int32 {
         let engine = Engine(headless: true)
+        do { try writeFixtures(engine) } catch { print("FAIL could not write the self-check scenes: \(error)"); return 1 }
         if let audioPath {
             guard let audio = loadMono(audioPath) else { print("FAIL could not read \(audioPath)"); return 1 }
             engine.offlineAudio = audio
@@ -1818,13 +1871,13 @@ enum SelfCheck {
         if let problem = checkVideoInput(engine: engine) {
             print("FAIL video: \(problem)"); failures += 1
         } else {
-            print("ok   video (looping, processing, outputs, removal)")
+            print("ok   video (looping, processing, outputs, depth only while mapped, removal)")
         }
 
         if let problem = checkPictureInput(engine: engine) {
             print("FAIL picture: \(problem)"); failures += 1
         } else {
-            print("ok   picture (still image, processing, outputs, removal)")
+            print("ok   picture (still image, processing, outputs, depth only while mapped, removal)")
         }
 
         if let problem = checkTransitions(engine: engine) {
@@ -1881,6 +1934,7 @@ enum SelfCheck {
             print("ok   composition (tools, presets, add, move, remove; presets untouched)")
         }
 
+        removeFixtures(engine)
         for url in engine.sceneURLs {
             engine.load(url, animated: false)
             let label = url.lastPathComponent
@@ -2015,7 +2069,7 @@ extension SelfCheck {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-math.json")
         let file = SceneFile(name: "Self-check Math", inputs: [InputSpec(type: "clock")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo")],
-                             camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+                             camera: nil, palette: nil, generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()
@@ -2081,7 +2135,7 @@ extension SelfCheck {
     static func checkMacro(engine: Engine) -> String? {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-macro.json")
         let file = SceneFile(name: "Self-check Macro", inputs: [], modulators: [],
-                             camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+                             camera: nil, palette: nil, generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()
@@ -2167,7 +2221,7 @@ extension Engine {
     func checkEffect(_ name: String) -> String? {
         do {
             let shader = try ShaderCompiler(device: device, commonURL: store.commonShader).compile(store.effectShader(name))
-            _ = try renderer.makeEffectPipeline(shader)
+            _ = try renderer.makeFullscreenPipeline(shader, fragment: "effect")
             return nil
         } catch {
             return "\(error)"
@@ -2294,7 +2348,7 @@ extension SelfCheck {
         let file = SceneFile(name: "Self-check Triggers", inputs: [InputSpec(type: "clock")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["shape": 4, "hz": 2]),
                                           ModulatorSpec(type: "lfo", id: "slow", params: ["hz": 0.1])],
-                             camera: CameraSlot(type: "cutter", params: ["rate": 0]), palette: nil, generator: nil,
+                             camera: CameraSlot(type: "cutter", params: ["rate": 0]), palette: nil, generators: [],
                              effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
@@ -2389,7 +2443,7 @@ extension SelfCheck {
 
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-video.json")
         let file = SceneFile(name: "Self-check Video", inputs: [InputSpec(type: "video", id: "video", file: clip.path)],
-                             modulators: [], camera: nil, palette: nil, generator: nil, effects: [], mappings: [])
+                             modulators: [], camera: nil, palette: nil, generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()

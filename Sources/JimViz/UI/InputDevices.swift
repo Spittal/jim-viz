@@ -410,7 +410,7 @@ struct WebcamDevice: View {
 /// (loading, missing, rate). Its routes show in the inspector.
 private struct DepthPreview: View {
     @Environment(Engine.self) private var engine
-    let source: any VideoSourceRuntime
+    let source: VideoSourceRuntime
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -480,7 +480,7 @@ struct VideoDevice: View {
                         let files = engine.store.availableVideos()
                         if !files.isEmpty {
                             ForEach(files, id: \.self) { f in
-                                Button(f) { engine.setVideoFile(video.key, f) }
+                                Button(f) { engine.setMediaFile(video.key, f) }
                             }
                             Divider()
                         }
@@ -507,7 +507,7 @@ struct VideoDevice: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
         if panel.runModal() == .OK, let url = panel.url {
-            engine.setVideoFile(video.key, url.path)
+            engine.setMediaFile(video.key, url.path)
         }
     }
 
@@ -558,7 +558,7 @@ struct PictureDevice: View {
                         let files = engine.store.availablePictures()
                         if !files.isEmpty {
                             ForEach(files, id: \.self) { f in
-                                Button(f) { engine.setPictureFile(picture.key, f) }
+                                Button(f) { engine.setMediaFile(picture.key, f) }
                             }
                             Divider()
                         }
@@ -584,7 +584,7 @@ struct PictureDevice: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.image]
         if panel.runModal() == .OK, let url = panel.url {
-            engine.setPictureFile(picture.key, url.path)
+            engine.setMediaFile(picture.key, url.path)
         }
     }
 

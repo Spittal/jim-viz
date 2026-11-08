@@ -1,0 +1,139 @@
+{
+  "camera" : {
+    "params" : {
+      "angle" : 0,
+      "bob" : 0.33129883,
+      "bobSpeed" : 0.5,
+      "distance" : 6,
+      "fov" : 55,
+      "height" : 1.2,
+      "lookX" : 0,
+      "lookY" : 0,
+      "lookZ" : 0,
+      "orbitSpeed" : 0.538916,
+      "roll" : 0,
+      "rollSpeed" : 0,
+      "shake" : 0,
+      "shakeSpeed" : 1,
+      "snap" : 0,
+      "sway" : 0.2,
+      "swaySpeed" : 1,
+      "swing" : 0,
+      "tilt" : 21.779297
+    },
+    "preset" : "orbit",
+    "type" : "orbit"
+  },
+  "effects" : [],
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.5,
+        "brownian" : 0,
+        "brownianSpeed" : 0,
+        "colorShift" : 0,
+        "colorSpeed" : 0,
+        "columns" : 4,
+        "energy" : 2,
+        "explode" : 0,
+        "fill" : 1,
+        "flail" : 1,
+        "fog" : 0.04,
+        "headSize" : 0.56259763,
+        "hit" : 0,
+        "instances" : 38,
+        "intersection" : 0,
+        "layout" : 2,
+        "light" : 1.1,
+        "limbLength" : 0,
+        "limbWidth" : 1.169336,
+        "noiseAmount" : 0,
+        "noiseScale" : 0,
+        "noiseSpeed" : 0.25,
+        "scale" : 1,
+        "sides" : 5,
+        "snap" : 0.5110352,
+        "spectrum" : 0,
+        "spectrumMode" : 0,
+        "spikes" : 0,
+        "spin" : 0,
+        "spread" : 3,
+        "tempo" : 1,
+        "tumble" : 0.922168,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 0.8,
+        "videoTint" : 0,
+        "wire" : 1
+      },
+      "type" : "dancer"
+    }
+  ],
+  "inputs" : [
+    {
+      "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
+      "type" : "audio"
+    },
+    {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
+      "type" : "clock"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "clock.sync",
+      "target" : "generator.sync"
+    },
+    {
+      "source" : "audio.out",
+      "target" : "clock.audio"
+    },
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.kick",
+      "target" : "generator.explode"
+    },
+    {
+      "amount" : 0.85058594,
+      "source" : "audio.intensity",
+      "target" : "generator.limbLength"
+    }
+  ],
+  "modulators" : [],
+  "name" : "Dancers",
+  "palette" : {
+    "colors" : [
+      "#000000",
+      "#14002E",
+      "#0040FF",
+      "#FFFFFF",
+      "#FF3000",
+      "#2A0000"
+    ],
+    "params" : {
+      "blue" : 1,
+      "brightness" : 1,
+      "green" : 1,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 1
+    },
+    "preset" : "redshift"
+  }
+}

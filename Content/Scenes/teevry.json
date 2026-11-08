@@ -69,40 +69,42 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 6,
-      "bgGlow" : 0.5,
-      "colorShift" : 0.40908203,
-      "colorSpeed" : 0,
-      "divisions" : 1,
-      "explode" : 0.16953123,
-      "faceSplit" : 0,
-      "fill" : 1,
-      "fog" : 0.04,
-      "inflate" : 0,
-      "instances" : 1,
-      "light" : 1.1,
-      "noiseAmount" : 0.89702153,
-      "noiseScale" : 1.2445313,
-      "noiseSpeed" : 0.87539065,
-      "scale" : 0.84902346,
-      "spectrum" : 0.73749995,
-      "spectrumMode" : 0,
-      "spikes" : 0.36730957,
-      "spin" : 1.4845703,
-      "spread" : 16.655273,
-      "tumble" : 0.4955078,
-      "twist" : 0,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0,
-      "videoTex" : 0.8,
-      "videoTint" : 0,
-      "wire" : 0.033129882
-    },
-    "type" : "cube"
-  },
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.5,
+        "colorShift" : 0.40908203,
+        "colorSpeed" : 0,
+        "divisions" : 1,
+        "explode" : 0.16953123,
+        "faceSplit" : 0,
+        "fill" : 1,
+        "fog" : 0.04,
+        "inflate" : 0,
+        "instances" : 1,
+        "light" : 1.1,
+        "noiseAmount" : 0.89702153,
+        "noiseScale" : 1.2445313,
+        "noiseSpeed" : 0.87539065,
+        "scale" : 0.84902346,
+        "spectrum" : 0.73749995,
+        "spectrumMode" : 0,
+        "spikes" : 0.36730957,
+        "spin" : 1.4845703,
+        "spread" : 16.655273,
+        "tumble" : 0.4955078,
+        "twist" : 0,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 0.8,
+        "videoTint" : 0,
+        "wire" : 0.033129882
+      },
+      "type" : "cube"
+    }
+  ],
   "inputs" : [
     {
       "device" : "system",
@@ -142,9 +144,7 @@
       "target" : "generator.explode"
     }
   ],
-  "modulators" : [
-
-  ],
+  "modulators" : [],
   "name" : "Teevry",
   "palette" : {
     "colors" : [

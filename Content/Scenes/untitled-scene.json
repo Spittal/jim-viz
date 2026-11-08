@@ -1,7 +1,7 @@
 {
   "camera" : {
     "params" : {
-      "angle" : 0,
+      "angle" : 63.632812,
       "bob" : 0,
       "bobSpeed" : 0.5,
       "distance" : 6,
@@ -10,7 +10,7 @@
       "lookX" : 0,
       "lookY" : 0,
       "lookZ" : 0,
-      "orbitSpeed" : 0.0019043088,
+      "orbitSpeed" : 0.82177734,
       "roll" : 0,
       "rollSpeed" : 0,
       "shake" : 0,
@@ -19,56 +19,73 @@
       "sway" : 0.2,
       "swaySpeed" : 1,
       "swing" : 0,
-      "tilt" : 0
+      "tilt" : 38.12256
     },
     "preset" : "orbit",
     "type" : "orbit"
   },
   "effects" : [
-
-  ],
-  "generator" : {
-    "id" : "face",
-    "params" : {
-      "bands" : 6,
-      "bgGlow" : 0.5,
-      "brownian" : 0,
-      "brownianSpeed" : 0,
-      "colorShift" : 0,
-      "colorSpeed" : 0,
-      "columns" : 4,
-      "detail" : 5,
-      "explode" : 0,
-      "fill" : 1,
-      "fog" : 0.04,
-      "instances" : 1,
-      "intersection" : 0,
-      "jaw" : 0.6,
-      "layout" : 0,
-      "light" : 1.1,
-      "noiseAmount" : 0,
-      "noiseScale" : 0,
-      "noiseSpeed" : 0,
-      "open" : 0.36586913,
-      "scale" : 1,
-      "sing" : 1,
-      "singVowel" : 1,
-      "spectrum" : 0,
-      "spectrumMode" : 0,
-      "spikes" : 0.85209966,
-      "spin" : 0,
-      "spread" : 3,
-      "tumble" : 0,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0,
-      "videoTex" : 0.8,
-      "videoTint" : 0,
-      "vowel" : -0.6729004,
-      "wire" : 0
+    {
+      "effect" : "mirror",
+      "id" : "mirror",
+      "params" : {
+        "flip" : 0,
+        "horizontal" : 1,
+        "vertical" : 0
+      }
     },
-    "type" : "face"
-  },
+    {
+      "effect" : "echo",
+      "id" : "echo",
+      "params" : {
+        "amount" : 0.85,
+        "angle" : 1.57,
+        "offset" : 0.003,
+        "spread" : 0.5
+      }
+    }
+  ],
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.5,
+        "brownian" : 0,
+        "brownianSpeed" : 0.5,
+        "colorShift" : 0,
+        "colorSpeed" : 0,
+        "columns" : 4,
+        "divisions" : 2,
+        "explode" : 0,
+        "faceSplit" : 0,
+        "fill" : 1,
+        "fog" : 0.04,
+        "inflate" : 0,
+        "instances" : 1,
+        "intersection" : 0,
+        "layout" : 0,
+        "light" : 1.1,
+        "noiseAmount" : 0.2,
+        "noiseScale" : 1.4,
+        "noiseSpeed" : 0.25,
+        "scale" : 1,
+        "spectrum" : 0.62470704,
+        "spectrumMode" : 0,
+        "spikes" : 0,
+        "spin" : 0,
+        "spread" : 3,
+        "tumble" : 0,
+        "twist" : 0,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 0.8,
+        "videoTint" : 0,
+        "wire" : 0
+      },
+      "type" : "cube"
+    }
+  ],
   "inputs" : [
     {
       "device" : "system",
@@ -87,31 +104,56 @@
         "minBPM" : 90
       },
       "type" : "clock"
+    },
+    {
+      "id" : "webcam",
+      "params" : {
+        "bg" : 0,
+        "contrast" : 0.93232423,
+        "depthContrast" : 1.3,
+        "depthFloor" : 0.1,
+        "depthSmooth" : 0.7,
+        "edges" : 0,
+        "exposure" : 0,
+        "mirror" : 1,
+        "panX" : 0,
+        "panY" : 0,
+        "posterize" : 1,
+        "rotate" : 0,
+        "saturation" : 0.056152344,
+        "warp" : 0,
+        "warpScale" : 3,
+        "warpSpeed" : 0.5,
+        "zoom" : 1
+      },
+      "type" : "webcam"
     }
   ],
   "mappings" : [
     {
-      "source" : "palette.colors",
-      "target" : "generator.globe.pal"
-    },
-    {
-      "source" : "palette.colors",
-      "target" : "generator.face.pal"
+      "source" : "audio.spectrum",
+      "target" : "generator.spec"
     },
     {
       "amount" : 0.25,
-      "source" : "audio.harmonic",
-      "target" : "generator.face.open"
+      "source" : "audio.kick",
+      "target" : "generator.explode"
+    },
+    {
+      "source" : "palette.colors",
+      "target" : "generator.pal"
     },
     {
       "amount" : 0.25,
-      "source" : "audio.mid",
-      "target" : "generator.face.vowel"
+      "source" : "audio.percussive",
+      "target" : "post.echo.amount"
+    },
+    {
+      "source" : "webcam.webcam.video",
+      "target" : "generator.texVideo"
     }
   ],
-  "modulators" : [
-
-  ],
+  "modulators" : [],
   "name" : "Untitled Scene",
   "palette" : {
     "colors" : [

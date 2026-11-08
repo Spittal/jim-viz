@@ -65,43 +65,45 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 5,
-      "behind" : 50.876465,
-      "bgGlow" : 1,
-      "bounce" : 0.29277343,
-      "carColor" : 0.75,
-      "carSize" : 0.41809082,
-      "curveLength" : 1,
-      "curves" : 0,
-      "distance" : 140.01172,
-      "eq" : 0,
-      "explode" : 0,
-      "fog" : 1,
-      "grid" : 0.6,
-      "gridSize" : 9.415161,
-      "hills" : 0,
-      "lane" : 0.4177246,
-      "lanes" : 2,
-      "light" : 1.1,
-      "lights" : 0.4753418,
-      "mountains" : 1,
-      "palmSize" : 1.9541259,
-      "palms" : 101,
-      "rumble" : 0,
-      "segments" : 14,
-      "speed" : 1,
-      "steer" : 1,
-      "stripeColor" : 1,
-      "sun" : 2,
-      "sunHeight" : 0.15,
-      "sunSlices" : 0,
-      "width" : 5.4441404,
-      "wire" : 0
-    },
-    "type" : "drive"
-  },
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 5,
+        "behind" : 50.876465,
+        "bgGlow" : 1,
+        "bounce" : 0.29277343,
+        "carColor" : 0.75,
+        "carSize" : 0.41809082,
+        "curveLength" : 1,
+        "curves" : 0,
+        "distance" : 140.01172,
+        "eq" : 0,
+        "explode" : 0,
+        "fog" : 1,
+        "grid" : 0.6,
+        "gridSize" : 9.415161,
+        "hills" : 0,
+        "lane" : 0.4177246,
+        "lanes" : 2,
+        "light" : 1.1,
+        "lights" : 0.4753418,
+        "mountains" : 1,
+        "palmSize" : 1.9541259,
+        "palms" : 101,
+        "rumble" : 0,
+        "segments" : 14,
+        "speed" : 1,
+        "steer" : 1,
+        "stripeColor" : 1,
+        "sun" : 2,
+        "sunHeight" : 0.15,
+        "sunSlices" : 0,
+        "width" : 5.4441404,
+        "wire" : 0
+      },
+      "type" : "drive"
+    }
+  ],
   "inputs" : [
     {
       "device" : "system",
@@ -160,9 +162,7 @@
       "target" : "camera.cut"
     }
   ],
-  "modulators" : [
-
-  ],
+  "modulators" : [],
   "name" : "Car",
   "palette" : {
     "colors" : [

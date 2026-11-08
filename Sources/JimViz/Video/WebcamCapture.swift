@@ -112,11 +112,10 @@ final class WebcamFeed: VideoSourceFeed {
     @ObservationIgnored private var frame: VideoFrame?
     @ObservationIgnored private var delegate: Delegate?
     @ObservationIgnored private(set) var wanted = false
-    @ObservationIgnored private var previous: [Float] = []
-
-    /// 0...1, written on the capture queue, read by outputs on the render thread.
-    @ObservationIgnored private(set) var brightness: Float = 0
-    @ObservationIgnored private(set) var motion: Float = 0
+    /// Brightness and motion, 0...1, written on the capture queue, read by outputs on the render thread.
+    @ObservationIgnored private var luma = LumaGrid()
+    var brightness: Float { luma.brightness }
+    var motion: Float { luma.motion }
 
     /// Depth from the camera image. Runs only while `depthWanted`, that is while a scene on
     /// screen has this camera's Depth output mapped.
@@ -124,8 +123,6 @@ final class WebcamFeed: VideoSourceFeed {
     @ObservationIgnored var depthWanted = false {
         didSet { if !depthWanted { depth.reset() } }
     }
-
-    typealias Frame = VideoFrame
 
     init(name: String?, metal: MTLDevice) {
         self.name = name
@@ -197,39 +194,10 @@ final class WebcamFeed: VideoSourceFeed {
         var cvTex: CVMetalTexture?
         CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm, w, h, 0, &cvTex)
         guard let cvTex, let tex = CVMetalTextureGetTexture(cvTex) else { return }
-        analyze(buffer, w, h)
+        luma.analyze(buffer)
         if depthWanted { depth.submit(buffer) }
         lock.lock(); frame = VideoFrame(texture: tex, owner: cvTex); lock.unlock()
         if status != .running { setStatus(.running) }
-    }
-
-    /// Average brightness and frame-to-frame change over a coarse 32×18 grid.
-    private func analyze(_ buffer: CVPixelBuffer, _ w: Int, _ h: Int) {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return }
-        let row = CVPixelBufferGetBytesPerRow(buffer)
-        let gx = 32, gy = 18
-        var grid = [Float](repeating: 0, count: gx * gy)
-        var sum: Float = 0
-        for j in 0..<gy {
-            let y = (j * 2 + 1) * h / (gy * 2)
-            for i in 0..<gx {
-                let x = (i * 2 + 1) * w / (gx * 2)
-                let p = base + y * row + x * 4
-                let l = (Float(p[2]) * 0.2126 + Float(p[1]) * 0.7152 + Float(p[0]) * 0.0722) / 255
-                grid[j * gx + i] = l
-                sum += l
-            }
-        }
-        brightness = sum / Float(grid.count)
-        if previous.count == grid.count {
-            var diff: Float = 0
-            for k in grid.indices { diff += abs(grid[k] - previous[k]) }
-            let m = min(diff / Float(grid.count) * 8, 1)
-            motion += (m - motion) * 0.5
-        }
-        previous = grid
     }
 
     private final class Delegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -241,47 +209,14 @@ final class WebcamFeed: VideoSourceFeed {
     }
 }
 
-/// A Webcam in the scene's Inputs section. Its knobs (from `Shaders/inputs/webcam.metal`)
-/// process the feed into `processed`, which is its video output; it also has value outputs,
-/// motion and brightness. Its second video output, Depth, is estimated from the image: grey,
-/// white = near.
+/// A Webcam in the scene's Inputs section, on one camera's feed.
 final class WebcamRuntime: VideoSourceRuntime {
-    let id: String
     /// Camera name asked for; nil is the default camera.
     let device: String?
-    let bank: ParamBank
     let feed: WebcamFeed
-    var sourceFeed: any VideoSourceFeed { feed }
-    let pipeline: MTLRenderPipelineState?
-    /// The processed video, written by the renderer each frame.
-    let processed: MTLTexture
-    /// Value outputs: motion and brightness.
-    private(set) var outputs: [OutputSignal] = []
-    /// Its video output, `webcam.<id>.video`.
-    let video: StreamOutput
-    /// Its depth output, `webcam.<id>.depth`, drawn by `depthPipeline` from the estimator's
-    /// latest depth into `depth`. `depthHistory` holds last frame's, for smoothing.
-    let depthVideo: StreamOutput
-    let depth: MTLTexture
-    let depthPipeline: MTLRenderPipelineState?
-    let depthHistory: MTLTexture
-    /// Set when the scene maps the Depth output somewhere; only then does the model run.
-    var depthMapped = false
 
-    var key: String { "webcam.\(id)" }
-    var videoKey: String { "\(key).video" }
-
-    init(id: String, device: String?, bank: ParamBank, feed: WebcamFeed, pipeline: MTLRenderPipelineState?, processed: MTLTexture,
-         depthPipeline: MTLRenderPipelineState?, depth: MTLTexture, depthHistory: MTLTexture) {
-        self.id = id; self.device = device; self.bank = bank; self.feed = feed
-        self.pipeline = pipeline; self.processed = processed
-        self.depthPipeline = depthPipeline; self.depthHistory = depthHistory; self.depth = depth
-        let label = device ?? "Webcam"
-        video = StreamOutput("webcam.\(id).video", "Video", device: label, texture: processed)
-        depthVideo = StreamOutput("webcam.\(id).depth", "Depth", device: label, texture: depth)
-        outputs = [
-            OutputSignal("\(key).motion", "Motion", device: label) { [unowned feed] _ in feed.motion },
-            OutputSignal("\(key).brightness", "Brightness", device: label) { [unowned feed] _ in feed.brightness },
-        ]
+    init(id: String, device: String?, bank: ParamBank, feed: WebcamFeed, gpu: VideoSourceGPU) {
+        self.device = device; self.feed = feed
+        super.init(key: "webcam.\(id)", id: id, label: device ?? "Webcam", bank: bank, feed: feed, gpu: gpu)
     }
 }

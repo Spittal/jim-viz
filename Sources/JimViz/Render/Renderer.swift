@@ -211,8 +211,6 @@ final class RenderScene {
     let name: String
     let generators: [GeneratorRuntime]
     var generator: GeneratorRuntime? { generators.first }
-    /// Preset ids each device was loaded from, and display labels, for the UI.
-    var generatorPreset: String? { generators.first?.preset }
     var generatorLabel: String? { generators.first?.label }
     /// Audio In, Clock, MIDI and webcam inputs, in chain order.
     let inputs: [InputDevice]
@@ -223,9 +221,8 @@ final class RenderScene {
     let webcams: [WebcamRuntime]
     let videos: [VideoRuntime]
     let pictures: [PictureRuntime]
-    var allVideoSources: [any VideoSourceRuntime] {
-        (webcams as [any VideoSourceRuntime]) + (videos as [any VideoSourceRuntime]) + (pictures as [any VideoSourceRuntime])
-    }
+    /// Webcams, videos and pictures, in chain order.
+    let videoSources: [VideoSourceRuntime]
     /// Every stream output (video, spectrum, palette) and stream input in the chain, in chain order.
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
@@ -252,9 +249,8 @@ final class RenderScene {
     var hasClock: Bool { clock != nil }
     /// Every device's chain key, left to right: inputs, `camera`, `palette`, generators, `post.<id>`.
     let deviceKeys: [String]
-    /// The stream feeding each generator's inputs, keyed by generator key.
+    /// The stream feeding each generator's and effect's inputs, by generator key and effect id.
     let generatorSources: [String: [StreamOutput?]]
-    var generatorSourcesList: [StreamOutput?] { generators.first.flatMap { generatorSources[$0.key] } ?? [] }
     let effectSources: [String: [StreamOutput?]]
     /// True when something reads the palette's colours, so its gradient is worth updating.
     let usesPalette: Bool
@@ -278,6 +274,14 @@ final class RenderScene {
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         videos = inputs.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
         pictures = inputs.compactMap { if case .picture(let p) = $0 { return p } else { return nil } }
+        videoSources = inputs.compactMap {
+            switch $0 {
+            case .webcam(let w): return w
+            case .video(let v): return v
+            case .picture(let p): return p
+            case .audio, .clock, .midi: return nil
+            }
+        }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
         let syncInputs: [StreamInput] = modulators.filter { $0.type == .lfo }
@@ -297,20 +301,7 @@ final class RenderScene {
         self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        let allSources: [any VideoSourceRuntime] = (webcams as [any VideoSourceRuntime]) + (videos as [any VideoSourceRuntime]) + (pictures as [any VideoSourceRuntime])
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + allSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
-    }
-
-    convenience init(name: String, generatorPreset: String?, generatorLabel: String?, generator: GeneratorRuntime?,
-                     inputs: [InputDevice], modulators: [ModulatorRuntime],
-                     streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
-                     camera: ParamBank?, cameraMotion: CameraMotion?, cameraPreset: String?, cameraLabel: String?,
-                     effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
-                     outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
-        self.init(name: name, generators: generator.map { [$0] } ?? [], inputs: inputs, modulators: modulators,
-                  streamOutputs: streamOutputs, streamBindings: streamBindings, camera: camera, cameraMotion: cameraMotion,
-                  cameraPreset: cameraPreset, cameraLabel: cameraLabel, effects: effects, palettePreset: palettePreset,
-                  palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings, banksByPath: banksByPath)
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + effects.map(\.bank)
     }
 
     /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
@@ -580,10 +571,12 @@ final class Renderer {
         }
     }
 
-    func makeEffectPipeline(_ shader: CompiledShader) throws -> MTLRenderPipelineState {
+    /// A full-screen pass: `fx_vertex` with the named fragment function, into a work texture.
+    /// Effects name theirs `effect`; the webcam processing shader has `webcam` and `webcam_depth`.
+    func makeFullscreenPipeline(_ shader: CompiledShader, fragment: String) throws -> MTLRenderPipelineState {
         guard let v = shader.library.makeFunction(name: "fx_vertex"),
-              let f = shader.library.makeFunction(name: "effect") else {
-            throw ShaderError(file: shader.url.lastPathComponent, message: "needs a fragment function named effect")
+              let f = shader.library.makeFunction(name: fragment) else {
+            throw ShaderError(file: shader.url.lastPathComponent, message: "needs a fragment function named \(fragment)")
         }
         let d = MTLRenderPipelineDescriptor()
         d.vertexFunction = v
@@ -596,38 +589,9 @@ final class Renderer {
         }
     }
 
-    /// The webcam processing pass, from `Shaders/inputs/webcam.metal`.
-    func makeWebcamPipeline(_ shader: CompiledShader) throws -> MTLRenderPipelineState {
-        guard let v = shader.library.makeFunction(name: "fx_vertex"),
-              let f = shader.library.makeFunction(name: "webcam") else {
-            throw ShaderError(file: shader.url.lastPathComponent, message: "needs a fragment function named webcam")
-        }
-        let d = MTLRenderPipelineDescriptor()
-        d.vertexFunction = v
-        d.fragmentFunction = f
-        d.colorAttachments[0].pixelFormat = Self.workFormat
-        do {
-            return try device.makeRenderPipelineState(descriptor: d)
-        } catch {
-            throw ShaderError(file: shader.url.lastPathComponent, message: ShaderCompiler.summarize(error))
-        }
-    }
-
-    /// The webcam depth pass, `webcam_depth` in `Shaders/inputs/webcam.metal`.
-    func makeDepthPipeline(_ shader: CompiledShader) throws -> MTLRenderPipelineState {
-        guard let v = shader.library.makeFunction(name: "fx_vertex"),
-              let f = shader.library.makeFunction(name: "webcam_depth") else {
-            throw ShaderError(file: shader.url.lastPathComponent, message: "needs a fragment function named webcam_depth")
-        }
-        let d = MTLRenderPipelineDescriptor()
-        d.vertexFunction = v
-        d.fragmentFunction = f
-        d.colorAttachments[0].pixelFormat = Self.workFormat
-        do {
-            return try device.makeRenderPipelineState(descriptor: d)
-        } catch {
-            throw ShaderError(file: shader.url.lastPathComponent, message: ShaderCompiler.summarize(error))
-        }
+    /// The textures a video source writes: its processed video, and its depth with last frame's.
+    func makeVideoSourceTextures() -> (processed: MTLTexture, depth: MTLTexture, depthHistory: MTLTexture) {
+        (makeVideoTexture(), makeDepthTexture(), makeDepthTexture())
     }
 
     func makeDepthTexture() -> MTLTexture {
@@ -645,7 +609,7 @@ final class Renderer {
     /// Processes each video source's (webcam, video, picture) latest frame into its video output.
     /// Before the first frame (or without input) the output is black.
     private func encodeVideoSources(_ cmd: MTLCommandBuffer, _ scene: RenderScene, _ f: inout FrameUniforms) {
-        for source in scene.allVideoSources {
+        for source in scene.videoSources {
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = source.processed
             pass.colorAttachments[0].storeAction = .store
@@ -670,12 +634,12 @@ final class Renderer {
             // Keep the source's pixel buffer alive until the GPU has read it.
             if let owner = frame.owner { cmd.addCompletedHandler { _ in withExtendedLifetime(owner) {} } }
         }
-        for source in scene.allVideoSources where source.depthMapped { encodeDepth(cmd, source, f) }
+        for source in scene.videoSources where source.depthMapped { encodeDepth(cmd, source, f) }
     }
 
     /// Draws a video source's Depth output from the estimator's latest depth, framed like its video
     /// and eased toward it from last frame's. Black (all far) until the first depth arrives.
-    private func encodeDepth(_ cmd: MTLCommandBuffer, _ source: any VideoSourceRuntime, _ f: FrameUniforms) {
+    private func encodeDepth(_ cmd: MTLCommandBuffer, _ source: VideoSourceRuntime, _ f: FrameUniforms) {
         let target = source.depth
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -756,7 +720,7 @@ final class Renderer {
             enc.label = "scene"
 
             // 1. Draw video source backgrounds in chain order for sources with bg > 0.
-            for source in scene.allVideoSources {
+            for source in scene.videoSources {
                 let bg = source.bank["bg"]?.live ?? 0
                 if bg > 0 {
                     enc.setRenderPipelineState(webcamBgPipeline)

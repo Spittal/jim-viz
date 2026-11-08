@@ -44,41 +44,43 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 6,
-      "bgGlow" : 0.5,
-      "colorShift" : 0,
-      "colorSpeed" : 0,
-      "count" : 216,
-      "explode" : 1.0464844,
-      "fill" : 1,
-      "fog" : 0.04,
-      "instances" : 1,
-      "length" : 2.5,
-      "light" : 1.1,
-      "noiseAmount" : 0.2,
-      "noiseScale" : 1.4,
-      "noiseSpeed" : 0.25,
-      "radius" : 1,
-      "scale" : 1.3591797,
-      "shardSpin" : 0,
-      "size" : 0.69853514,
-      "spectrum" : 0,
-      "spectrumMode" : 1,
-      "spikes" : 0,
-      "spin" : 0.49140626,
-      "spread" : 3,
-      "tumble" : 0,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0,
-      "videoTex" : 1,
-      "videoTint" : 0,
-      "wire" : 0.8132324
-    },
-    "type" : "shards"
-  },
+  "generators" : [
+    {
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.5,
+        "colorShift" : 0,
+        "colorSpeed" : 0,
+        "count" : 216,
+        "explode" : 1.0464844,
+        "fill" : 1,
+        "fog" : 0.04,
+        "instances" : 1,
+        "length" : 2.5,
+        "light" : 1.1,
+        "noiseAmount" : 0.2,
+        "noiseScale" : 1.4,
+        "noiseSpeed" : 0.25,
+        "radius" : 1,
+        "scale" : 1.3591797,
+        "shardSpin" : 0,
+        "size" : 0.69853514,
+        "spectrum" : 0,
+        "spectrumMode" : 1,
+        "spikes" : 0,
+        "spin" : 0.49140626,
+        "spread" : 3,
+        "tumble" : 0,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 1,
+        "videoTint" : 0,
+        "wire" : 0.8132324
+      },
+      "type" : "shards"
+    }
+  ],
   "inputs" : [
     {
       "device" : "system",

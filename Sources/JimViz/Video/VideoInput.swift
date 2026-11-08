@@ -66,11 +66,10 @@ final class VideoFeed: VideoSourceFeed {
     @ObservationIgnored private var cache: CVMetalTextureCache?
     @ObservationIgnored private let lock = NSLock()
     @ObservationIgnored private var frame: VideoFrame?
-    @ObservationIgnored private var previous: [Float] = []
     @ObservationIgnored private(set) var wanted = false
-
-    @ObservationIgnored private(set) var brightness: Float = 0
-    @ObservationIgnored private(set) var motion: Float = 0
+    @ObservationIgnored private var luma = LumaGrid()
+    var brightness: Float { luma.brightness }
+    var motion: Float { luma.motion }
 
     /// In and out points as fractions of the video's length. Render thread.
     @ObservationIgnored private var range: ClosedRange<Double> = 0...1
@@ -223,39 +222,10 @@ final class VideoFeed: VideoSourceFeed {
         var cvTex: CVMetalTexture?
         CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm, w, h, 0, &cvTex)
         guard let cvTex, let tex = CVMetalTextureGetTexture(cvTex) else { return }
-        analyze(buffer, w, h)
+        luma.analyze(buffer)
         if depthWanted { depth.submit(buffer) }
         frame = VideoFrame(texture: tex, owner: cvTex)
         if status != .playing && wanted { setStatus(.playing) }
-    }
-
-    /// Average brightness and frame-to-frame change over a coarse 32×18 grid.
-    private func analyze(_ buffer: CVPixelBuffer, _ w: Int, _ h: Int) {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return }
-        let row = CVPixelBufferGetBytesPerRow(buffer)
-        let gx = 32, gy = 18
-        var grid = [Float](repeating: 0, count: gx * gy)
-        var sum: Float = 0
-        for j in 0..<gy {
-            let y = (j * 2 + 1) * h / (gy * 2)
-            for i in 0..<gx {
-                let x = (i * 2 + 1) * w / (gx * 2)
-                let p = base + y * row + x * 4
-                let l = (Float(p[2]) * 0.2126 + Float(p[1]) * 0.7152 + Float(p[0]) * 0.0722) / 255
-                grid[j * gx + i] = l
-                sum += l
-            }
-        }
-        brightness = sum / Float(grid.count)
-        if previous.count == grid.count {
-            var diff: Float = 0
-            for k in grid.indices { diff += abs(grid[k] - previous[k]) }
-            let m = min(diff / Float(grid.count) * 8, 1)
-            motion += (m - motion) * 0.5
-        }
-        previous = grid
     }
 
     /// Self-check or test frame injection.
@@ -276,45 +246,21 @@ enum VideoTransport {
 }
 
 /// A Video input in the scene's Inputs section. Loops a video file between its in and out
-/// points and processes it with the standard video knobs (framing, warp, color, background,
-/// depth). Its Jump trigger input skips to a random spot between the in and out points.
+/// points. Its Jump trigger input skips to a random spot between them.
 final class VideoRuntime: VideoSourceRuntime {
-    let id: String
     let file: String?
-    let bank: ParamBank
     let feed: VideoFeed
-    var sourceFeed: any VideoSourceFeed { feed }
-    let pipeline: MTLRenderPipelineState?
-    let processed: MTLTexture
-    private(set) var outputs: [OutputSignal] = []
-    let video: StreamOutput
-    let depthVideo: StreamOutput
-    let depth: MTLTexture
-    let depthPipeline: MTLRenderPipelineState?
-    let depthHistory: MTLTexture
-    var depthMapped = false
     /// `video.<id>.jump`: each fire jumps to a random spot between the in and out points.
     let jumpTrigger: TriggerInput
     private var rng: UInt64 = 0x2545_F491_4F6C_DD1D
 
-    var key: String { "video.\(id)" }
-    var displayName: String {
-        file.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose video…"
-    }
+    var displayName: String { file.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose video…" }
 
-    init(id: String, file: String?, bank: ParamBank, feed: VideoFeed, pipeline: MTLRenderPipelineState?,
-         processed: MTLTexture, depthPipeline: MTLRenderPipelineState?, depth: MTLTexture, depthHistory: MTLTexture) {
-        self.id = id; self.file = file; self.bank = bank; self.feed = feed
-        self.pipeline = pipeline; self.processed = processed
-        self.depthPipeline = depthPipeline; self.depthHistory = depthHistory; self.depth = depth
-        let label = file.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "Video"
+    init(id: String, file: String?, bank: ParamBank, feed: VideoFeed, gpu: VideoSourceGPU) {
+        self.file = file; self.feed = feed
         jumpTrigger = TriggerInput("video.\(id).jump", "Jump")
-        video = StreamOutput("video.\(id).video", "Video", device: label, texture: processed)
-        depthVideo = StreamOutput("video.\(id).depth", "Depth", device: label, texture: depth)
-        outputs = [
-            OutputSignal("\(key).motion", "Motion", device: label) { [unowned feed] _ in feed.motion },
-            OutputSignal("\(key).brightness", "Brightness", device: label) { [unowned feed] _ in feed.brightness },
-        ]
+        let label = file.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "Video"
+        super.init(key: "video.\(id)", id: id, label: label, bank: bank, feed: feed, gpu: gpu)
     }
 
     /// Render thread, once per frame after mappings: hands the feed its in and out points, and

@@ -78,39 +78,6 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 5,
-      "bgGlow" : 0.5,
-      "colorShift" : 0,
-      "colorSpeed" : 0,
-      "detail" : 1,
-      "explode" : 0.1,
-      "fill" : 1,
-      "fog" : 0.04,
-      "instances" : 1,
-      "light" : 1.1,
-      "noiseAmount" : 0.25,
-      "noiseScale" : 1.4,
-      "noiseSpeed" : 0.25,
-      "scale" : 0.061523438,
-      "spectrum" : 0.35,
-      "spectrumMode" : 1,
-      "spikes" : 1.3871338,
-      "spin" : 0.15,
-      "spread" : 3,
-      "squash" : 1,
-      "tumble" : 0.3,
-      "twist" : 0,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0,
-      "videoTex" : 0.8,
-      "videoTint" : 0,
-      "wire" : 0.6
-    },
-    "type" : "sphere"
-  },
   "generators" : [
     {
       "params" : {

@@ -375,7 +375,7 @@ final class Engine {
             modulators: [],
             camera: cameraSlot("orbit", preset: "orbit"),
             palette: paletteSlot(preset: "ember"),
-            generator: nil,
+            generators: [],
             effects: [],
             mappings: [])
         let url = store.scenesDir.appendingPathComponent("\(slugify(name)).json")
@@ -418,10 +418,10 @@ final class Engine {
         return PaletteSlot(preset: id, colors: colors)
     }
 
-    /// Adds a tool to the chain, optionally loaded with one of its presets. Camera, palette and
-    /// generator replace what is there; effects insert at `index` or append; inputs are added
-    /// (one Audio In and one Clock, any number of MIDI inputs). A preset's values are copied in;
-    /// the preset file is never touched.
+    /// Adds a tool to the chain, optionally loaded with one of its presets. Camera and palette
+    /// replace what is there; generators, modulators and effects insert at `index` or append;
+    /// inputs are added (one Audio In and one Clock, any number of the rest). A preset's values
+    /// are copied in; the preset file is never touched.
     func apply(_ kind: DeviceKind, _ tool: String, preset: String? = nil, at index: Int? = nil, replaceSelected: Bool = true) {
         let label = presetName(kind, tool, preset) ?? Tools.label(kind, tool)
         let cardinality = Tools.cardinality(kind, tool)
@@ -443,7 +443,8 @@ final class Engine {
             edit("Added \(toolLabel)\(preset.map { " (\($0))" } ?? "")") { file in
                 let id = Self.uniqueID(tool, taken: Set(file.inputs.compactMap(\.id)))
                 let i = file.inputs.lastIndex { !$0.isMIDI }.map { $0 + 1 } ?? 0
-                file.inputs.insert(InputSpec(type: tool, id: id, device: preset, file: preset), at: i)
+                file.inputs.insert(InputSpec(type: tool, id: id, device: tool == "webcam" ? preset : nil,
+                                             file: tool == "webcam" ? nil : preset), at: i)
                 key = "\(tool).\(id)"
             }
             selectDevice(key)
@@ -477,35 +478,20 @@ final class Engine {
             let p = preset.flatMap { store.preset(.generator, tool, $0) }
             var key = "generator"
             edit("Generator: \(label)") { file in
-                var list = file.allGenerators
-                if list.isEmpty {
-                    let slot = GeneratorSlot(id: nil, type: tool, preset: preset, params: p?.params)
-                    list.append(slot)
-                    key = "generator"
-                } else if cardinality == .one {
-                    var slot = list[0]
-                    slot.type = tool
-                    slot.preset = preset
-                    slot.params = p?.params
-                    list[0] = slot
-                    key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
-                } else if replaceSelected, preset != nil, let selected = self.selectedDevice, selected.hasPrefix("generator"),
-                          let idx = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == selected }) {
-                    var slot = list[idx]
-                    slot.type = tool
-                    slot.preset = preset
-                    slot.params = p?.params
-                    list[idx] = slot
-                    key = slot.id == nil ? "generator" : "generator.\(slot.id!)"
+                // A preset dropped while a generator is selected replaces that one; otherwise it adds.
+                if replaceSelected, preset != nil, let selected = self.selectedDevice,
+                   let idx = file.generators.firstIndex(where: { $0.key == selected }) {
+                    file.generators[idx].type = tool
+                    file.generators[idx].preset = preset
+                    file.generators[idx].params = p?.params
+                    key = selected
                 } else {
-                    let taken = Set(list.compactMap(\.id) + ["generator"])
-                    let id = Self.uniqueID(tool, taken: taken)
+                    let id = file.generators.isEmpty ? nil : Self.uniqueID(tool, taken: Set(file.generators.compactMap(\.id) + ["generator"]))
                     let slot = GeneratorSlot(id: id, type: tool, preset: preset, params: p?.params)
-                    let i = min(max(index ?? list.count, 0), list.count)
-                    list.insert(slot, at: i)
-                    key = "generator.\(id)"
+                    let i = min(max(index ?? file.generators.count, 0), file.generators.count)
+                    file.generators.insert(slot, at: i)
+                    key = slot.key
                 }
-                file.allGenerators = list
             }
             selectDevice(key)
         case .modulation:
@@ -565,14 +551,10 @@ final class Engine {
         let p = preset.flatMap { store.preset(.generator, tool, $0) }
         let label = presetName(.generator, tool, preset) ?? Tools.label(.generator, tool)
         edit("Generator: \(label)") { file in
-            var list = file.allGenerators
-            guard let idx = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }) ?? list.indices.first else { return }
-            var slot = list[idx]
-            slot.type = tool
-            slot.preset = preset
-            slot.params = p?.params
-            list[idx] = slot
-            file.allGenerators = list
+            guard let idx = file.generators.firstIndex(where: { $0.key == key }) else { return }
+            file.generators[idx].type = tool
+            file.generators[idx].preset = preset
+            file.generators[idx].params = p?.params
         }
         selectDevice(key)
     }
@@ -618,20 +600,13 @@ final class Engine {
 
     func removeGenerator(key: String = "generator") {
         if selectedDevice == key { selectDevice(nil) }
-        edit("Removed generator") { file in
-            var list = file.allGenerators
-            list.removeAll { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }
-            file.allGenerators = list
-        }
+        edit("Removed generator") { $0.generators.removeAll { $0.key == key } }
     }
 
     func moveGenerator(key: String, by offset: Int) {
         edit("Moved generator") { file in
-            var list = file.allGenerators
-            guard let from = list.firstIndex(where: { ($0.id == nil ? "generator" : "generator.\($0.id!)") == key }) else { return }
-            let to = min(max(from + offset, 0), list.count - 1)
-            list.swapAt(from, to)
-            file.allGenerators = list
+            guard let from = file.generators.firstIndex(where: { $0.key == key }) else { return }
+            file.generators.swapAt(from, min(max(from + offset, 0), file.generators.count - 1))
         }
     }
 
@@ -890,20 +865,13 @@ final class Engine {
     /// use, with depth estimation for those whose Depth is mapped. Everything else stops.
     private func activateHardware() {
         let scenes = [current, pendingScene?.scene].compactMap { $0 }
-        let runtimes = scenes.flatMap(\.webcams)
-        let depthFeeds = Set(runtimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
-        for f in webcams.allFeeds { f.depthWanted = depthFeeds.contains(ObjectIdentifier(f)) }
-        webcams.activate(runtimes.map(\.feed))
-
-        let vidRuntimes = scenes.flatMap(\.videos)
-        let vidDepthFeeds = Set(vidRuntimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
-        for f in videos.allFeeds { f.depthWanted = vidDepthFeeds.contains(ObjectIdentifier(f)) }
-        videos.activate(vidRuntimes.map(\.feed))
-
-        let picRuntimes = scenes.flatMap(\.pictures)
-        let picDepthFeeds = Set(picRuntimes.filter(\.depthMapped).map { ObjectIdentifier($0.feed) })
-        for f in pictures.allFeeds { f.depthWanted = picDepthFeeds.contains(ObjectIdentifier(f)) }
-        pictures.activate(picRuntimes.map(\.feed))
+        let sources = scenes.flatMap(\.videoSources)
+        let depthFeeds = Set(sources.filter(\.depthMapped).map { ObjectIdentifier($0.sourceFeed) })
+        let feeds: [any VideoSourceFeed] = webcams.allFeeds + videos.allFeeds + pictures.allFeeds
+        for f in feeds { f.depthWanted = depthFeeds.contains(ObjectIdentifier(f)) }
+        webcams.activate(scenes.flatMap(\.webcams).map(\.feed))
+        videos.activate(scenes.flatMap(\.videos).map(\.feed))
+        pictures.activate(scenes.flatMap(\.pictures).map(\.feed))
 
         guard hardwareReady else { return }
         audioCaptures.activate(scenes.compactMap { $0.audioIn?.capture })
@@ -938,23 +906,12 @@ final class Engine {
         }
     }
 
-    /// Points a Video input at a video file.
-    func setVideoFile(_ key: String, _ path: String?) {
+    /// Points a Video or Picture input at a media file.
+    func setMediaFile(_ key: String, _ path: String?) {
         let name = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None"
-        edit("Video: \(name)") { file in
+        edit("\(deviceName(key)): \(name)") { file in
             guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
             file.inputs[i].file = path
-            file.inputs[i].device = path
-        }
-    }
-
-    /// Points a Picture input at an image file.
-    func setPictureFile(_ key: String, _ path: String?) {
-        let name = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None"
-        edit("Picture: \(name)") { file in
-            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
-            file.inputs[i].file = path
-            file.inputs[i].device = path
         }
     }
 
@@ -1013,8 +970,8 @@ final class Engine {
         // Generators, from the scene's copy of their tool and preset values.
         var generators: [GeneratorRuntime] = []
         errors["generator"] = nil
-        for slot in file.allGenerators {
-            let slotKey = slot.id == nil ? "generator" : "generator.\(slot.id!)"
+        for slot in file.generators {
+            let slotKey = slot.key
             let slotId = slot.id ?? "generator"
             guard case let .generator(shader, meshPipe, blendPipe, bgPipe)? = compiled(store.generatorShader(slot.type), generator: true) else {
                 return nil
@@ -1158,60 +1115,26 @@ final class Engine {
             case "webcam":
                 let id = spec.id ?? "webcam"
                 guard !inputs.contains(where: { $0.id == "webcam.\(id)" }) else { continue }
-                var defs: [ParamDef] = []
-                var pipeline: MTLRenderPipelineState?
-                var depthPipeline: MTLRenderPipelineState?
-                if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
                 let old = reuse?.webcams.first { $0.id == id }
-                if pipeline == nil, let old {
-                    defs = old.bank.params.map(\.def); pipeline = old.pipeline; depthPipeline = old.depthPipeline
-                }
-                let bank = ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank)
-                let w = WebcamRuntime(id: id, device: spec.device, bank: bank, feed: webcams.feed(named: spec.device),
-                                      pipeline: pipeline, processed: old?.processed ?? renderer.makeVideoTexture(),
-                                      depthPipeline: depthPipeline,
-                                      depth: old?.depth ?? renderer.makeDepthTexture(),
-                                      depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
+                let (defs, gpu) = videoSourceGPU(reuse: old)
+                let w = WebcamRuntime(id: id, device: spec.device, bank: ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank),
+                                      feed: webcams.feed(named: spec.device), gpu: gpu)
                 inputs.append(.webcam(w)); outputs += w.outputs
             case "video":
                 let id = spec.id ?? "video"
                 guard !inputs.contains(where: { $0.id == "video.\(id)" }) else { continue }
-                var defs: [ParamDef] = []
-                var pipeline: MTLRenderPipelineState?
-                var depthPipeline: MTLRenderPipelineState?
-                if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
                 let old = reuse?.videos.first { $0.id == id }
-                if pipeline == nil, let old {
-                    defs = old.bank.packedDefs; pipeline = old.pipeline; depthPipeline = old.depthPipeline
-                }
+                let (defs, gpu) = videoSourceGPU(reuse: old)
                 let bank = ParamBank(defs: defs, unpacked: VideoTransport.defs, values: spec.params ?? [:], reuse: old?.bank)
-                let filePath = spec.file ?? spec.device
-                let feed = videos.feed(for: filePath, store: store)
-                let v = VideoRuntime(id: id, file: filePath, bank: bank, feed: feed,
-                                     pipeline: pipeline, processed: old?.processed ?? renderer.makeVideoTexture(),
-                                     depthPipeline: depthPipeline,
-                                     depth: old?.depth ?? renderer.makeDepthTexture(),
-                                     depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
+                let v = VideoRuntime(id: id, file: spec.file, bank: bank, feed: videos.feed(for: spec.file, store: store), gpu: gpu)
                 inputs.append(.video(v)); outputs += v.outputs
             case "picture":
                 let id = spec.id ?? "picture"
                 guard !inputs.contains(where: { $0.id == "picture.\(id)" }) else { continue }
-                var defs: [ParamDef] = []
-                var pipeline: MTLRenderPipelineState?
-                var depthPipeline: MTLRenderPipelineState?
-                if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
                 let old = reuse?.pictures.first { $0.id == id }
-                if pipeline == nil, let old {
-                    defs = old.bank.params.map(\.def); pipeline = old.pipeline; depthPipeline = old.depthPipeline
-                }
-                let bank = ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank)
-                let filePath = spec.file ?? spec.device
-                let feed = pictures.feed(for: filePath, store: store)
-                let p = PictureRuntime(id: id, file: filePath, bank: bank, feed: feed,
-                                       pipeline: pipeline, processed: old?.processed ?? renderer.makeVideoTexture(),
-                                       depthPipeline: depthPipeline,
-                                       depth: old?.depth ?? renderer.makeDepthTexture(),
-                                       depthHistory: old?.depthHistory ?? renderer.makeDepthTexture())
+                let (defs, gpu) = videoSourceGPU(reuse: old)
+                let p = PictureRuntime(id: id, file: spec.file, bank: ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank),
+                                       feed: pictures.feed(for: spec.file, store: store), gpu: gpu)
                 inputs.append(.picture(p)); outputs += p.outputs
             case "audio", "clock":
                 continue
@@ -1247,7 +1170,7 @@ final class Engine {
             for p in bank.params { p.isModulated = false; p.display = p.base }
         }
         let outputsByKey = Dictionary(outputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-        let generatorLabel = file.generator.map { presetName(.generator, $0.type, $0.preset) ?? Tools.label(.generator, $0.type) }
+        let generatorLabel = generators.first?.label
         var mappings: [MappingRuntime] = []
         // Stream outputs (Audio In's spectrum, webcam videos, the palette), in chain order, and
         // the stream inputs shaders declare.
@@ -1389,10 +1312,6 @@ final class Engine {
                 targetLabel: "\(device) · \(knobLabel(parts.last ?? spec.target))", problem: problem))
         }
 
-        // The depth model runs only for webcams whose Depth goes somewhere.
-        let boundVideo = Set(streamBindings.values.map(\.key))
-        for case .webcam(let w) in inputs { w.depthMapped = boundVideo.contains(w.depthVideo.key) }
-
         // The Clock hears Audio In, and LFOs follow the Clock, only through their mappings.
         let clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
         let audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
@@ -1407,12 +1326,28 @@ final class Engine {
         for gen in generators { gen.bank.syncClock = synced(gen.key, gen.inputs) }
         for fx in effects { fx.bank.syncClock = synced("post.\(fx.id)", fx.inputs) }
 
-        return RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
-                           streamOutputs: streamOutputs, streamBindings: streamBindings,
-                           camera: camera, cameraMotion: cameraMotion, cameraPreset: cameraPreset, cameraLabel: cameraLabel,
-                           effects: effects, palettePreset: palettePreset,
-                           palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
-                           banksByPath: banks)
+        let scene = RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
+                                streamOutputs: streamOutputs, streamBindings: streamBindings,
+                                camera: camera, cameraMotion: cameraMotion, cameraPreset: cameraPreset, cameraLabel: cameraLabel,
+                                effects: effects, palettePreset: palettePreset,
+                                palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
+                                banksByPath: banks)
+        // The depth model runs only for video sources whose Depth goes somewhere.
+        let boundVideo = Set(streamBindings.values.map(\.key))
+        for source in scene.videoSources { source.depthMapped = boundVideo.contains(source.depthVideo.key) }
+        return scene
+    }
+
+    /// The webcam processing shader's knobs and pipelines for a video source, with its textures
+    /// carried over from the runtime it replaces. While the shader fails to compile, the old
+    /// runtime's knobs and pipelines stay.
+    private func videoSourceGPU(reuse old: VideoSourceRuntime?) -> (defs: [ParamDef], gpu: VideoSourceGPU) {
+        var defs: [ParamDef] = [], pipeline: MTLRenderPipelineState?, depthPipeline: MTLRenderPipelineState?
+        if case let .webcam(shader, p, d)? = compiledWebcam() { defs = shader.params; pipeline = p; depthPipeline = d }
+        else if let old { defs = old.bank.packedDefs; pipeline = old.pipeline; depthPipeline = old.depthPipeline }
+        let textures = old.map { ($0.processed, $0.depth, $0.depthHistory) } ?? renderer.makeVideoSourceTextures()
+        return (defs, VideoSourceGPU(pipeline: pipeline, depthPipeline: depthPipeline,
+                                     processed: textures.0, depth: textures.1, depthHistory: textures.2))
     }
 
     /// Compiles the webcam processing shader, or returns the cached result.
@@ -1422,8 +1357,8 @@ final class Engine {
         if let hit = cache[key] { return hit }
         do {
             let shader = try compiler.compile(url)
-            let entry = CacheEntry.webcam(shader, try renderer.makeWebcamPipeline(shader),
-                                          depth: try renderer.makeDepthPipeline(shader))
+            let entry = CacheEntry.webcam(shader, try renderer.makeFullscreenPipeline(shader, fragment: "webcam"),
+                                          depth: try renderer.makeFullscreenPipeline(shader, fragment: "webcam_depth"))
             cache[key] = entry
             errors[url.lastPathComponent] = nil
             return entry
@@ -1444,7 +1379,7 @@ final class Engine {
                 let p = try renderer.makeGeneratorPipelines(shader)
                 entry = .generator(shader, mesh: p.mesh, blend: p.blend, background: p.background)
             } else {
-                entry = .effect(shader, try renderer.makeEffectPipeline(shader))
+                entry = .effect(shader, try renderer.makeFullscreenPipeline(shader, fragment: "effect"))
             }
             cache[key] = entry
             errors[url.lastPathComponent] = nil
@@ -1457,13 +1392,7 @@ final class Engine {
 
     /// Copies live knob values, effect on/off state and palette edits back into the file.
     private func syncValues(from scene: RenderScene, into file: inout SceneFile) {
-        var gens = file.allGenerators
-        for (i, gen) in scene.generators.enumerated() {
-            if i < gens.count {
-                gens[i].params = gen.bank.baseValues
-            }
-        }
-        file.allGenerators = gens
+        for (i, gen) in zip(file.generators.indices, scene.generators) { file.generators[i].params = gen.bank.baseValues }
         if let cam = scene.camera {
             file.camera?.params = cam.baseValues
         }

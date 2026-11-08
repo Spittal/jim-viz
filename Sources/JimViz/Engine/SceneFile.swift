@@ -14,7 +14,7 @@ struct Preset: Codable {
 // MARK: - Scene
 
 /// A scene is a composed device chain, left to right:
-/// inputs (Audio In, Clock, MIDI, Webcam) → modulation (LFOs) → camera, palette, generator → effects.
+/// inputs (Audio In, Clock, MIDI, Webcam) → modulation (LFOs) → camera, palette, generators → effects.
 /// Plus mappings, which route any tool's outputs (and MIDI controls) to any knob.
 /// Each device names its tool and the preset it was loaded from; the preset's values are
 /// copied in, so a scene never depends on (or changes) a preset file.
@@ -28,27 +28,10 @@ struct SceneFile: Codable, Equatable {
     var modulators: [ModulatorSpec]
     var camera: CameraSlot?
     var palette: PaletteSlot?
-    var generator: GeneratorSlot?
-    var generators: [GeneratorSlot]?
+    /// Generators, in chain order. The first is keyed `generator`, the rest `generator.<id>`.
+    var generators: [GeneratorSlot]
     var effects: [EffectSpec]
     var mappings: [MappingSpec]?
-
-    var allGenerators: [GeneratorSlot] {
-        get {
-            if let list = generators, !list.isEmpty { return list }
-            if let single = generator { return [single] }
-            return []
-        }
-        set {
-            if newValue.count <= 1 {
-                generator = newValue.first
-                generators = nil
-            } else {
-                generator = newValue.first
-                generators = newValue
-            }
-        }
-    }
 
     static func load(_ url: URL) throws -> SceneFile {
         try JSONDecoder().decode(SceneFile.self, from: Data(contentsOf: url))
@@ -67,8 +50,7 @@ extension SceneFile {
         modulators = try c.decodeIfPresent([ModulatorSpec].self, forKey: .modulators) ?? []
         camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera)
         palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette)
-        generator = try c.decodeIfPresent(GeneratorSlot.self, forKey: .generator)
-        generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators)
+        generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators) ?? []
         effects = try c.decodeIfPresent([EffectSpec].self, forKey: .effects) ?? []
         mappings = try c.decodeIfPresent([MappingSpec].self, forKey: .mappings)
     }
@@ -127,7 +109,7 @@ struct PaletteSlot: Codable, Equatable {
 }
 
 struct GeneratorSlot: Codable, Identifiable, Equatable {
-    /// Unique id within the scene, used in mapping targets when multiple are present.
+    /// Unique id within the scene; nil for the scene's first generator, which is plain `generator`.
     var id: String?
     /// Generator tool: a shader in a Shaders/generators category folder, without extension
     /// (`torus`, `wheel`). Its mesh and mesh knobs come from the shader.
@@ -136,6 +118,9 @@ struct GeneratorSlot: Codable, Identifiable, Equatable {
     var preset: String?
     /// Knob values; unlisted knobs use the shader's defaults.
     var params: [String: Float]?
+
+    /// Chain key, as used in mapping targets: `generator` or `generator.<id>`.
+    var key: String { id.map { "generator.\($0)" } ?? "generator" }
 }
 
 struct EffectSpec: Codable, Equatable {

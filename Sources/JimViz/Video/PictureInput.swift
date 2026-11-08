@@ -59,9 +59,10 @@ final class PictureFeed: VideoSourceFeed {
     @ObservationIgnored private let lock = NSLock()
     @ObservationIgnored private var frame: VideoFrame?
     @ObservationIgnored private var cachedPixelBuffer: CVPixelBuffer?
-
-    @ObservationIgnored private(set) var brightness: Float = 0
-    @ObservationIgnored private(set) var motion: Float = 0
+    /// Brightness of the picture; a still has no motion.
+    @ObservationIgnored private var luma = LumaGrid()
+    var brightness: Float { luma.brightness }
+    var motion: Float { luma.motion }
 
     @ObservationIgnored let depth: DepthEstimator
     @ObservationIgnored var depthWanted = false {
@@ -148,32 +149,12 @@ final class PictureFeed: VideoSourceFeed {
         var cvTex: CVMetalTexture?
         CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm, w, h, 0, &cvTex)
         guard let cvTex, let tex = CVMetalTextureGetTexture(cvTex) else { return }
-        analyze(buffer, w, h)
+        luma.analyze(buffer)
         if depthWanted { depth.submit(buffer) }
         lock.lock()
         frame = VideoFrame(texture: tex, owner: cvTex)
         lock.unlock()
         setStatus(.running)
-    }
-
-    private func analyze(_ buffer: CVPixelBuffer, _ w: Int, _ h: Int) {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return }
-        let row = CVPixelBufferGetBytesPerRow(buffer)
-        let gx = 32, gy = 18
-        var sum: Float = 0
-        for j in 0..<gy {
-            let y = (j * 2 + 1) * h / (gy * 2)
-            for i in 0..<gx {
-                let x = (i * 2 + 1) * w / (gx * 2)
-                let p = base + y * row + x * 4
-                let l = (Float(p[2]) * 0.2126 + Float(p[1]) * 0.7152 + Float(p[0]) * 0.0722) / 255
-                sum += l
-            }
-        }
-        brightness = sum / Float(gx * gy)
-        motion = 0
     }
 
     func latest() -> VideoFrame? {
@@ -191,40 +172,16 @@ final class PictureFeed: VideoSourceFeed {
     }
 }
 
-/// A Picture input in the scene's Inputs section. Displays a still image and processes it
-/// with the standard video knobs (framing, warp, color, background, depth).
+/// A Picture input in the scene's Inputs section: a still image.
 final class PictureRuntime: VideoSourceRuntime {
-    let id: String
     let file: String?
-    let bank: ParamBank
     let feed: PictureFeed
-    var sourceFeed: any VideoSourceFeed { feed }
-    let pipeline: MTLRenderPipelineState?
-    let processed: MTLTexture
-    private(set) var outputs: [OutputSignal] = []
-    let video: StreamOutput
-    let depthVideo: StreamOutput
-    let depth: MTLTexture
-    let depthPipeline: MTLRenderPipelineState?
-    let depthHistory: MTLTexture
-    var depthMapped = false
 
-    var key: String { "picture.\(id)" }
-    var displayName: String {
-        file.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose picture…"
-    }
+    var displayName: String { file.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose picture…" }
 
-    init(id: String, file: String?, bank: ParamBank, feed: PictureFeed, pipeline: MTLRenderPipelineState?,
-         processed: MTLTexture, depthPipeline: MTLRenderPipelineState?, depth: MTLTexture, depthHistory: MTLTexture) {
-        self.id = id; self.file = file; self.bank = bank; self.feed = feed
-        self.pipeline = pipeline; self.processed = processed
-        self.depthPipeline = depthPipeline; self.depthHistory = depthHistory; self.depth = depth
+    init(id: String, file: String?, bank: ParamBank, feed: PictureFeed, gpu: VideoSourceGPU) {
+        self.file = file; self.feed = feed
         let label = file.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "Picture"
-        video = StreamOutput("picture.\(id).video", "Video", device: label, texture: processed)
-        depthVideo = StreamOutput("picture.\(id).depth", "Depth", device: label, texture: depth)
-        outputs = [
-            OutputSignal("\(key).motion", "Motion", device: label) { [unowned feed] _ in feed.motion },
-            OutputSignal("\(key).brightness", "Brightness", device: label) { [unowned feed] _ in feed.brightness },
-        ]
+        super.init(key: "picture.\(id)", id: id, label: label, bank: bank, feed: feed, gpu: gpu)
     }
 }

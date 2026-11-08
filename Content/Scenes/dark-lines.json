@@ -85,46 +85,6 @@
       }
     }
   ],
-  "generator" : {
-    "params" : {
-      "bands" : 9,
-      "bgGlow" : 0.87890625,
-      "blades" : 1,
-      "colorShift" : 0,
-      "colorSpeed" : -1,
-      "curl" : 0,
-      "explode" : 0,
-      "fill" : 1,
-      "flap" : 0,
-      "flutter" : 0.75161135,
-      "fog" : 0.16387695,
-      "instances" : 1,
-      "length" : 0,
-      "light" : 2.15,
-      "noiseAmount" : 0.59467775,
-      "noiseScale" : 0.1,
-      "noiseSpeed" : 0.25,
-      "pitch" : -35.033203,
-      "radius" : 0.91640615,
-      "scale" : 0.80087894,
-      "segments" : 1,
-      "spectrum" : 0.12558594,
-      "spectrumMode" : 1,
-      "spikes" : 0.8988281,
-      "spin" : 1.9451172,
-      "spread" : 9.679199,
-      "tumble" : 0,
-      "turn" : 0.6255863,
-      "videoMap" : 0,
-      "videoScale" : 1,
-      "videoScatter" : 0.14116211,
-      "videoTex" : 0.69860834,
-      "videoTint" : 0.36796874,
-      "width" : 0.623291,
-      "wire" : 0
-    },
-    "type" : "wheel"
-  },
   "generators" : [
     {
       "params" : {

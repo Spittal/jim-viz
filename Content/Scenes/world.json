@@ -1,0 +1,153 @@
+{
+  "camera" : {
+    "params" : {
+      "angle" : 0,
+      "bob" : 0,
+      "bobSpeed" : 0.5,
+      "distance" : 6.7059083,
+      "fov" : 55,
+      "height" : 1.8914063,
+      "lookX" : 0,
+      "lookY" : 0,
+      "lookZ" : 0,
+      "orbitSpeed" : 0.13154298,
+      "roll" : 39.92871,
+      "rollSpeed" : 0.21894531,
+      "shake" : 0,
+      "shakeSpeed" : 1,
+      "snap" : 0,
+      "sway" : 0.2,
+      "swaySpeed" : 1,
+      "swing" : 0,
+      "tilt" : 26.82422
+    },
+    "preset" : "orbit",
+    "type" : "orbit"
+  },
+  "effects" : [
+    {
+      "effect" : "chroma",
+      "id" : "chroma",
+      "params" : {
+        "amount" : 0.013479004,
+        "angle" : 0.52633303,
+        "radial" : 1
+      }
+    },
+    {
+      "effect" : "film",
+      "id" : "film",
+      "params" : {
+        "contrast" : 2,
+        "flash" : 0,
+        "grain" : 0.13922364,
+        "lineCount" : 60,
+        "scanlines" : 0.15,
+        "vignette" : 1.5
+      }
+    }
+  ],
+  "generators" : [
+    {
+      "id" : "globe",
+      "params" : {
+        "bands" : 6,
+        "bgGlow" : 0.5,
+        "brownian" : 0,
+        "brownianSpeed" : 0.5,
+        "colorShift" : 0,
+        "colorSpeed" : 0,
+        "columns" : 4,
+        "detail" : 3,
+        "explode" : 0.3341797,
+        "facets" : 5,
+        "fill" : 1,
+        "fog" : 0.04,
+        "instances" : 1,
+        "intersection" : 2,
+        "landShade" : 0.20983887,
+        "layout" : 0,
+        "light" : 1.1,
+        "noiseAmount" : 0,
+        "noiseScale" : 0,
+        "noiseSpeed" : 0,
+        "ocean" : 0.1908203,
+        "scale" : 1,
+        "spectrum" : 0.51054686,
+        "spectrumMode" : 1,
+        "spikes" : 0,
+        "spin" : 0.95644534,
+        "spread" : 0,
+        "tumble" : 0.27080077,
+        "variety" : 0.32524413,
+        "videoMap" : 0,
+        "videoScale" : 1,
+        "videoScatter" : 0,
+        "videoTex" : 0.8,
+        "videoTint" : 0,
+        "wire" : 0
+      },
+      "type" : "globe"
+    }
+  ],
+  "inputs" : [
+    {
+      "device" : "system",
+      "params" : {
+        "gate" : -50,
+        "range" : 30,
+        "release" : 0.12,
+        "sensitivity" : 0.5
+      },
+      "type" : "audio"
+    },
+    {
+      "params" : {
+        "latency" : 0,
+        "maxBPM" : 180,
+        "minBPM" : 90
+      },
+      "type" : "clock"
+    }
+  ],
+  "mappings" : [
+    {
+      "source" : "palette.colors",
+      "target" : "generator.globe.pal"
+    },
+    {
+      "source" : "audio.spectrum",
+      "target" : "generator.globe.spec"
+    },
+    {
+      "amount" : 0.13027829,
+      "invert" : true,
+      "source" : "audio.intensity",
+      "target" : "camera.distance"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.bass",
+      "target" : "generator.globe.explode"
+    }
+  ],
+  "modulators" : [],
+  "name" : "World",
+  "palette" : {
+    "colors" : [
+      "#00100C",
+      "#004D40",
+      "#1D62A8",
+      "#B9F6CA",
+      "#FFFFFF"
+    ],
+    "params" : {
+      "blue" : 1,
+      "brightness" : 1,
+      "green" : 1,
+      "hue" : 0,
+      "red" : 1,
+      "saturation" : 1
+    }
+  }
+}
