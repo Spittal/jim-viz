@@ -102,6 +102,7 @@
         "instances" : 1,
         "length" : 0,
         "light" : 2.15,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.59467775,
         "noiseScale" : 0.1,
         "noiseSpeed" : 0.25,
@@ -139,6 +140,7 @@
         "fog" : 0,
         "instances" : 1,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.2,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -288,20 +290,22 @@
     }
   ],
   "name" : "Dark Lines",
-  "palette" : {
-    "colors" : [
-      "#FEF2DD",
-      "#BFBFBF",
-      "#C21E56",
-      "#1D62A8"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 0
+  "palettes" : [
+    {
+      "colors" : [
+        "#FEF2DD",
+        "#BFBFBF",
+        "#C21E56",
+        "#1D62A8"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 0
+      }
     }
-  }
+  ]
 }

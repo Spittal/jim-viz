@@ -8,6 +8,7 @@
 // @param height 10 0 50 mesh
 // @param density 3.2 0 12 mesh
 // @param jitter 0.7 0 1
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices up. spectrumMode picks the frequency each vertex reads:
 // Rings (bass in the middle), Across (bass on the left), Angle (around the middle) or Random (per face).

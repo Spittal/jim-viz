@@ -91,6 +91,7 @@
         "fog" : 0.04,
         "instances" : 1,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.25,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -126,6 +127,7 @@
         "instances" : 1,
         "length" : 2.5,
         "light" : 1.6,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.15,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -221,19 +223,21 @@
     }
   ],
   "name" : "Better Enough",
-  "palette" : {
-    "colors" : [
-      "#07040F",
-      "#007C30",
-      "#C21E56"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
+  "palettes" : [
+    {
+      "colors" : [
+        "#07040F",
+        "#007C30",
+        "#C21E56"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      }
     }
-  }
+  ]
 }

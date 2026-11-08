@@ -34,7 +34,7 @@
       "effect" : "warp",
       "id" : "warp",
       "params" : {
-        "amount" : 0.12583008,
+        "amount" : 0.0895752,
         "scale" : 3,
         "speed" : 0.3,
         "swirl" : 0
@@ -63,6 +63,7 @@
         "intersection" : 0,
         "layout" : 0,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "limbLength" : 1,
         "limbWidth" : 1,
         "noiseAmount" : 0,
@@ -101,16 +102,17 @@
         "fill" : 1,
         "fog" : 0.04,
         "instances" : 82,
-        "intersection" : 3,
+        "intersection" : 0,
         "jaw" : 0.8,
         "layout" : 0,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "mouthDark" : 0.85,
         "noiseAmount" : 0,
         "noiseScale" : 0,
         "noiseSpeed" : 0,
         "open" : 0.0357666,
-        "scale" : 1,
+        "scale" : 1.840625,
         "sing" : 1,
         "singVowel" : 1,
         "spectrum" : 0,
@@ -207,28 +209,35 @@
     {
       "source" : "audio.spectrum",
       "target" : "generator.dancer.spec"
+    },
+    {
+      "amount" : 0.25,
+      "source" : "audio.harmonic",
+      "target" : "generator.sing"
     }
   ],
   "modulators" : [
 
   ],
   "name" : "Spooder",
-  "palette" : {
-    "colors" : [
-      "#03141A",
-      "#0B4F6C",
-      "#01BAEF",
-      "#FF7F66",
-      "#FFE5D9"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
-    },
-    "preset" : "coral-reef"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#03141A",
+        "#0B4F6C",
+        "#01BAEF",
+        "#FF7F66",
+        "#FFE5D9"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      },
+      "preset" : "coral-reef"
+    }
+  ]
 }

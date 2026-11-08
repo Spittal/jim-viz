@@ -58,6 +58,7 @@
         "instances" : 1,
         "length" : 2.5,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.2,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -160,22 +161,24 @@
     }
   ],
   "name" : "Face Rainbow",
-  "palette" : {
-    "colors" : [
-      "#C21E56",
-      "#E15000",
-      "#FFEA00",
-      "#007C30",
-      "#0500FF",
-      "#FF00F1"
-    ],
-    "params" : {
-      "blue" : 1.4168946,
-      "brightness" : 1.0325683,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 0.9885254
+  "palettes" : [
+    {
+      "colors" : [
+        "#C21E56",
+        "#E15000",
+        "#FFEA00",
+        "#007C30",
+        "#0500FF",
+        "#FF00F1"
+      ],
+      "params" : {
+        "blue" : 1.4168946,
+        "brightness" : 1.0325683,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 0.9885254
+      }
     }
-  }
+  ]
 }

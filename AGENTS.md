@@ -75,8 +75,8 @@ Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens
 - Each effect processes the previous effect's output (`src`), in chain order. Reordering
   effects changes the image.
 - Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
-  `mod.<id>`, `camera`, `lens`, `palette`, `generator` (the first generator) and `generator.<id>` (the
-  rest), `post.<id>`.
+  `mod.<id>`, `camera`, `lens`, `palette` (the first palette) and `palette.<id>` (the rest),
+  `generator` (the first generator) and `generator.<id>` (the rest), `post.<id>`.
 - **A scene** is one such chain plus its mappings, saved as JSON in `Content/Scenes`.
 - **Switching scenes** renders the outgoing and incoming scenes at once and blends them.
   Today that's a crossfade.

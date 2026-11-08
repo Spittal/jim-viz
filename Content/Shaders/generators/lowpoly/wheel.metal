@@ -10,10 +10,11 @@
 // @param radius 0.6 0 3
 // @param length 1.4 0 4
 // @param width 1.5 0 6
-// @param turn 0.4 -6 6 rate
+// @param turn 0 -6 6 rate
 // @param pitch 0 -90 90
 // @param curl 0 -3 3
 // @param flutter 0 0 1
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices off the paddles. spectrumMode picks the frequency each vertex
 // reads: Blade (each paddle its own band), Along (bass at the hinge) or Random (per face).

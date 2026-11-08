@@ -10,7 +10,7 @@ struct ClockDevice: View {
 
     var body: some View {
         let state = clock
-        DevicePanel(title: "Clock", subtitle: state.active.label, statusColor: dotColor(state),
+        DevicePanel(title: "Clock", icon: Tools.icon(.input, "clock"), subtitle: state.active.label, statusColor: dotColor(state),
                     accent: accent,
                     select: "clock", settings: AnyView(ClockSettings(state: state)),
                     settingsHelp: "Latency and audio tempo range", onClose: { engine.removeInput("clock") }) {

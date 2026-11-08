@@ -1,8 +1,9 @@
 // Shared by every Low Poly geo: flat shading, wireframes, surface noise, explode, instancing,
-// spin and video texturing. A geo shader declares `// @mesh <shape>`, its Shape knobs and an
-// Audio group with `spectrum` and `spectrumMode`, then includes this file, then writes
-// gen_vertex: it builds each vertex's local point from the mesh (a GeoPoint) and hands it to
-// lowpolyVertex. Files starting with _ are shared code, not geos.
+// spin and video texturing. A geo shader declares `// @mesh <shape>`, its Shape knobs (ending
+// with `scale`, which sizes the whole geo) and an Audio group with `spectrum` and
+// `spectrumMode`, then includes this file, then writes gen_vertex: it builds each vertex's
+// local point from the mesh (a GeoPoint) and hands it to lowpolyVertex. Files starting with _
+// are shared code, not geos.
 
 // Inputs. Palette colours the faces, wires, fog and background (map a Palette's Colours into
 // it); Spectrum pushes vertices out (map Audio In's Spectrum into it). The palette is texture(0),
@@ -13,7 +14,7 @@
 // Surface: noise and spikes push vertices along the smooth normal so faces stay joined;
 // explode pushes every face out along its own normal, shattering the shape.
 // @group Surface
-// @param noiseAmount 0.2 0 2
+// @param noiseAmount 0 0 2
 // @param noiseScale 1.4 0 8
 // @param noiseSpeed 0.25 0 4 rate
 // @param spikes 0 0 3
@@ -32,12 +33,12 @@
 // brownian wanders each copy around its place on a smooth random path, up to that far away;
 // brownianSpeed is how fast it wanders.
 // @group Motion
-// @param scale 1 0 4
 // @param spin 0 -4 4 rate
 // @param tumble 0 0 4 rate
 // @param brownian 0 0 4
 // @param brownianSpeed 0.5 0 4 rate
 
+// Look: lightSpin turns the light around the geo; at 0 it stays put.
 // @group Look
 // @param wire 0 0 1
 // @param fill 1 0 1
@@ -45,6 +46,7 @@
 // @param colorShift 0 0 1
 // @param colorSpeed 0 -1 1 rate
 // @param light 1.1 0 3
+// @param lightSpin 0 -1 1 rate
 // @param fog 0.04 0 0.5
 // @param bgGlow 0.5 0 2
 
@@ -234,7 +236,7 @@ inline float4 lowpolyColor(GenOut in, texture2d<float> pal, texture2d<float> vid
     float3 V = normalize(cam.position.xyz - in.world);
     if (dot(nrm, V) < 0) nrm = -nrm;
 
-    float3 L = normalize(float3(sin(f.time * 0.3), 0.8, cos(f.time * 0.3)));
+    float3 L = normalize(float3(sin(p.lightSpinPhase), 0.8, cos(p.lightSpinPhase)));
     float diff = max(dot(nrm, L), 0.0) * p.light;
     float rim = pow(1 - saturate(dot(nrm, V)), 3.0);
 

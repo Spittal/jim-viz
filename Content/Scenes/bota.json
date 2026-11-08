@@ -159,21 +159,23 @@
   ],
   "modulators" : [],
   "name" : "BOTA",
-  "palette" : {
-    "colors" : [
-      "#050505",
-      "#1A1A2E",
-      "#E94560",
-      "#F5F5F5"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1.107666,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1.1094726
-    },
-    "preset" : "noir"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#050505",
+        "#1A1A2E",
+        "#E94560",
+        "#F5F5F5"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1.107666,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1.1094726
+      },
+      "preset" : "noir"
+    }
+  ]
 }

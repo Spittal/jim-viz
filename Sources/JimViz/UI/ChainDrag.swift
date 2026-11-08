@@ -56,9 +56,9 @@ extension View {
 
 /// Where a hovering drag would land.
 enum ChainDropTarget: Equatable {
-    /// Replaces a single-slot device in the chain (cardinality == .one: camera, lens, palette).
+    /// Replaces a single-slot device in the chain (cardinality == .one: camera, lens).
     case replace(DeviceKind)
-    /// Appends a multi-instance device to the chain (cardinality == .many: generator, modulation, input).
+    /// Appends a multi-instance device to the chain (cardinality == .many: palette, generator, modulation, input).
     case append(DeviceKind)
     /// Replaces an existing device in the chain when dropped right on top of the same tool.
     case replaceDevice(key: String, kind: DeviceKind, tool: String)
@@ -207,8 +207,11 @@ struct ChainDropDelegate: DropDelegate {
                 }.count
                 return .inputIndex(index)
 
-            case .camera, .lens, .palette:
+            case .camera, .lens:
                 return .replace(kind)
+
+            case .palette:
+                return .append(kind)
             }
         }
         return nil
@@ -234,7 +237,7 @@ extension Engine {
             case .input: replaceInput(key: key, tool: tool, preset: preset)
             case .camera: apply(.camera, tool, preset: preset)
             case .lens: apply(.lens, tool, preset: preset)
-            case .palette: apply(.palette, tool, preset: preset)
+            case .palette: replacePalette(key: key, preset: preset)
             }
         case (.device(.generator, let tool, let preset), .generatorIndex(let i)):
             apply(.generator, tool, preset: preset, at: i, replaceSelected: false)

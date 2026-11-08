@@ -207,6 +207,7 @@ private struct DeviceInspector: View {
         case _ where key.hasPrefix("video."): return "Input · Video"
         case _ where key.hasPrefix("picture."): return "Input · Picture"
         case "camera", "palette", "generator": return "Generation"
+        case _ where key.hasPrefix("palette.") || key.hasPrefix("generator."): return "Generation"
         case "lens": return "Generation · Camera Effect"
         default:
             if key.hasPrefix("mod.") {

@@ -29,7 +29,8 @@ struct SceneFile: Codable, Equatable {
     var camera: CameraSlot?
     /// The camera effect: a lens whose ST map the Camera's Lens input can take.
     var lens: LensSlot? = nil
-    var palette: PaletteSlot?
+    /// Palettes, in chain order. The first is keyed `palette`, the rest `palette.<id>`.
+    var palettes: [PaletteSlot]
     /// Generators, in chain order. The first is keyed `generator`, the rest `generator.<id>`.
     var generators: [GeneratorSlot]
     var effects: [EffectSpec]
@@ -52,7 +53,7 @@ extension SceneFile {
         modulators = try c.decodeIfPresent([ModulatorSpec].self, forKey: .modulators) ?? []
         camera = try c.decodeIfPresent(CameraSlot.self, forKey: .camera)
         lens = try c.decodeIfPresent(LensSlot.self, forKey: .lens)
-        palette = try c.decodeIfPresent(PaletteSlot.self, forKey: .palette)
+        palettes = try c.decodeIfPresent([PaletteSlot].self, forKey: .palettes) ?? []
         generators = try c.decodeIfPresent([GeneratorSlot].self, forKey: .generators) ?? []
         effects = try c.decodeIfPresent([EffectSpec].self, forKey: .effects) ?? []
         mappings = try c.decodeIfPresent([MappingSpec].self, forKey: .mappings)
@@ -114,10 +115,15 @@ struct LensSlot: Codable, Equatable {
 }
 
 struct PaletteSlot: Codable, Equatable {
+    /// Unique id within the scene; nil for the scene's first palette, which is plain `palette`.
+    var id: String? = nil
     var preset: String?
     var colors: [String]
     /// The palette's inputs: red, green, blue, hue, saturation, brightness.
     var params: [String: Float]?
+
+    /// Chain key, as used in mapping keys: `palette` or `palette.<id>`.
+    var key: String { id.map { "palette.\($0)" } ?? "palette" }
 }
 
 struct GeneratorSlot: Codable, Identifiable, Equatable {
@@ -148,7 +154,7 @@ struct EffectSpec: Codable, Equatable {
 
 struct MappingSpec: Codable, Equatable {
     /// A value output (`audio.kick`, `clock.pulse`, `mod.lfo.out`, `midi.midi.cc-31-7`, `camera.angle`)
-    /// or a stream output (`webcam.<id>.video`, `audio.spectrum`, `palette.colors`).
+    /// or a stream output (`webcam.<id>.video`, `audio.spectrum`, `palette.colors`, `palette.<id>.colors`).
     var source: String
     /// A knob (`generator.<param>`, `camera.<param>`, `post.<id>.<param>`, `mod.<id>.<param>`,
     /// `webcam.<id>.<param>`) for a value, or a stream input of the same kind

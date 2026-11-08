@@ -45,6 +45,7 @@
         "intersection" : 0,
         "layout" : 2,
         "light" : 2.036841,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.2,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -118,22 +119,24 @@
   ],
   "modulators" : [],
   "name" : "Pinky Up",
-  "palette" : {
-    "colors" : [
-      "#07040F",
-      "#3B0A5C",
-      "#B5177A",
-      "#FF5E5B",
-      "#FFD8A8"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
-    },
-    "preset" : "ember"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#07040F",
+        "#3B0A5C",
+        "#B5177A",
+        "#FF5E5B",
+        "#FFD8A8"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      },
+      "preset" : "ember"
+    }
+  ]
 }

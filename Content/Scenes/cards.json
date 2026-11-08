@@ -64,6 +64,7 @@
         "instances" : 1,
         "length" : 2.3341725,
         "light" : 2.15,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.59467775,
         "noiseScale" : 0.1,
         "noiseSpeed" : 0.25,
@@ -181,19 +182,21 @@
     }
   ],
   "name" : "Cards",
-  "palette" : {
-    "colors" : [
-      "#FEF2DD",
-      "#BFBFBF",
-      "#C21E56"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 0
+  "palettes" : [
+    {
+      "colors" : [
+        "#FEF2DD",
+        "#BFBFBF",
+        "#C21E56"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 0
+      }
     }
-  }
+  ]
 }

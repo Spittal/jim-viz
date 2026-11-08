@@ -133,7 +133,7 @@ struct DeviceBrowser: View {
         case .input: return tool.name == "audio" ? scene.hasAudioInput : tool.name == "clock" ? scene.hasClock : false
         case .camera: return scene.cameraMotion?.rig.rawValue == tool.name
         case .lens: return scene.lens?.type == tool.name
-        case .palette: return scene.palette != nil
+        case .palette: return !scene.palettes.isEmpty
         case .generator: return scene.generators.contains { $0.type == tool.name }
         default: return false
         }
@@ -144,7 +144,7 @@ struct DeviceBrowser: View {
         switch tool.kind {
         case .camera: return scene.cameraMotion?.rig.rawValue == tool.name && scene.cameraPreset == preset.id
         case .lens: return scene.lens?.type == tool.name && scene.lens?.preset == preset.id
-        case .palette: return scene.palette != nil && scene.palettePreset == preset.id
+        case .palette: return scene.palettes.contains { $0.preset == preset.id }
         case .generator: return scene.generators.contains { $0.type == tool.name && $0.preset == preset.id }
         case .input:
             switch tool.name {
@@ -159,50 +159,7 @@ struct DeviceBrowser: View {
         }
     }
 
-    static func icon(_ tool: Tool) -> String {
-        switch tool.kind {
-        case .input:
-            switch tool.name {
-            case "clock": return "metronome"
-            case "midi": return "pianokeys"
-            case "webcam": return "video"
-            case "video": return "play.rectangle"
-            case "picture": return "photo"
-            default: return "waveform"
-            }
-        case .modulation: return tool.name == "math" ? "function" : tool.name == "macro" ? "dial.medium" : "waveform.path"
-        case .camera: return CameraRig(rawValue: tool.name)?.icon ?? "camera.viewfinder"
-        case .lens: return "camera.aperture"
-        case .palette: return "paintpalette"
-        case .generator:
-            switch tool.name {
-            case "sphere": return "circle.circle"
-            case "torus": return "circle.dotted.circle"
-            case "plane": return "square.grid.3x3"
-            case "cube": return "cube"
-            case "shards": return "sparkle"
-            case "wheel": return "fanblades"
-            case "hand": return "hand.raised"
-            case "dancer": return "figure.dance"
-            default: return "cube.transparent"
-            }
-        case .effect:
-            switch tool.name {
-            case "feedback": return "arrow.triangle.2.circlepath"
-            case "warp": return "water.waves"
-            case "kaleido": return "camera.filters"
-            case "chroma": return "circle.lefthalf.filled"
-            case "glitch": return "bolt.horizontal"
-            case "palettemap": return "paintpalette"
-            case "pixelate": return "squareshape.split.3x3"
-            case "glow": return "sun.max"
-            case "film": return "film"
-            case "mirror": return "arrow.left.and.right.square"
-            case "slices": return "rectangle.split.3x1"
-            default: return "sparkles"
-            }
-        }
-    }
+    static func icon(_ tool: Tool) -> String { Tools.icon(tool.kind, tool.name) }
 
     static func color(_ kind: DeviceKind) -> Color {
         switch kind {

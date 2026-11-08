@@ -199,7 +199,7 @@ enum SelfCheck {
         // depends on scenes you might rename or delete.
         let emptyURL = engine.store.scenesDir.appendingPathComponent("selfcheck-empty.json")
         let empty = SceneFile(name: "Self-check Empty", inputs: [InputSpec(type: "clock")], modulators: [],
-                              camera: CameraSlot(type: "orbit"), palette: PaletteSlot(colors: Tools.defaultPalette),
+                              camera: CameraSlot(type: "orbit"), palettes: [PaletteSlot(colors: Tools.defaultPalette)],
                               generators: [], effects: [], mappings: [])
         do { try empty.write(to: emptyURL) } catch { return "could not write the test scene" }
         engine.store.markSeen(emptyURL)
@@ -251,10 +251,44 @@ enum SelfCheck {
         guard green.y > 0.9, green.x < 0.1, green.z < 0.1 else { return "palette hue wrong: \(green)" }
         engine.addMapping(source: "audio.kick", target: "palette.brightness")
         guard engine.current?.mappings.first(where: { $0.target == "palette.brightness" })?.isActive == true,
-              engine.current?.palette?.bank["brightness"]?.isModulated == true else { return "palette input not mappable" }
-        engine.current?.palette?.bank["hue"]?.setBase(30)
+              engine.current?.palettes.first?.bank["brightness"]?.isModulated == true else { return "palette input not mappable" }
+        engine.current?.palettes.first?.bank["hue"]?.setBase(30)
+        engine.selectDevice("palette")
         engine.apply(.palette, "palette", preset: "ice")
-        guard engine.current?.palette?.bank["hue"]?.base == 30 else { return "palette inputs lost on a preset change" }
+        guard engine.current?.palettes.count == 1, engine.current?.palettes.first?.bank["hue"]?.base == 30 else {
+            return "palette inputs lost on a preset change"
+        }
+
+        // Palettes are many: with none selected a palette adds a second, `palette.palette2`,
+        // with its own Colours and knobs. It starts unmapped, maps like any palette, and
+        // removing it leaves the first alone.
+        let originalPal = engine.current?.streamBindings["generator.pal"]?.key
+        engine.selectDevice(nil)
+        engine.apply(.palette, "palette", preset: "acid")
+        guard let two = engine.current, two.palettes.map(\.key) == ["palette", "palette.palette2"],
+              two.palettes.last?.title == "Palette 2", two.palettes.last?.label == "Acid",
+              two.streamOutputs.contains(where: { $0.key == "palette.palette2.colors" && $0.kind == .palette }),
+              !two.streamBindings.values.contains(where: { $0.key == "palette.palette2.colors" }),
+              two.deviceKeys.contains("palette.palette2") else {
+            return "second palette not added: \(engine.current?.palettes.map(\.key) ?? [])"
+        }
+        engine.addMapping(source: "palette.palette2.colors", target: "generator.pal")
+        engine.addMapping(source: "audio.kick", target: "palette.palette2.hue")
+        guard let mapped = engine.current, mapped.streamBindings["generator.pal"]?.key == "palette.palette2.colors",
+              mapped.boundPalettes.map(\.key).contains("palette.palette2"),
+              mapped.palettes.last?.bank["hue"]?.isModulated == true,
+              mapped.palettes.first?.bank["hue"]?.isModulated == false else {
+            return "second palette not mappable"
+        }
+        guard let saved2 = engine.currentSnapshot(), saved2.palettes.map(\.key) == ["palette", "palette.palette2"],
+              saved2.palettes.last?.preset == "acid" else { return "second palette not saved" }
+        engine.removeMappings(target: "palette.palette2.hue")
+        engine.removeMappings(target: "generator.pal")
+        if let originalPal { engine.addMapping(source: originalPal, target: "generator.pal") }
+        engine.removePalette(key: "palette.palette2")
+        guard engine.current?.palettes.map(\.key) == ["palette"], engine.current?.palettes.first?.label == "Ice" else {
+            return "second palette not removed cleanly"
+        }
 
         // Frames that take no time, at a beat set on the scene's own Clock.
         var f = SignalFrame()
@@ -506,7 +540,7 @@ enum SelfCheck {
         }
         func write(_ type: String) -> Bool {
             let file = SceneFile(name: "Self-check Camera", inputs: [], modulators: [], camera: CameraSlot(type: type),
-                                 palette: PaletteSlot(colors: Tools.defaultPalette), generators: [], effects: [], mappings: [])
+                                 palettes: [PaletteSlot(colors: Tools.defaultPalette)], generators: [], effects: [], mappings: [])
             guard (try? file.write(to: url)) != nil else { return false }
             engine.store.markSeen(url)
             engine.refreshSceneList()
@@ -764,7 +798,7 @@ enum SelfCheck {
         guard engine.current?.audioIn?.capture === audioA.capture else { return "switching back didn't reuse the source's capture" }
         for device in [nil, "bogus"] as [String?] {
             let file = SceneFile(name: "x", inputs: [InputSpec(type: "audio", device: device)], modulators: [],
-                                 camera: nil, palette: nil, generators: [], effects: [], mappings: [])
+                                 camera: nil, palettes: [], generators: [], effects: [], mappings: [])
             guard engine.build(file, reuse: nil) == nil, engine.errors["input"]?.hasPrefix("Audio In needs a device") == true else {
                 return "Audio In built without a valid source (\(device ?? "none"))"
             }
@@ -820,6 +854,12 @@ enum SelfCheck {
             guard gen.vertexCount > 0 else { return "\(geo) built an empty mesh" }
             for (other, knob) in own { if (gen.bank[knob] != nil) != (other == geo) { return "\(geo) has the wrong knobs (\(knob))" } }
             guard (gen.bank["depth"] != nil) == (geo == "plane") else { return "depth should be on the plane only" }
+            // A fresh geo sits still and smooth: no noise, spin, tumble, wander or turning light.
+            // Its size is part of its Shape.
+            for knob in ["noiseAmount", "spin", "tumble", "brownian", "lightSpin", "turn", "shardSpin"] {
+                if let p = gen.bank[knob], p.base != 0 { return "\(geo) starts with \(knob) \(p.base), expected 0" }
+            }
+            if geo != "drive", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
             guard engine.current?.streamBindings.keys.contains(where: { $0.hasPrefix(gen.key + ".") }) == false else {
                 return "\(geo) connected itself"
             }
@@ -914,7 +954,7 @@ enum SelfCheck {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
             let file = SceneFile(name: "face", inputs: [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": eye.x, "y": eye.y, "z": eye.z, "fov": 55]),
-                                 palette: nil,
+                                 palettes: [],
                                  generators: [GeneratorSlot(id: nil, type: "face", preset: nil, params: base.merging(params) { $1 })],
                                  effects: [], mappings: [])
             guard let s = engine.build(file, reuse: nil), let gen = s.generator, s.mappings.isEmpty, s.streamBindings.isEmpty else { return nil }
@@ -945,7 +985,7 @@ enum SelfCheck {
         let file = SceneFile(name: "drive", inputs: [], modulators: [],
                              camera: CameraSlot(type: "static", preset: nil,
                                                 params: ["x": 8, "y": 2.2, "z": 0, "lookX": -6, "lookY": 0.6, "fov": 50]),
-                             palette: PaletteSlot(colors: ["#12002A", "#FF2E88", "#FFD23F"]),
+                             palettes: [PaletteSlot(colors: ["#12002A", "#FF2E88", "#FFD23F"])],
                              generators: [GeneratorSlot(id: nil, type: "drive", preset: nil, params: [:])],
                              effects: [], mappings: [])
         guard let scene = engine.build(file, reuse: nil), let gen = scene.generator else {
@@ -994,7 +1034,7 @@ enum SelfCheck {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
             let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "clock")] : [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
-                                 palette: nil,
+                                 palettes: [],
                                  generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 })],
                                  effects: [],
                                  mappings: synced ? [MappingSpec(source: "clock.sync", target: "generator.sync")] : [])
@@ -1050,7 +1090,7 @@ enum SelfCheck {
         _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
         guard abs((syncedTempo.phase - doubled.phase) - (clock.beat - doubled.beat)) < 0.05 else { return "synced, tempo 2 isn't double time" }
         // A value can't go into Sync, and Sync can't go onto a knob.
-        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "clock")], modulators: [], camera: nil, palette: nil,
+        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "clock")], modulators: [], camera: nil, palettes: [],
                               generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:])], effects: [], mappings: [])
         wrong.mappings = [MappingSpec(source: "clock.pulse", target: "generator.sync"),
                           MappingSpec(source: "clock.sync", target: "generator.tempo")]
@@ -1066,7 +1106,7 @@ enum SelfCheck {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0, "spikes": 0, "scale": 0.5]
             let file = SceneFile(name: "instancing", inputs: [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 12, "y": 0, "z": 0, "fov": 55]),
-                                 palette: nil,
+                                 palettes: [],
                                  generators: [GeneratorSlot(id: nil, type: geo, preset: nil, params: base.merging(params) { $1 })],
                                  effects: [], mappings: [])
             return engine.build(file, reuse: nil)
@@ -1133,7 +1173,7 @@ enum SelfCheck {
         func scene(_ mode: Float, amount: Float = 1, mapped: Bool = true, enabled: Bool = true) -> RenderScene? {
             let file = SceneFile(name: "composite", inputs: [InputSpec(type: "video", id: "layer")], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
-                                 palette: nil,
+                                 palettes: [],
                                  generators: [GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0])],
                                  effects: [EffectSpec(effect: "composite", id: "composite", enabled: enabled,
                                                       params: ["mode": mode, "amount": amount])],
@@ -1176,6 +1216,15 @@ enum SelfCheck {
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
               decoded.generators.isEmpty, decoded.effects.isEmpty else { return "minimal scene JSON did not decode" }
+        // A new scene holds Audio In, Clock and a static camera: no palette, generator or effects.
+        engine.createNewScene()
+        guard let newURL = engine.currentURL, let fresh = try? SceneFile.load(newURL) else { return "new scene not created" }
+        try? FileManager.default.removeItem(at: newURL)
+        engine.refreshSceneList()
+        guard fresh.inputs.map(\.type) == ["audio", "clock"], fresh.camera?.type == CameraRig.still.rawValue,
+              fresh.palettes.isEmpty, fresh.generators.isEmpty, fresh.effects.isEmpty, fresh.modulators.isEmpty else {
+            return "new scene should be Audio In, Clock and a static camera"
+        }
         let url = fixtureA!
         let presetURL = engine.store.presetsDir(.effect, "glow").appendingPathComponent("bloom.json")
         let presetBefore = try? Data(contentsOf: presetURL)
@@ -1237,16 +1286,21 @@ enum SelfCheck {
         guard !engine.isIOShown("generator") else { return "device IO not hidden" }
         engine.apply(.camera, "orbit", preset: "drift")
         guard engine.current?.cameraLabel == "Drift", engine.current?.camera?["distance"]?.base == 9 else { return "camera preset not applied" }
+        // A palette preset recolours the selected palette, or adds the scene's first.
+        let paletteCount = max(engine.current?.palettes.count ?? 0, 1)
+        if engine.current?.palettes.isEmpty == false { engine.selectDevice("palette") }
         engine.apply(.palette, "palette", preset: "ice")
-        guard engine.current?.paletteLabel == "Ice" else { return "palette preset not applied" }
+        guard engine.current?.palettes.count == paletteCount, engine.current?.palettes.first?.label == "Ice" else {
+            return "palette preset not applied"
+        }
         engine.removeInput("audio")
         guard engine.current?.hasAudioInput == false else { return "input not removed" }
 
-        // Tool cardinality: audio/clock/camera/palette are single, generators/effects/LFOs/MIDI/webcams are many.
+        // Tool cardinality: audio/clock/camera/lens are single, palettes/generators/effects/LFOs/MIDI/webcams are many.
         guard Tools.cardinality(.input, "audio") == .one,
               Tools.cardinality(.input, "clock") == .one,
               Tools.cardinality(.camera, "orbit") == .one,
-              Tools.cardinality(.palette, "palette") == .one,
+              Tools.cardinality(.palette, "palette") == .many,
               Tools.cardinality(.generator, "torus") == .many,
               Tools.cardinality(.input, "video") == .many,
               Tools.cardinality(.input, "picture") == .many else { return "tool cardinality incorrect" }
@@ -1255,15 +1309,15 @@ enum SelfCheck {
         engine.removeCamera()
         guard engine.current?.camera == nil else { return "camera not removed" }
         _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
-        engine.removePalette()
-        guard engine.current?.palette == nil else { return "palette not removed" }
+        engine.removePalette(key: "palette")
+        guard engine.current?.palettes.isEmpty == true else { return "palette not removed" }
         _ = engine.renderOffscreen(engine.current!, frames: 2, snapshot: nil)
 
         // Restore camera and palette.
         engine.apply(.camera, "orbit")
         guard engine.current?.camera != nil else { return "camera not restored" }
         engine.apply(.palette, "palette")
-        guard engine.current?.palette != nil else { return "palette not restored" }
+        guard engine.current?.palettes.map(\.key) == ["palette"] else { return "palette not restored" }
 
         // Drag and drop: 'one' replaces, 'many' appends.
         engine.drop(.device(.camera, tool: "orbit", preset: "barrel-roll"), at: .replace(.camera))
@@ -1300,7 +1354,7 @@ enum SelfCheck {
 
         // Scene deletion.
         let delURL = engine.store.scenesDir.appendingPathComponent("selfcheck-test-delete.json")
-        let tempScene = SceneFile(name: "Temp Delete", inputs: [], modulators: [], camera: nil, palette: nil, generators: [], effects: [], mappings: [])
+        let tempScene = SceneFile(name: "Temp Delete", inputs: [], modulators: [], camera: nil, palettes: [], generators: [], effects: [], mappings: [])
         do {
             try tempScene.write(to: delURL)
             engine.refreshSceneList()
@@ -1620,7 +1674,7 @@ enum SelfCheck {
                 inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
                 modulators: [],
                 camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
-                palette: PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
+                palettes: [PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"])],
                 generators: [GeneratorSlot(type: "plane", params: ["depth": 2.2, "depthCut": 0.5, "fill": 0.9, "videoMap": 5, "videoTex": 0.7, "videoTint": 0.6])],
                 effects: [EffectSpec(effect: "glitch", id: "glitch"), EffectSpec(effect: "glow", id: "glow"), EffectSpec(effect: "film", id: "film")],
                 mappings: [
@@ -1746,7 +1800,7 @@ enum SelfCheck {
             inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
             modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["rate": 18])],
             camera: CameraSlot(type: "orbit", params: ["distance": 6, "height": 1.2, "orbitSpeed": 0.2, "sway": 0.3]),
-            palette: PaletteSlot(colors: ["#07040F", "#3B0A5C", "#B5177A", "#FF5E5B", "#FFD8A8"]),
+            palettes: [PaletteSlot(colors: ["#07040F", "#3B0A5C", "#B5177A", "#FF5E5B", "#FFD8A8"])],
             generators: [GeneratorSlot(type: "sphere", params: ["explode": 0.1, "noiseAmount": 0.25, "scale": 1.4, "spin": 0.15,
                                                                 "tumble": 0.3, "spectrum": 0.35, "wire": 0.6])],
             effects: [EffectSpec(effect: "feedback", id: "feedback", params: ["amount": 0.82, "zoom": 1.02]),
@@ -1767,7 +1821,7 @@ enum SelfCheck {
             inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
             modulators: [],
             camera: CameraSlot(type: "static", params: ["x": 5, "y": 1, "z": 2, "fov": 60]),
-            palette: PaletteSlot(colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"]),
+            palettes: [PaletteSlot(colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"])],
             generators: [GeneratorSlot(type: "cube", params: ["bgGlow": 1.5, "divisions": 3, "inflate": 0.4, "scale": 1.2])],
             effects: [EffectSpec(effect: "glow", id: "glow")],
             mappings: [MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal")])
@@ -2076,7 +2130,7 @@ extension SelfCheck {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-math.json")
         let file = SceneFile(name: "Self-check Math", inputs: [InputSpec(type: "clock")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo")],
-                             camera: nil, palette: nil, generators: [], effects: [], mappings: [])
+                             camera: nil, palettes: [], generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()
@@ -2142,7 +2196,7 @@ extension SelfCheck {
     static func checkMacro(engine: Engine) -> String? {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-macro.json")
         let file = SceneFile(name: "Self-check Macro", inputs: [], modulators: [],
-                             camera: nil, palette: nil, generators: [], effects: [], mappings: [])
+                             camera: nil, palettes: [], generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()
@@ -2355,7 +2409,7 @@ extension SelfCheck {
         let file = SceneFile(name: "Self-check Triggers", inputs: [InputSpec(type: "clock")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["shape": 4, "hz": 2]),
                                           ModulatorSpec(type: "lfo", id: "slow", params: ["hz": 0.1])],
-                             camera: CameraSlot(type: "cutter", params: ["rate": 0]), palette: nil, generators: [],
+                             camera: CameraSlot(type: "cutter", params: ["rate": 0]), palettes: [], generators: [],
                              effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
@@ -2450,7 +2504,7 @@ extension SelfCheck {
 
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-video.json")
         let file = SceneFile(name: "Self-check Video", inputs: [InputSpec(type: "video", id: "video", file: clip.path)],
-                             modulators: [], camera: nil, palette: nil, generators: [], effects: [], mappings: [])
+                             modulators: [], camera: nil, palettes: [], generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
         engine.store.markSeen(url)
         engine.refreshSceneList()
@@ -2551,7 +2605,7 @@ extension SelfCheck {
             SceneFile(name: "lens", inputs: [], modulators: [],
                       camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
                       lens: LensSlot(type: lens, params: params),
-                      palette: nil,
+                      palettes: [],
                       generators: [GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0])],
                       effects: [],
                       mappings: mapped ? [MappingSpec(source: StreamOutput.stmapKey, target: StreamInput.cameraLensKey)] : [])

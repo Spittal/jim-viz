@@ -9,7 +9,7 @@ struct AudioDevice: View {
 
     var body: some View {
         let audio = input.capture
-        DevicePanel(title: "Audio In", subtitle: nil, statusColor: color(audio.health), accent: accent, select: "audio",
+        DevicePanel(title: "Audio In", icon: Tools.icon(.input, "audio"), subtitle: nil, statusColor: color(audio.health), accent: accent, select: "audio",
                     onClose: { engine.removeInput("audio") }) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {

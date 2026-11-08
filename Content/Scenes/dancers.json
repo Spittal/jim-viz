@@ -46,6 +46,7 @@
         "intersection" : 0,
         "layout" : 2,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "limbLength" : 0,
         "limbWidth" : 1.169336,
         "noiseAmount" : 0,
@@ -117,23 +118,25 @@
   ],
   "modulators" : [],
   "name" : "Dancers",
-  "palette" : {
-    "colors" : [
-      "#000000",
-      "#14002E",
-      "#0040FF",
-      "#FFFFFF",
-      "#FF3000",
-      "#2A0000"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
-    },
-    "preset" : "redshift"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#000000",
+        "#14002E",
+        "#0040FF",
+        "#FFFFFF",
+        "#FF3000",
+        "#2A0000"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      },
+      "preset" : "redshift"
+    }
+  ]
 }

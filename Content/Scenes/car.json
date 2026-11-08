@@ -164,22 +164,24 @@
   ],
   "modulators" : [],
   "name" : "Car",
-  "palette" : {
-    "colors" : [
-      "#120000",
-      "#7A0A00",
-      "#F24C00",
-      "#FFB627",
-      "#FFF6D6"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
-    },
-    "preset" : "solar"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#120000",
+        "#7A0A00",
+        "#F24C00",
+        "#FFB627",
+        "#FFF6D6"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      },
+      "preset" : "solar"
+    }
+  ]
 }

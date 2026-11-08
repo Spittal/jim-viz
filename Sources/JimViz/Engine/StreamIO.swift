@@ -65,7 +65,7 @@ enum IOKind: String {
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
-/// (`audio.spectrum`) and audio out (`audio.out`), the palette's gradient (`palette.colors`) or
+/// (`audio.spectrum`) and audio out (`audio.out`), a palette's gradient (`palette.colors`, `palette.<id>.colors`) or
 /// the Clock's sync (`clock.sync`). Each tool makes its own.
 final class StreamOutput: Identifiable {
     let key: String
@@ -91,6 +91,8 @@ final class StreamOutput: Identifiable {
 
     static let spectrumKey = "audio.spectrum"
     static let paletteKey = "palette.colors"
+    /// A palette's Colours output, from its chain key (`palette` or `palette.<id>`).
+    static func paletteKey(_ device: String) -> String { "\(device).colors" }
     static let audioKey = "audio.out"
     static let clockSyncKey = "clock.sync"
     /// A lens's ST map, which goes into the Camera's Lens input (`StreamInput.cameraLensKey`).
@@ -112,6 +114,7 @@ final class StreamOutput: Identifiable {
         // elsewhere `.depth` is a knob, like an LFO's.
         let parts = key.split(separator: ".")
         if parts.count == 3, ["webcam", "video", "picture"].contains(parts[0]), ["video", "depth"].contains(parts[2]) { return .video }
+        if parts.count == 3, parts[0] == "palette", parts[2] == "colors" { return .palette }
         return nil
     }
 }

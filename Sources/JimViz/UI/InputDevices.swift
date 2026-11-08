@@ -10,7 +10,7 @@ struct LFODevice: View {
 
     var body: some View {
         let subtitle = mod.presetLabel.map { "\($0) · \(mod.isSynced ? "Sync" : "Free")" } ?? (mod.isSynced ? "Sync" : "Free")
-        DevicePanel(title: mod.id, subtitle: subtitle, isOn: $mod.enabled,
+        DevicePanel(title: mod.id, icon: Tools.icon(.modulation, mod.type.rawValue), subtitle: subtitle, isOn: $mod.enabled,
                     accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
             HStack(alignment: .top, spacing: 6) {
@@ -46,7 +46,7 @@ struct MacroDevice: View {
     var accent: Color? = nil
 
     var body: some View {
-        DevicePanel(title: mod.id, subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
+        DevicePanel(title: mod.id, icon: Tools.icon(.modulation, mod.type.rawValue), subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
             VStack(spacing: 4) {
                 ForEach(mod.bank.params) { p in
@@ -65,7 +65,7 @@ struct MathDevice: View {
     var accent: Color? = nil
 
     var body: some View {
-        DevicePanel(title: mod.id, subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
+        DevicePanel(title: mod.id, icon: Tools.icon(.modulation, mod.type.rawValue), subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
                     select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
             HStack(alignment: .top, spacing: 6) {
                 MathScope(mod: mod).frame(width: 58, height: 58)
@@ -293,7 +293,7 @@ struct MIDIInputDevice: View {
     var body: some View {
         let learning = input.isLearning
         let connected = input.device.map { name in engine.midi.devices.contains { $0.name == name } } ?? !engine.midi.devices.isEmpty
-        DevicePanel(title: "MIDI Input", subtitle: input.title, statusColor: connected ? Theme.beatOn : Theme.knobTrack,
+        DevicePanel(title: "MIDI Input", icon: Tools.icon(.input, "midi"), subtitle: input.title, statusColor: connected ? Theme.beatOn : Theme.knobTrack,
                     accent: accent,
                     select: input.key, onClose: { engine.removeInput(input.key) }) {
             VStack(alignment: .leading, spacing: 7) {
@@ -350,7 +350,7 @@ struct WebcamDevice: View {
 
     var body: some View {
         let feed = webcam.feed
-        DevicePanel(title: "Webcam", subtitle: webcam.device ?? "Default camera", statusColor: color(feed.status),
+        DevicePanel(title: "Webcam", icon: Tools.icon(.input, "webcam"), subtitle: webcam.device ?? "Default camera", statusColor: color(feed.status),
                     accent: accent,
                     select: webcam.key, onClose: { engine.removeInput(webcam.key) }) {
             HStack(alignment: .top, spacing: 8) {
@@ -459,7 +459,7 @@ struct VideoDevice: View {
 
     var body: some View {
         let feed = video.feed
-        DevicePanel(title: "Video", subtitle: video.displayName, statusColor: color(feed.status),
+        DevicePanel(title: "Video", icon: Tools.icon(.input, "video"), subtitle: video.displayName, statusColor: color(feed.status),
                     accent: accent,
                     select: video.key, onClose: { engine.removeInput(video.key) }) {
             HStack(alignment: .top, spacing: 8) {
@@ -537,7 +537,7 @@ struct PictureDevice: View {
 
     var body: some View {
         let feed = picture.feed
-        DevicePanel(title: "Picture", subtitle: picture.displayName, statusColor: color(feed.status),
+        DevicePanel(title: "Picture", icon: Tools.icon(.input, "picture"), subtitle: picture.displayName, statusColor: color(feed.status),
                     accent: accent,
                     select: picture.key, onClose: { engine.removeInput(picture.key) }) {
             HStack(alignment: .top, spacing: 8) {

@@ -52,6 +52,58 @@ enum Tools {
         }
     }
 
+    /// SF Symbol for a tool, in the browser and at the top left of its device.
+    static func icon(_ kind: DeviceKind, _ name: String) -> String {
+        switch kind {
+        case .input:
+            switch name {
+            case "clock": return "metronome"
+            case "midi": return "pianokeys"
+            case "webcam": return "video"
+            case "video": return "play.rectangle"
+            case "picture": return "photo"
+            default: return "waveform"
+            }
+        case .modulation: return name == "math" ? "function" : name == "macro" ? "dial.medium" : "waveform.path"
+        case .camera: return CameraRig(rawValue: name)?.icon ?? "camera.viewfinder"
+        case .lens: return "camera.aperture"
+        case .palette: return "paintpalette"
+        case .generator:
+            switch name {
+            case "sphere": return "circle.circle"
+            case "torus": return "circle.dotted.circle"
+            case "plane": return "square.grid.3x3"
+            case "cube": return "cube"
+            case "shards": return "sparkle"
+            case "wheel": return "fanblades"
+            case "hand": return "hand.raised"
+            case "dancer": return "figure.dance"
+            default: return "cube.transparent"
+            }
+        case .effect:
+            switch name {
+            case "feedback": return "arrow.triangle.2.circlepath"
+            case "warp": return "water.waves"
+            case "kaleido": return "camera.filters"
+            case "chroma": return "circle.lefthalf.filled"
+            case "glitch": return "bolt.horizontal"
+            case "palettemap": return "swatchpalette"
+            case "pixelate": return "squareshape.split.3x3"
+            case "glow": return "sun.max"
+            case "film": return "film"
+            case "mirror": return "arrow.left.and.right.square"
+            case "slices": return "rectangle.split.3x1"
+            case "composite": return "square.2.layers.3d"
+            case "datamosh": return "square.on.square.dashed"
+            case "echo": return "square.3.layers.3d.down.right"
+            case "edges": return "pencil.and.outline"
+            case "polar": return "scope"
+            case "spectraltear": return "chart.bar.xaxis"
+            default: return "sparkles"
+            }
+        }
+    }
+
     /// Display name of a generator category folder.
     static func categoryLabel(_ category: String) -> String {
         switch category {
@@ -67,7 +119,7 @@ enum Tools {
         case (.input, "clock"): return .one
         case (.camera, _): return .one
         case (.lens, _): return .one
-        case (.palette, _): return .one
+        case (.palette, _): return .many
         case (.generator, _): return .many
         case (.modulation, _): return .many
         case (.effect, _): return .many

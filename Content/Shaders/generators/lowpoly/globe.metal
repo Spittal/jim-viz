@@ -13,6 +13,7 @@
 // @param ocean 0.97 0 1.2
 // @param landShade 0.35 0 1
 // @param variety 0.25 0 1
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Longitude (around the globe), Latitude (bass at the south pole) or Country (each country

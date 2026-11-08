@@ -84,6 +84,7 @@
         "instances" : 1,
         "jitter" : 0.26210937,
         "light" : 1.2,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0,
         "noiseScale" : 2.8272533,
         "noiseSpeed" : 1.3928711,
@@ -211,20 +212,22 @@
     }
   ],
   "name" : "Somersault",
-  "palette" : {
-    "colors" : [
-      "#020A0D",
-      "#B600FF",
-      "#E4D985",
-      "#FFFFFF"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 0.98100585,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
+  "palettes" : [
+    {
+      "colors" : [
+        "#020A0D",
+        "#B600FF",
+        "#E4D985",
+        "#FFFFFF"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 0.98100585,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      }
     }
-  }
+  ]
 }

@@ -8,6 +8,7 @@
 // @param length 2.5 0 8
 // @param radius 1 0 4
 // @param shardSpin 0 -4 4 rate
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes shards out. spectrumMode picks the frequency each reads:
 // Distance (bass at the centre), Random (per face) or Angle (around the vertical axis).

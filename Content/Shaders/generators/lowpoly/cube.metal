@@ -7,6 +7,7 @@
 // @param inflate 0 0 1
 // @param faceSplit 0 0 3
 // @param twist 0 -6 6
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Face (each of the six faces its own band), Height (bass at the bottom) or Random (per triangle).

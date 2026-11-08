@@ -11,6 +11,7 @@
 // @param wave 0 0 1
 // @param lobes 3 0 12 int
 // @param waveSpeed 1 -4 4 rate
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Ring (round the ring), Tube (round the tube) or Random (per face).

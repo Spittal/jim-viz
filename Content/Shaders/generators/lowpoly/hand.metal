@@ -13,6 +13,7 @@
 // @param pinkyWiggle 0 0 1
 // @param splay 0 -1 3
 // @param fingerWidth 1 0 3
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Finger (each finger its own band), Along (bass at the wrist, highs at the fingertips) or

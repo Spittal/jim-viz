@@ -6,6 +6,7 @@
 // @param detail 2 0 5 int mesh
 // @param squash 1 0 4
 // @param twist 0 -6 6
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Height (bass at the bottom), Random (per face) or Angle (around the vertical axis).

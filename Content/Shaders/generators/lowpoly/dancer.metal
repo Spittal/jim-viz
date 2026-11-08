@@ -17,6 +17,7 @@
 // @param limbWidth 1 0 3
 // @param limbLength 1 0 2
 // @param headSize 1 0 3
+// @param scale 1 0 4
 // @group Dance
 // @param tempo 1 0 4 rate
 // @param snap 0.3 0 1

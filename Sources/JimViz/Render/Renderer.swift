@@ -145,7 +145,14 @@ final class PaletteTextures {
 /// Scene colors. The UI edits `colors`; the render thread reads a locked copy.
 /// `bank` holds the palette's inputs (RGB, hue, saturation, brightness), applied each frame.
 @Observable
-final class PaletteModel {
+final class PaletteModel: Identifiable {
+    /// Chain key: `palette` for the scene's first palette, `palette.<id>` for the rest.
+    let key: String
+    /// Shown in the header and on its Colours output: "Palette", "Palette 2".
+    let title: String
+    let preset: String?
+    /// The preset's name, or "Custom" once the colours are edited.
+    let label: String
     private(set) var colors: [SIMD3<Float>]
     let bank: ParamBank
     @ObservationIgnored private let lock = NSLock()
@@ -157,7 +164,12 @@ final class PaletteModel {
     /// The gradient's textures. Carried over when the scene is rebuilt.
     @ObservationIgnored let gpu: PaletteTextures
 
-    init(_ colors: [SIMD3<Float>], bank: ParamBank, gpu: PaletteTextures) {
+    var id: String { key }
+    /// The Colours output's key: `palette.colors` or `palette.<id>.colors`.
+    var outputKey: String { StreamOutput.paletteKey(key) }
+
+    init(key: String, title: String, preset: String?, label: String, _ colors: [SIMD3<Float>], bank: ParamBank, gpu: PaletteTextures) {
+        self.key = key; self.title = title; self.preset = preset; self.label = label
         self.bank = bank
         self.gpu = gpu
         let c = colors.isEmpty ? [SIMD3<Float>(0, 0, 0), SIMD3<Float>(1, 1, 1)] : colors
@@ -240,9 +252,8 @@ final class RenderScene {
     /// The ST map the Camera reprojects its picture through, while one is mapped into its Lens input.
     let cameraLens: StreamOutput?
     let effects: [EffectRuntime]
-    let palette: PaletteModel?
-    let palettePreset: String?
-    let paletteLabel: String?
+    /// Palettes, in chain order.
+    let palettes: [PaletteModel]
     /// Every output in the chain, in chain order.
     let outputs: [OutputSignal]
     let mappings: [MappingRuntime]
@@ -251,13 +262,13 @@ final class RenderScene {
     let banksByPath: [String: ParamBank]
     var hasAudioInput: Bool { audioIn != nil }
     var hasClock: Bool { clock != nil }
-    /// Every device's chain key, left to right: inputs, `camera`, `lens`, `palette`, generators, `post.<id>`.
+    /// Every device's chain key, left to right: inputs, `camera`, `lens`, palettes, generators, `post.<id>`.
     let deviceKeys: [String]
     /// The stream feeding each generator's and effect's inputs, by generator key and effect id.
     let generatorSources: [String: [StreamOutput?]]
     let effectSources: [String: [StreamOutput?]]
-    /// True when something reads the palette's colours, so its gradient is worth updating.
-    let usesPalette: Bool
+    /// Palettes whose colours something reads, so their gradients are worth updating.
+    let boundPalettes: [PaletteModel]
     /// True when Audio In's Audio Out is mapped into the Clock's Audio input.
     var clockHearsAudio: Bool { clock?.hearsAudio == true }
     /// The MIDI input learning controls, if any.
@@ -267,7 +278,7 @@ final class RenderScene {
          inputs: [InputDevice], modulators: [ModulatorRuntime],
          streamOutputs: [StreamOutput], streamBindings: [String: StreamOutput],
          camera: ParamBank?, cameraMotion: CameraMotion?, cameraPreset: String?, cameraLabel: String?,
-         lens: LensRuntime?, effects: [EffectRuntime], palettePreset: String?, palette: PaletteModel?, paletteLabel: String?,
+         lens: LensRuntime?, effects: [EffectRuntime], palettes: [PaletteModel],
          outputs: [OutputSignal], mappings: [MappingRuntime], banksByPath: [String: ParamBank]) {
         self.name = name; self.generators = generators
         self.inputs = inputs
@@ -299,16 +310,17 @@ final class RenderScene {
                                       uniquingKeysWith: { a, _ in a })
         effectSources = Dictionary(effects.map { fx in (fx.id, fx.inputs.map { streamBindings["post.\(fx.id).\($0.name)"] }) },
                                    uniquingKeysWith: { a, _ in a })
-        usesPalette = palette != nil && streamBindings.values.contains { $0.kind == .palette }
+        let boundKeys = Set(streamBindings.values.map(\.key))
+        boundPalettes = palettes.filter { boundKeys.contains($0.outputKey) }
         triggerInputs = (clock.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
             + modulators.compactMap(\.resetTrigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.lens = lens
         cameraLens = streamBindings[StreamInput.cameraLensKey]
-        self.effects = effects; self.palette = palette; self.palettePreset = palettePreset; self.paletteLabel = paletteLabel
+        self.effects = effects; self.palettes = palettes
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
-        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (lens != nil ? [LensRuntime.key] : []) + (palette != nil ? ["palette"] : []) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + (palette.map { [$0.bank] } ?? []) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
+        deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (lens != nil ? [LensRuntime.key] : []) + palettes.map(\.key) + generators.map(\.key) + effects.map { "post.\($0.id)" }
+        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + palettes.map(\.bank) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
     }
 
     /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
@@ -753,7 +765,7 @@ final class Renderer {
     func encodeScene(_ cmd: MTLCommandBuffer, scene: RenderScene, frame f: inout FrameUniforms, into target: MTLTexture) {
         encodeVideoSources(cmd, scene, &f)
         f.resolution = SIMD2(Float(outputSize.width), Float(outputSize.height))
-        if scene.usesPalette, let pal = scene.palette { updatePalette(pal) }
+        for pal in scene.boundPalettes { updatePalette(pal) }
         var cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
 
         // Scene pass.

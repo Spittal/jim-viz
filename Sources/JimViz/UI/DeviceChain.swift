@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The scene's device chain, processed left to right in three sections:
-/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, lens, palette,
-/// one generator) | EFFECTS.
+/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, lens,
+/// palettes, generators) | EFFECTS.
 /// Devices come from the browser by drag or double-click; effects reorder by dragging their header.
 /// Click a device to select it: the inspector then shows its outputs and mappings.
 struct DeviceChain: View {
@@ -75,7 +75,7 @@ struct DeviceChain: View {
 
                     // Generation
                     if let cam = scene.camera {
-                        DevicePanel(title: "Camera", subtitle: scene.cameraLabel, accent: slotColor(.camera, key: "camera"), select: "camera",
+                        DevicePanel(title: "Camera", icon: Tools.icon(.camera, scene.cameraMotion?.rig.rawValue ?? ""), subtitle: scene.cameraLabel, accent: slotColor(.camera, key: "camera"), select: "camera",
                                     onClose: { engine.removeCamera() }) {
                             KnobGrid(params: cam.params, prefix: "camera")
                         }
@@ -85,7 +85,7 @@ struct DeviceChain: View {
                         .chainFrame("device:camera:camera:\(scene.cameraMotion?.rig.rawValue ?? "orbit")")
                     }
                     if let lens = scene.lens {
-                        DevicePanel(title: "Lens", subtitle: lens.label, failed: lens.pipeline == nil,
+                        DevicePanel(title: "Lens", icon: Tools.icon(.lens, lens.type), subtitle: lens.label, failed: lens.pipeline == nil,
                                     accent: slotColor(.lens, key: LensRuntime.key), select: LensRuntime.key,
                                     onClose: { engine.removeLens() }) {
                             if lens.pipeline == nil {
@@ -99,21 +99,22 @@ struct DeviceChain: View {
                         }
                         .chainFrame("device:lens:lens:\(lens.type)")
                     }
-                    if let pal = scene.palette {
-                        DevicePanel(title: "Palette", subtitle: scene.paletteLabel, accent: slotColor(.palette, key: "palette"), select: "palette",
-                                    onClose: { engine.removePalette() }) {
+                    ForEach(scene.palettes) { pal in
+                        DevicePanel(title: pal.title, icon: Tools.icon(.palette, "palette"), subtitle: pal.label,
+                                    accent: slotColor(.palette, key: pal.key), select: pal.key,
+                                    onClose: { engine.removePalette(key: pal.key) }) {
                             HStack(alignment: .top, spacing: 6) {
                                 PaletteEditor(palette: pal)
-                                KnobGrid(params: pal.bank.params, prefix: "palette")
+                                KnobGrid(params: pal.bank.params, prefix: pal.key)
                             }
                         }
                         .contextMenu {
-                            Button("Remove", role: .destructive) { engine.removePalette() }
+                            Button("Remove", role: .destructive) { engine.removePalette(key: pal.key) }
                         }
-                        .chainFrame("device:palette:palette:palette")
+                        .chainFrame("device:palette:\(pal.key):palette")
                     }
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
-                        DevicePanel(title: "Generator", subtitle: gen.label ?? gen.type,
+                        DevicePanel(title: "Generator", icon: Tools.icon(.generator, gen.type), subtitle: gen.label ?? gen.type,
                                     accent: slotColor(.generator, key: gen.key), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
                             KnobGrid(params: gen.bank.params, prefix: gen.key)
                         }
@@ -235,7 +236,7 @@ private struct EffectDevice: View {
     var accent: Color? = nil
 
     var body: some View {
-        DevicePanel(title: fx.id, subtitle: fx.presetLabel, isOn: $fx.enabled, failed: fx.pipeline == nil,
+        DevicePanel(title: fx.id, icon: Tools.icon(.effect, fx.effect), subtitle: fx.presetLabel, isOn: $fx.enabled, failed: fx.pipeline == nil,
                     accent: accent,
                     drag: .move(effectID: fx.id), select: "post.\(fx.id)", onClose: { engine.removeEffect(id: fx.id) }) {
             if fx.bank.params.isEmpty {
@@ -378,6 +379,8 @@ private struct ResetMotionButton: View {
 struct DevicePanel<Content: View>: View {
     @Environment(Engine.self) private var engine
     let title: String
+    /// The tool's SF Symbol, at the top left of the header.
+    var icon: String? = nil
     var subtitle: String? = nil
     var isOn: Binding<Bool>? = nil
     var failed = false
@@ -502,6 +505,13 @@ struct DevicePanel<Content: View>: View {
             engine.scheduleAutoSave()
         }
     }
+    private func iconView(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(failed ? Theme.error : Theme.textDim)
+            .frame(width: 12)
+    }
+
     private func headerClicked() {
         guard let select else { return }
         if NSApp.currentEvent?.clickCount == 2 { engine.toggleCollapsed(select) }
@@ -512,6 +522,7 @@ struct DevicePanel<Content: View>: View {
     @ViewBuilder
     private func folded(_ on: Bool) -> some View {
         let strip = VStack(spacing: 8) {
+            if let icon { iconView(icon) }
             if isOn != nil {
                 Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)
@@ -543,6 +554,7 @@ struct DevicePanel<Content: View>: View {
     private var bar: some View {
         let on = isOn?.wrappedValue ?? true
         return HStack(spacing: 6) {
+            if let icon { iconView(icon) }
             if isOn != nil {
                 Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)

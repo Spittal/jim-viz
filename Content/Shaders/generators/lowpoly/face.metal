@@ -11,6 +11,7 @@
 // @param jaw 0.8 0 1
 // @param vowel 0 -1 1
 // @param mouthDark 0.85 0 1
+// @param scale 1 0 4
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Height (bass at the neck), Around (bass at the front) or Random (per plane).

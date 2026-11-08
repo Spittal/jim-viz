@@ -68,6 +68,7 @@
         "landShade" : 0.20983887,
         "layout" : 0,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0,
         "noiseScale" : 0,
         "noiseSpeed" : 0,
@@ -133,21 +134,23 @@
   ],
   "modulators" : [],
   "name" : "World",
-  "palette" : {
-    "colors" : [
-      "#00100C",
-      "#004D40",
-      "#1D62A8",
-      "#B9F6CA",
-      "#FFFFFF"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
+  "palettes" : [
+    {
+      "colors" : [
+        "#00100C",
+        "#004D40",
+        "#1D62A8",
+        "#B9F6CA",
+        "#FFFFFF"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      }
     }
-  }
+  ]
 }

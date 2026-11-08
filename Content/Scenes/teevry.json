@@ -84,6 +84,7 @@
         "inflate" : 0,
         "instances" : 1,
         "light" : 1.1,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.89702153,
         "noiseScale" : 1.2445313,
         "noiseSpeed" : 0.87539065,
@@ -146,21 +147,23 @@
   ],
   "modulators" : [],
   "name" : "Teevry",
-  "palette" : {
-    "colors" : [
-      "#050505",
-      "#1A1A2E",
-      "#E94560",
-      "#F5F5F5"
-    ],
-    "params" : {
-      "blue" : 1,
-      "brightness" : 1,
-      "green" : 1,
-      "hue" : 0,
-      "red" : 1,
-      "saturation" : 1
-    },
-    "preset" : "noir"
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#050505",
+        "#1A1A2E",
+        "#E94560",
+        "#F5F5F5"
+      ],
+      "params" : {
+        "blue" : 1,
+        "brightness" : 1,
+        "green" : 1,
+        "hue" : 0,
+        "red" : 1,
+        "saturation" : 1
+      },
+      "preset" : "noir"
+    }
+  ]
 }

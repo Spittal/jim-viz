@@ -365,7 +365,7 @@ final class Engine {
         load(sceneURLs[(idx + delta + sceneURLs.count) % sceneURLs.count])
     }
 
-    /// Creates an empty scene: Audio In, Clock, the default camera and palette, no generator, no effects.
+    /// Creates an empty scene: Audio In, Clock and a static camera; no palette, generator or effects.
     func createNewScene() {
         let taken = Set(sceneURLs.map { $0.deletingPathExtension().lastPathComponent })
         var name = "Untitled Scene", n = 1
@@ -374,8 +374,8 @@ final class Engine {
             name: name,
             inputs: [InputSpec(type: "audio", device: Self.defaultAudioSource.key), InputSpec(type: "clock")],
             modulators: [],
-            camera: cameraSlot("orbit", preset: "orbit"),
-            palette: paletteSlot(preset: "ember"),
+            camera: cameraSlot(CameraRig.still.rawValue, preset: "front"),
+            palettes: [],
             generators: [],
             effects: [],
             mappings: [])
@@ -418,13 +418,12 @@ final class Engine {
         LensSlot(type: tool, preset: id, params: id.flatMap { store.preset(.lens, tool, $0)?.params })
     }
 
-    private func paletteSlot(preset id: String?) -> PaletteSlot {
-        let colors = id.flatMap { store.preset(.palette, "palette", $0)?.colors } ?? Tools.defaultPalette
-        return PaletteSlot(preset: id, colors: colors)
+    private func paletteColors(preset id: String?) -> [String] {
+        id.flatMap { store.preset(.palette, "palette", $0)?.colors } ?? Tools.defaultPalette
     }
 
-    /// Adds a tool to the chain, optionally loaded with one of its presets. Camera and palette
-    /// replace what is there; generators, modulators and effects insert at `index` or append;
+    /// Adds a tool to the chain, optionally loaded with one of its presets. Camera and lens
+    /// replace what is there; palettes, generators, modulators and effects insert at `index` or append;
     /// inputs are added (one Audio In and one Clock, any number of the rest). A preset's values
     /// are copied in; the preset file is never touched.
     func apply(_ kind: DeviceKind, _ tool: String, preset: String? = nil, at index: Int? = nil, replaceSelected: Bool = true) {
@@ -478,11 +477,21 @@ final class Engine {
             edit("Lens: \(label)") { $0.lens = slot }
             selectDevice(LensRuntime.key)
         case .palette:
-            var slot = paletteSlot(preset: preset)
-            // A preset brings colours; the palette's inputs stay as they are.
-            slot.params = current?.palette?.bank.baseValues
-            edit("Palette: \(label)") { $0.palette = slot }
-            selectDevice("palette")
+            // A preset dropped while a palette is selected recolours that one; otherwise it adds.
+            if replaceSelected, preset != nil, let selected = selectedDevice,
+               sceneFile?.palettes.contains(where: { $0.key == selected }) == true {
+                replacePalette(key: selected, preset: preset)
+                return
+            }
+            var key = "palette"
+            edit("Added Palette: \(label)") { file in
+                let id = file.palettes.isEmpty ? nil : Self.uniqueID(tool, taken: Set(file.palettes.compactMap(\.id) + ["palette"]))
+                let slot = PaletteSlot(id: id, preset: preset, colors: paletteColors(preset: preset))
+                let i = min(max(index ?? file.palettes.count, 0), file.palettes.count)
+                file.palettes.insert(slot, at: i)
+                key = slot.key
+            }
+            selectDevice(key)
         case .generator:
             let p = preset.flatMap { store.preset(.generator, tool, $0) }
             var key = "generator"
@@ -528,6 +537,12 @@ final class Engine {
         }
     }
 
+    /// A palette's name in the chain: "Palette" for the first, "Palette 2" for `palette2`.
+    static func paletteTitle(_ id: String?) -> String {
+        guard let id else { return "Palette" }
+        return humanize(id).replacingOccurrences(of: "([A-Za-z])([0-9])", with: "$1 $2", options: .regularExpression)
+    }
+
     /// `glow`, then `glow2`, `glow3`…
     private static func uniqueID(_ base: String, taken: Set<String>) -> String {
         var id = base, n = 2
@@ -552,9 +567,20 @@ final class Engine {
         edit("Removed Lens") { $0.lens = nil }
     }
 
-    func removePalette() {
-        if selectedDevice == "palette" { selectDevice(nil) }
-        edit("Removed Palette") { $0.palette = nil }
+    func removePalette(key: String) {
+        if selectedDevice == key { selectDevice(nil) }
+        edit("Removed \(deviceName(key))") { $0.palettes.removeAll { $0.key == key } }
+    }
+
+    /// Recolours a palette from a preset; its inputs stay as they are.
+    func replacePalette(key: String, preset: String?) {
+        let label = presetName(.palette, "palette", preset) ?? "Palette"
+        edit("Palette: \(label)") { file in
+            guard let idx = file.palettes.firstIndex(where: { $0.key == key }) else { return }
+            file.palettes[idx].preset = preset
+            file.palettes[idx].colors = paletteColors(preset: preset)
+        }
+        selectDevice(key)
     }
 
     func removeModulator(id: String) {
@@ -635,8 +661,8 @@ final class Engine {
             removeCamera()
         } else if key == LensRuntime.key {
             removeLens()
-        } else if key == "palette" {
-            removePalette()
+        } else if key == "palette" || key.hasPrefix("palette.") {
+            removePalette(key: key)
         } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
             removeInput(key)
         } else if key.hasPrefix("mod.") {
@@ -967,6 +993,8 @@ final class Engine {
         case "camera": return "Camera"
         case "lens": return current?.lens?.label ?? "Lens"
         case "palette": return "Palette"
+        case _ where key.hasPrefix("palette."):
+            return current?.palettes.first { $0.key == key }?.title ?? "Palette"
         case "generator": return current?.generatorLabel ?? "Generator"
         case _ where key.hasPrefix("generator."):
             return current?.generators.first { $0.key == key }?.label ?? "Generator"
@@ -1100,23 +1128,16 @@ final class Engine {
             effects.append(runtime)
         }
 
-        let palette: PaletteModel?
-        let paletteBank: ParamBank?
-        let palettePreset: String?
-        let paletteLabel: String?
-        if let palSlot = file.palette {
-            let colors = palSlot.colors.compactMap(parseHexColor)
-            let pBank = ParamBank(defs: PaletteParams.defs, values: palSlot.params ?? [:], reuse: reuse?.palette?.bank)
-            palette = PaletteModel(colors.count >= 2 ? colors : Tools.defaultPalette.compactMap(parseHexColor),
-                                   bank: pBank, gpu: reuse?.palette?.gpu ?? renderer.makePaletteTextures())
-            paletteBank = pBank
-            palettePreset = palSlot.preset
-            paletteLabel = presetName(.palette, "palette", palSlot.preset) ?? "Custom"
-        } else {
-            palette = nil
-            paletteBank = nil
-            palettePreset = nil
-            paletteLabel = nil
+        // Palettes, in chain order. The first is `palette`, the rest `palette.<id>`.
+        var palettes: [PaletteModel] = []
+        for slot in file.palettes where !palettes.contains(where: { $0.key == slot.key }) {
+            let old = reuse?.palettes.first { $0.key == slot.key }
+            let colors = slot.colors.compactMap(parseHexColor)
+            let bank = ParamBank(defs: PaletteParams.defs, values: slot.params ?? [:], reuse: old?.bank)
+            palettes.append(PaletteModel(key: slot.key, title: Self.paletteTitle(slot.id), preset: slot.preset,
+                                         label: presetName(.palette, "palette", slot.preset) ?? "Custom",
+                                         colors.count >= 2 ? colors : Tools.defaultPalette.compactMap(parseHexColor),
+                                         bank: bank, gpu: old?.gpu ?? renderer.makePaletteTextures()))
         }
 
         // Inputs: one Audio In and one Clock at most, any number of MIDI inputs and webcams.
@@ -1199,7 +1220,7 @@ final class Engine {
         }
         if let camera { banks["camera"] = camera }
         if let lens { banks[LensRuntime.key] = lens.bank }
-        if let paletteBank { banks["palette"] = paletteBank }
+        for pal in palettes { banks[pal.key] = pal.bank }
         for gen in generators { banks[gen.key] = gen.bank }
         if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
         for fx in effects { banks["post.\(fx.id)"] = fx.bank }
@@ -1210,7 +1231,7 @@ final class Engine {
         let outputsByKey = Dictionary(outputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         let generatorLabel = generators.first?.label
         var mappings: [MappingRuntime] = []
-        // Stream outputs (Audio In's spectrum, webcam videos, the palette), in chain order, and
+        // Stream outputs (Audio In's spectrum, webcam videos, palettes), in chain order, and
         // the stream inputs shaders declare.
         var streamOutputs: [StreamOutput] = []
         for input in inputs {
@@ -1224,9 +1245,9 @@ final class Engine {
             }
         }
         if let lens { streamOutputs.append(lens.output) }
-        if let palette {
-            let gpu = palette.gpu
-            streamOutputs.append(StreamOutput(StreamOutput.paletteKey, "Colours", device: "Palette", kind: .palette) { gpu.current })
+        for pal in palettes {
+            let gpu = pal.gpu
+            streamOutputs.append(StreamOutput(pal.outputKey, "Colours", device: pal.title, kind: .palette) { gpu.current })
         }
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
@@ -1256,7 +1277,8 @@ final class Engine {
             if source.hasPrefix("audio.") { return "Needs Audio In in the chain" }
             if source.hasPrefix("clock.") { return "Needs Clock in the chain" }
             if source.hasPrefix("camera.") { return "Needs Camera in the chain" }
-            if source.hasPrefix("palette.") { return "Needs Palette in the chain" }
+            if source == StreamOutput.paletteKey { return "Needs a Palette in the chain" }
+            if source.hasPrefix("palette.") { return "Needs its Palette in the chain" }
             if source.hasPrefix("lens.") { return "Needs a Lens in the chain" }
             if source.hasPrefix("mod.") { return "\(device.dropFirst(4)) isn't in this scene" }
             if source.hasPrefix("webcam.") { return "Needs its Webcam in the chain" }
@@ -1343,6 +1365,7 @@ final class Engine {
             switch parts.first {
             case "generator": device = generatorLabel ?? "Generator"
             case "camera": device = "Camera"
+            case "palette": device = Self.paletteTitle(parts.count > 2 ? parts[1] : nil)
             case "lens": device = "Lens"
             case "audio": device = "Audio In"
             case "clock": device = "Clock"
@@ -1372,8 +1395,7 @@ final class Engine {
         let scene = RenderScene(name: file.name, generators: generators, inputs: inputs, modulators: modulators,
                                 streamOutputs: streamOutputs, streamBindings: streamBindings,
                                 camera: camera, cameraMotion: cameraMotion, cameraPreset: cameraPreset, cameraLabel: cameraLabel,
-                                lens: lens, effects: effects, palettePreset: palettePreset,
-                                palette: palette, paletteLabel: paletteLabel, outputs: outputs, mappings: mappings,
+                                lens: lens, effects: effects, palettes: palettes, outputs: outputs, mappings: mappings,
                                 banksByPath: banks)
         // The depth model runs only for video sources whose Depth goes somewhere.
         let boundVideo = Set(streamBindings.values.map(\.key))
@@ -1484,11 +1506,12 @@ final class Engine {
             file.effects[i].params = fx.bank.baseValues
             file.effects[i].enabled = fx.enabled ? nil : false
         }
-        if let pal = scene.palette {
+        for i in file.palettes.indices {
+            guard let pal = scene.palettes.first(where: { $0.key == file.palettes[i].key }) else { continue }
             let colors = pal.colors.map(hexString)
             // Edited colors no longer match the preset they came from.
-            if colors != file.palette?.colors { file.palette = PaletteSlot(preset: nil, colors: colors) }
-            file.palette?.params = pal.bank.baseValues
+            if colors != file.palettes[i].colors { file.palettes[i].colors = colors; file.palettes[i].preset = nil }
+            file.palettes[i].params = pal.bank.baseValues
         }
     }
 

@@ -81,6 +81,7 @@
         "fog" : 0.04,
         "instances" : 1,
         "light" : 0.14978027,
+        "lightSpin" : 0.3,
         "noiseAmount" : 0.45,
         "noiseScale" : 1.4,
         "noiseSpeed" : 0.25,
@@ -228,13 +229,15 @@
     }
   ],
   "name" : "Ice",
-  "palette" : {
-    "colors" : [
-      "#020814",
-      "#C3C3C3",
-      "#A9A9A9",
-      "#DDDDDD",
-      "#003144"
-    ]
-  }
+  "palettes" : [
+    {
+      "colors" : [
+        "#020814",
+        "#C3C3C3",
+        "#A9A9A9",
+        "#DDDDDD",
+        "#003144"
+      ]
+    }
+  ]
 }
