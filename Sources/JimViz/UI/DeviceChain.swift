@@ -408,6 +408,28 @@ struct DevicePanel<Content: View>: View {
 
     private var ioOn: Bool { select.map(engine.isIOShown) ?? false }
 
+    /// How far modulation currently moves this device's knobs, summed over every knob with an
+    /// active value mapping, as a share of their ranges (0...1). Nil when none is mapped.
+    private var modulation: Double? {
+        guard let select, let scene = engine.current else { return nil }
+        var seen = Set<ObjectIdentifier>()
+        var total: Float = 0
+        for m in scene.mappings where m.kind == .value && m.isActive && m.enabled && devicePath(m.target) == select {
+            guard let p = m.param, seen.insert(ObjectIdentifier(p)).inserted else { continue }
+            total += abs(p.display - p.base) / max(p.def.span, 1e-6)
+        }
+        return seen.isEmpty ? nil : Double(min(total, 1))
+    }
+
+    /// A blue dot for a device with mapped knobs, brighter the more they're being moved.
+    @ViewBuilder
+    private var modulationDot: some View {
+        if let modulation {
+            Circle().fill(Theme.modulation.opacity(0.3 + 0.7 * modulation)).frame(width: 7, height: 7)
+                .help("Mapped knobs inside")
+        }
+    }
+
     /// Inputs show while IO is on, and also while an output they can take is waiting to be
     /// mapped (or is being dragged), so there's something to click or drop it on.
     private func showInputs(_ io: DeviceIO) -> Bool {
@@ -498,6 +520,7 @@ struct DevicePanel<Content: View>: View {
             } else if let statusColor {
                 Circle().fill(statusColor).frame(width: 8, height: 8)
             }
+            modulationDot
             Text(subtitle.map { "\(title)  \($0)" } ?? title)
                 .font(Theme.titleFont)
                 .foregroundStyle(failed ? Theme.error : Theme.text)
@@ -538,6 +561,7 @@ struct DevicePanel<Content: View>: View {
                     .font(Theme.labelFont)
                     .foregroundStyle(Theme.textDim)
             }
+            modulationDot
             Spacer(minLength: 4)
             if let select, io != nil {
                 Button { engine.toggleIO(select) } label: {
@@ -596,15 +620,19 @@ struct PaletteEditor: View {
                 .clipShape(RoundedRectangle(cornerRadius: 2))
                 .help("The palette as it renders, after red, green, blue, hue, saturation and brightness")
             VStack(alignment: .leading, spacing: 4) {
-                ScrollView(.vertical) {
-                    VStack(spacing: 4) {
-                        ForEach(palette.colors.indices, id: \.self) { i in
-                            ColorWell(color: palette.colors[i]) { updateColor(at: i, to: $0) }
-                                .frame(width: 34, height: 16)
+                // Swatches in columns, so every colour fits the device's height: nothing in the
+                // chain scrolls vertically.
+                HStack(alignment: .top, spacing: 4) {
+                    let count = palette.colors.count
+                    ForEach(0 ..< (count + Self.rows - 1) / Self.rows, id: \.self) { col in
+                        VStack(spacing: 4) {
+                            ForEach(col * Self.rows ..< min(count, (col + 1) * Self.rows), id: \.self) { i in
+                                ColorWell(color: palette.colors[i]) { updateColor(at: i, to: $0) }
+                                    .frame(width: 34, height: 16)
+                            }
                         }
                     }
                 }
-                .scrollIndicators(.never)
                 HStack(spacing: 4) {
                     Button { replaceColors(palette.colors + [palette.colors.last ?? .one]) } label: { Image(systemName: "plus") }
                     Button { replaceColors(Array(palette.colors.dropLast())) } label: { Image(systemName: "minus") }
@@ -613,10 +641,12 @@ struct PaletteEditor: View {
                 .buttonStyle(.borderless)
                 .controlSize(.small)
             }
-            .frame(width: 34)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    /// Swatches per column: as many as fit the chain's height above the add and remove buttons.
+    private static let rows = 9
 
     private func updateColor(at index: Int, to color: SIMD3<Float>) {
         let snapshot = engine.currentSnapshot()

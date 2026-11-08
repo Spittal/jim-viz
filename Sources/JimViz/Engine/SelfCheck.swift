@@ -796,7 +796,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "globe"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "globe", "drive"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -809,7 +809,8 @@ enum SelfCheck {
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
-                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "snap", "globe": "ocean"]
+                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "snap", "globe": "ocean",
+                                     "drive": "lane"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -841,7 +842,9 @@ enum SelfCheck {
                 scale.reset()
             }
 
-            // Motion group defaults to 0 spin and tumble, and resets cleanly.
+            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive has no Motion
+            // group: its road scrolls instead of its mesh turning.
+            if geo == "drive" { continue }
             guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
                 return "\(geo) missing spin or tumble"
             }
@@ -935,12 +938,10 @@ enum SelfCheck {
         return nil
     }
 
-    /// Drive, the Retro generator: its own category, starts unmapped, and on a scene built in
-    /// memory (a chase camera, a palette) draws over most of the frame, rebuilds its mesh when
-    /// segments or palms change, and keeps drawing with the road moving and bending.
+    /// Drive, a Low Poly generator: starts unmapped, and on a scene built in memory (a chase
+    /// camera, a palette) draws over most of the frame, rebuilds its mesh when segments or palms
+    /// change, and keeps drawing with the road moving and bending.
     private static func checkDrive(engine: Engine, snapshotDir: URL?) -> String? {
-        let listed = engine.tools.filter { $0.kind == .generator && $0.category == "retro" }.map(\.name)
-        guard listed == ["drive"] else { return "Retro lists \(listed), expected [drive]" }
         let file = SceneFile(name: "drive", inputs: [], modulators: [],
                              camera: CameraSlot(type: "static", preset: nil,
                                                 params: ["x": 8, "y": 2.2, "z": 0, "lookX": -6, "lookY": 0.6, "fov": 50]),
@@ -1917,7 +1918,7 @@ enum SelfCheck {
         if let problem = checkDrive(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL drive: \(problem)"); failures += 1
         } else {
-            print("ok   drive (Retro category, starts unmapped, road, car, palms, sun and mountains drawn, mesh knobs rebuild)")
+            print("ok   drive (starts unmapped, road, car, palms, sun and mountains drawn, mesh knobs rebuild)")
         }
         if let problem = checkDancer(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL dancer: \(problem)"); failures += 1
