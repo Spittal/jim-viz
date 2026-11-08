@@ -150,7 +150,7 @@
       "type" : "clock"
     },
     {
-      "device" : "Opal C1",
+      "device" : "MacBook Pro Camera",
       "id" : "webcam",
       "params" : {
         "bg" : 0.27453613,
@@ -218,7 +218,9 @@
       "target" : "post.slices.amount"
     }
   ],
-  "modulators" : [],
+  "modulators" : [
+
+  ],
   "name" : "Affinity",
   "palette" : {
     "colors" : [
