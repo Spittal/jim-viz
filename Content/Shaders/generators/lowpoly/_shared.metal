@@ -165,8 +165,20 @@ inline float3 instanceOffset(float i, constant Params& p) {
     return float3((layers - 1) * 0.5 - cell.z, (rows - 1) * 0.5 - cell.y, (cols - 1) * 0.5 - cell.x) * p.spread;
 }
 
+// Turns a copy that looks toward +x so it looks at the centre from where it sits, keeping its
+// up as close to world up as it can. Copies at the centre are left as they are.
+inline float3x3 aimAtCentre(float3 offset) {
+    if (length(offset) < 1e-4) return float3x3(1);
+    float3 fwd = -normalize(offset);
+    float3 side = cross(fwd, float3(0, 1, 0));
+    side = length(side) < 1e-4 ? float3(0, 0, 1) : normalize(side);
+    return float3x3(fwd, cross(side, fwd), side);
+}
+
+// facesCentre: in the Sphere layout, each copy turns to look at the centre (a geo that looks
+// toward +x, like the Face). Other layouts keep every copy facing the front.
 inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& f, constant Params& p,
-                            constant Camera& cam, texture2d<float> spec) {
+                            constant Camera& cam, texture2d<float> spec, bool facesCentre = false) {
     float ir = instanceRand(iid);
     float3 pos = g.pos;
 
@@ -182,9 +194,11 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     // Each instance tumbles on its own random axis.
     float3 axis = normalize(float3(hash11(ir * 3.1) - 0.5, hash11(ir * 5.7) - 0.5, hash11(ir * 7.3) - 0.5) + 1e-3);
     float3x3 tumble = rotAxis(axis, p.tumblePhase * (0.5 + ir));
-    pos = tumble * pos;
+    float3 offset = instanceOffset(float(iid), p);
+    float3x3 aim = facesCentre && int(p.layout + 0.5) == 0 ? aimAtCentre(offset) : float3x3(1);
+    pos = aim * (tumble * pos);
 
-    pos += instanceOffset(float(iid), p);
+    pos += offset;
 
     // Brownian: each copy wanders on its own smooth random path.
     if (p.brownian > 0) {
@@ -194,7 +208,7 @@ inline GenOut lowpolyVertex(GeoPoint g, MeshVertex v, uint iid, constant Frame& 
     }
 
     pos.xz = rot2(p.spinPhase) * pos.xz;
-    float3 litN = tumble * g.faceN * g.faceLit;
+    float3 litN = aim * (tumble * g.faceN) * g.faceLit;
     litN.xz = rot2(p.spinPhase) * litN.xz;
 
     GenOut o;
