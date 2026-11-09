@@ -381,14 +381,14 @@ final class Engine {
         load(sceneURLs[(idx + delta + sceneURLs.count) % sceneURLs.count])
     }
 
-    /// Creates an empty scene: Audio In, Clock and a static camera; no palette, generator or effects.
+    /// Creates an empty scene: Audio In and a static camera; no palette, generator or effects.
     func createNewScene() {
         let taken = Set(sceneURLs.map { $0.deletingPathExtension().lastPathComponent })
         var name = "Untitled Scene", n = 1
         while taken.contains(slugify(name)) { n += 1; name = "Untitled Scene \(n)" }
         let file = SceneFile(
             name: name,
-            inputs: [InputSpec(type: "audio", device: Self.defaultAudioSource.key), InputSpec(type: "clock")],
+            inputs: [InputSpec(type: "audio", device: Self.defaultAudioSource.key)],
             modulators: [],
             camera: cameraSlot(CameraRig.still.rawValue, preset: "front"),
             palettes: [],
@@ -440,7 +440,7 @@ final class Engine {
 
     /// Adds a tool to the chain, optionally loaded with one of its presets. Camera and lens
     /// replace what is there; palettes, generators, modulators and effects insert at `index` or append;
-    /// inputs are added (one Audio In and one Clock, any number of the rest). A preset's values
+    /// inputs are added (one Audio In, any number of the rest). A preset's values
     /// are copied in; the preset file is never touched.
     func apply(_ kind: DeviceKind, _ tool: String, preset: String? = nil, at index: Int? = nil, replaceSelected: Bool = true) {
         let label = presetName(kind, tool, preset) ?? Tools.label(kind, tool)
@@ -478,7 +478,7 @@ final class Engine {
                 info = "\(label) is already in the chain"; selectDevice(tool); return
             }
             edit("Added \(label)") { file in
-                // Audio In first, then Clock, then MIDI inputs. Audio In's presets are its sources.
+                // Audio In first, then MIDI inputs. Audio In's presets are its sources.
                 let i = tool == "audio" ? 0 : file.inputs.prefix { $0.type == "audio" }.count
                 let device = tool == "audio" ? preset ?? Self.defaultAudioSource.key : nil
                 file.inputs.insert(InputSpec(type: tool, device: device), at: i)
@@ -566,7 +566,7 @@ final class Engine {
         return id
     }
 
-    /// Removes an input by chain key: `audio`, `clock` or `mod.<id>`.
+    /// Removes an input by chain key: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
     func removeInput(_ key: String) {
         let name = deviceName(key)
         if selectedDevice == key { selectDevice(nil) }
@@ -679,7 +679,7 @@ final class Engine {
             removeLens()
         } else if key == "palette" || key.hasPrefix("palette.") {
             removePalette(key: key)
-        } else if key == "audio" || key == "clock" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
+        } else if key == "audio" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
             removeInput(key)
         } else if key.hasPrefix("mod.") {
             let id = String(key.dropFirst(4))
@@ -830,7 +830,6 @@ final class Engine {
         case "camera": device = "Camera"
         case "lens": device = "Lens"
         case "audio": device = "Audio In"
-        case "clock": device = "Clock"
         case "post", "mod": device = parts.count > 2 ? parts[1] : target
         default: device = parts.dropLast().joined(separator: ".")
         }
@@ -1005,7 +1004,6 @@ final class Engine {
     func deviceName(_ key: String) -> String {
         switch key {
         case "audio": return "Audio In"
-        case "clock": return "Clock"
         case "camera": return "Camera"
         case "lens": return current?.lens?.label ?? "Lens"
         case "palette": return "Palette"
@@ -1156,7 +1154,7 @@ final class Engine {
                                          bank: bank, gpu: old?.gpu ?? renderer.makePaletteTextures()))
         }
 
-        // Inputs: one Audio In and one Clock at most, any number of MIDI inputs and webcams.
+        // Inputs: one Audio In at most, any number of MIDI inputs, webcams, videos and pictures.
         // Rebuilding a scene carries each on; a different scene's pick up where the current
         // scene's are, so levels and the beat continue across a switch.
         var inputs: [InputDevice] = []
@@ -1175,10 +1173,6 @@ final class Engine {
                                        makeSpectrum: renderer.makeSpectrumTextures,
                                        reuse: old, continuing: reuse == nil ? current?.audioIn : nil)
                 inputs.append(.audio(a)); outputs += a.outputs
-            case "clock" where !inputs.contains { $0.id == "clock" }:
-                let c = ClockRuntime(params: spec.params ?? [:], reuse: reuse?.clock,
-                                     continuing: reuse == nil ? current?.clock : nil)
-                inputs.append(.clock(c)); outputs += c.outputs
             case "midi":
                 let id = spec.id ?? "midi"
                 guard !inputs.contains(where: { $0.id == "midi.\(id)" }) else { continue }
@@ -1210,7 +1204,7 @@ final class Engine {
                 let p = PictureRuntime(id: id, file: spec.file, bank: ParamBank(defs: defs, values: spec.params ?? [:], reuse: old?.bank),
                                        feed: pictures.feed(for: spec.file, store: store), gpu: gpu)
                 inputs.append(.picture(p)); outputs += p.outputs
-            case "audio", "clock":
+            case "audio":
                 continue
             default:
                 errors["input"] = "unknown input \(spec.type)"
@@ -1227,7 +1221,6 @@ final class Engine {
         for input in inputs {
             switch input {
             case .audio(let a): banks["audio"] = a.bank
-            case .clock(let c): banks["clock"] = c.bank
             case .webcam(let w): banks[w.key] = w.bank
             case .video(let v): banks[v.key] = v.bank
             case .picture(let p): banks[p.key] = p.bank
@@ -1253,7 +1246,6 @@ final class Engine {
         for input in inputs {
             switch input {
             case .audio(let a): streamOutputs += a.streamOutputs
-            case .clock(let c): streamOutputs.append(c.syncOutput)
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
             case .video(let v): streamOutputs += [v.video, v.depthVideo]
             case .picture(let p): streamOutputs += [p.video, p.depthVideo]
@@ -1267,7 +1259,6 @@ final class Engine {
         }
         let streamsByKey = Dictionary(streamOutputs.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var streamInputs: [String: (label: String, kind: IOKind)] = [:]
-        if inputs.contains(where: { $0.id == "clock" }) { streamInputs[StreamInput.clockAudioKey] = ("Clock · Audio", .audio) }
         for mod in modulators where mod.type == .lfo { streamInputs["mod.\(mod.id).sync"] = ("\(mod.id) · Sync", .clock) }
         if camera != nil { streamInputs[StreamInput.cameraLensKey] = ("Camera · Lens", .stmap) }
         for gen in generators {
@@ -1283,7 +1274,7 @@ final class Engine {
         // Trigger inputs, with their labels for mappings.
         var triggers: [String: (input: TriggerInput, label: String)] = [:]
         for t in cameraMotion?.triggerInputs ?? [] { triggers[t.key] = (t, "Camera · \(t.label)") }
-        for case .clock(let c) in inputs { triggers[c.firstBeatTrigger.key] = (c.firstBeatTrigger, "Clock · \(c.firstBeatTrigger.label)") }
+        for case .audio(let a) in inputs { triggers[a.firstBeatTrigger.key] = (a.firstBeatTrigger, "Audio In · \(a.firstBeatTrigger.label)") }
         for case .video(let v) in inputs { triggers[v.jumpTrigger.key] = (v.jumpTrigger, "\(v.displayName) · \(v.jumpTrigger.label)") }
         for mod in modulators { if let t = mod.resetTrigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
 
@@ -1291,7 +1282,6 @@ final class Engine {
         func missing(_ source: String) -> String {
             let device = devicePath(source)
             if source.hasPrefix("audio.") { return "Needs Audio In in the chain" }
-            if source.hasPrefix("clock.") { return "Needs Clock in the chain" }
             if source.hasPrefix("camera.") { return "Needs Camera in the chain" }
             if source == StreamOutput.paletteKey { return "Needs a Palette in the chain" }
             if source.hasPrefix("palette.") { return "Needs its Palette in the chain" }
@@ -1328,7 +1318,7 @@ final class Engine {
                 case .spectrum: fallbackLabel = "Audio In · \(StreamOutput.spectrumNames[spec.source] ?? "Spectrum")"
                 case .palette: fallbackLabel = "Palette · Colours"
                 case .audio: fallbackLabel = "Audio In · Audio Out"
-                case .clock: fallbackLabel = "Clock · Sync"
+                case .clock: fallbackLabel = "Audio In · Sync"
                 case .stmap: fallbackLabel = "Lens · ST Map"
                 default: fallbackLabel = spec.source.hasSuffix(".depth") ? "Webcam · Depth" : "Webcam · Video"
                 }
@@ -1384,7 +1374,6 @@ final class Engine {
             case "palette": device = Self.paletteTitle(parts.count > 2 ? parts[1] : nil)
             case "lens": device = "Lens"
             case "audio": device = "Audio In"
-            case "clock": device = "Clock"
             default: device = parts.count > 2 ? parts[1] : (parts.first ?? spec.target)
             }
             mappings.append(MappingRuntime(
@@ -1394,15 +1383,14 @@ final class Engine {
                 targetLabel: "\(device) · \(knobLabel(parts.last ?? spec.target))", problem: problem))
         }
 
-        // The Clock hears Audio In, and LFOs follow the Clock, only through their mappings.
-        let clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
+        // LFOs and shaders' rate knobs follow Audio In's beat only through their mappings.
         let audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
-        clock?.listen(to: streamBindings[StreamInput.clockAudioKey] != nil ? audioIn : nil)
+        let clock = audioIn?.clock
         for mod in modulators {
             mod.sync(to: streamBindings["mod.\(mod.id).sync"] != nil ? clock : nil)
         }
-        // A shader's rate knobs follow the Clock only while Sync is mapped into its clock input.
-        func synced(_ prefix: String, _ inputs: [StreamInputDef]) -> ClockRuntime? {
+        // A shader's rate knobs follow the beat only while Sync is mapped into its clock input.
+        func synced(_ prefix: String, _ inputs: [StreamInputDef]) -> BeatClock? {
             inputs.contains { $0.kind == .clock && streamBindings["\(prefix).\($0.name)"] != nil } ? clock : nil
         }
         for gen in generators { gen.bank.syncClock = synced(gen.key, gen.inputs) }
@@ -1491,7 +1479,6 @@ final class Engine {
         for i in file.inputs.indices {
             switch file.inputs[i].type {
             case "audio": if let a = scene.audioIn { file.inputs[i].params = a.bank.baseValues }
-            case "clock": if let c = scene.clock { file.inputs[i].params = c.bank.baseValues }
             case "webcam":
                 let id = file.inputs[i].id ?? "webcam"
                 guard let w = scene.webcams.first(where: { $0.id == id }) else { continue }
@@ -1585,8 +1572,7 @@ final class Engine {
                 }
             }
         }
-        current?.audioIn?.refreshMeters()
-        current?.clock?.refresh()
+        current?.audioIn?.refresh()
         if let pending = pendingScene {
             if !loop.transition.isTransitioning {
                 currentURL = pending.url

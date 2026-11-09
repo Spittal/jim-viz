@@ -2,20 +2,19 @@ import Metal
 import QuartzCore
 
 /// The kinds of IO. A value output (0...1, like `audio.kick`) maps onto knobs. A trigger is an
-/// event (Clock · On Beat, Camera · On Cut) that fires a trigger input (Cutter · Cut, Video ·
+/// event (Audio In · On Beat, Camera · On Cut) that fires a trigger input (Cutter · Cut, Video ·
 /// Jump). The others are streams a device produces, each mapped onto one input of the same kind.
 /// - video: a picture, like a webcam's feed.
 /// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1.
 /// - palette: a Palette's gradient, with its inputs applied.
-/// - audio: Audio In's audio stream, frame by frame, for the Clock's beat tracking.
-/// - clock: Clock's tempo / beat sync stream, for syncing LFOs and shaders' rate knobs.
+/// - audio: Audio In's audio stream (Audio Out). Nothing takes it yet.
+/// - clock: Audio In's beat (Sync), for syncing LFOs and shaders' rate knobs.
 /// - stmap: a lens's ST map, Nuke's convention: each pixel holds where in the source picture
 ///   to read, s left to right and t bottom to top, 0...1 across the frame. Goes into the
 ///   Camera's Lens input, which reprojects the rendered picture through it.
-/// Video, spectrum and palette are textures a shader declares an input for; audio goes only
-/// into the Clock's Audio input; clock sync goes into an LFO's Sync input or a clock input a
-/// shader declares. Nothing reaches a shader, the Clock, or an LFO except through a mapping:
-/// no shared audio, clock or colors.
+/// Video, spectrum and palette are textures a shader declares an input for; sync goes into an
+/// LFO's Sync input or a clock input a shader declares. Nothing reaches a shader or an LFO
+/// except through a mapping: no shared audio, beat or colors.
 enum IOKind: String {
     case value, trigger, video, spectrum, palette, audio, clock, stmap
 
@@ -65,8 +64,8 @@ enum IOKind: String {
 }
 
 /// A stream a device produces: a webcam's video (`webcam.<id>.video`), Audio In's spectrum
-/// (`audio.spectrum`) and audio out (`audio.out`), a palette's gradient (`palette.colors`, `palette.<id>.colors`) or
-/// the Clock's sync (`clock.sync`). Each tool makes its own.
+/// (`audio.spectrum`), audio out (`audio.out`) and beat sync (`audio.sync`), a palette's gradient
+/// (`palette.colors`, `palette.<id>.colors`). Each tool makes its own.
 final class StreamOutput: Identifiable {
     let key: String
     let name: String
@@ -94,7 +93,8 @@ final class StreamOutput: Identifiable {
     /// A palette's Colours output, from its chain key (`palette` or `palette.<id>`).
     static func paletteKey(_ device: String) -> String { "\(device).colors" }
     static let audioKey = "audio.out"
-    static let clockSyncKey = "clock.sync"
+    /// Audio In's beat, which LFOs and shaders' clock inputs follow.
+    static let syncKey = "audio.sync"
     /// A lens's ST map, which goes into the Camera's Lens input (`StreamInput.cameraLensKey`).
     static let stmapKey = "lens.stmap"
     static let harmonicSpectrumKey = "audio.harmonicSpectrum"
@@ -108,7 +108,7 @@ final class StreamOutput: Identifiable {
         if spectrumNames[key] != nil { return .spectrum }
         if key == paletteKey { return .palette }
         if key == audioKey { return .audio }
-        if key == clockSyncKey { return .clock }
+        if key == syncKey { return .clock }
         if key == stmapKey { return .stmap }
         // Video and depth come from video inputs (`webcam.<id>.video`, `picture.<id>.depth`);
         // elsewhere `.depth` is a knob, like an LFO's.
@@ -127,7 +127,7 @@ final class StreamOutput: Identifiable {
 /// Its target key is `<device>.<name>` (`generator.bgVideo`). Each takes one stream.
 /// Video, spectrum and palette inputs get texture slots in declaration order: generators from
 /// texture(0) (vertex and fragment stage), effects from texture(2). A clock input takes no
-/// slot: while Clock · Sync is mapped into it, the shader's rate knobs follow the beat
+/// slot: while Audio In · Sync is mapped into it, the shader's rate knobs follow the beat
 /// (`ParamBank.syncClock`).
 struct StreamInputDef: Hashable {
     let name: String
@@ -151,8 +151,6 @@ struct StreamInputDef: Hashable {
 
 /// A stream input in the scene, for the UI: `generator.bgVideo`, "Background", video.
 struct StreamInput: Identifiable, Hashable {
-    /// The Clock's Audio input, which takes Audio In's Audio Out to follow the beat.
-    static let clockAudioKey = "clock.audio"
     /// The Camera's Lens input, which takes a lens's ST map and reprojects the picture through it.
     static let cameraLensKey = "camera.lens"
 
@@ -182,12 +180,12 @@ final class TriggerInput: Identifiable {
     init(_ key: String, _ label: String) { self.key = key; self.label = label }
 
     /// Whether a key names a trigger input, from the key alone, for when its device isn't in
-    /// the scene: `camera.cut`, `clock.firstBeat`, `mod.<id>.reset`, `video.<id>.jump`.
+    /// the scene: `camera.cut`, `audio.firstBeat`, `mod.<id>.reset`, `video.<id>.jump`.
     static func isKey(_ key: String) -> Bool {
         let parts = key.split(separator: ".")
         switch (parts.first, parts.count) {
         case ("camera", 2): return parts[1] == "cut"
-        case ("clock", 2): return parts[1] == "firstBeat"
+        case ("audio", 2): return parts[1] == "firstBeat"
         case ("mod", 3): return parts[2] == "reset"
         case ("video", 3): return parts[2] == "jump"
         default: return false

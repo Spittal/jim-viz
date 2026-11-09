@@ -162,7 +162,7 @@ struct StreamInputTag: View {
                         switch input.kind {
                         case .spectrum: Text("Add Audio In to get a spectrum")
                         case .audio: Text("Add Audio In to get audio")
-                        case .clock: Text("Add a Clock to get sync")
+                        case .clock: Text("Add Audio In to get sync")
                         case .palette: Text("Add a Palette to get colours")
                         case .stmap: Text("Add a Lens to get an ST map")
                         default: Text("Add a Webcam, Video or Picture to get video")
@@ -310,7 +310,7 @@ struct OutputTag: View {
     }
 }
 
-/// A stream output (video, spectrum, palette, audio, clock sync). Click it for a menu of the
+/// A stream output (video, spectrum, palette, audio, beat sync). Click it for a menu of the
 /// inputs of its kind, ticked where it's mapped.
 struct StreamOutputTag: View {
     @Environment(Engine.self) private var engine

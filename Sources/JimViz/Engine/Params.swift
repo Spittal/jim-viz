@@ -154,16 +154,16 @@ final class ParamBank {
     /// Scratch for `withPacked`, so packing a bank each frame allocates nothing.
     private var packBuffer: [Float]
 
-    /// The Clock its rate params follow, while Clock · Sync is mapped into its shader's clock
+    /// The beat its rate params follow, while Audio In · Sync is mapped into its shader's clock
     /// input. Set when the scene is built, from its mappings.
-    var syncClock: ClockRuntime?
-    /// Synced: the Clock's beat as of the last frame. Nil until the first synced frame.
+    var syncClock: BeatClock?
+    /// Synced: the beat as of the last frame. Nil until the first synced frame.
     private var syncedBeat: Double?
     /// Synced, a rate knob's second lasts this many beats, so nothing changes speed at 120 BPM.
     static let beatsPerSyncedSecond = 2.0
 
     /// Render thread, once per frame after `live` is set: advances every rate param's phase,
-    /// by `dt`, or synced by how far the Clock's beat moved (so a tap of First Beat moves the
+    /// by `dt`, or synced by how far the beat moved (so a tap of First Beat moves the
     /// phases with it). The first synced frame sets each phase to where it would be had its
     /// knob been held since beat 0, which lines it up with the beat.
     func integrate(dt: Float) {

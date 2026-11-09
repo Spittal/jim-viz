@@ -19,6 +19,16 @@ final class ContentStore {
     var shadersDir: URL { content.appendingPathComponent("Shaders") }
     var mapsDir: URL { content.appendingPathComponent("Maps") }
 
+    /// The content folder: `JIMVIZ_CONTENT`, or the app bundle's copy.
+    static let contentDir: URL = {
+        if let path = ProcessInfo.processInfo.environment["JIMVIZ_CONTENT"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return Bundle.main.resourceURL!.appendingPathComponent("Content", isDirectory: true)
+    }()
+    /// Model weights that ship with the app (BeatNet).
+    static var modelsDir: URL { contentDir.appendingPathComponent("Models") }
+
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?
 
@@ -31,11 +41,7 @@ final class ContentStore {
             library = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("jim-viz", isDirectory: true)
         }
-        if let path = env["JIMVIZ_CONTENT"], !path.isEmpty {
-            content = URL(fileURLWithPath: path, isDirectory: true)
-        } else {
-            content = Bundle.main.resourceURL!.appendingPathComponent("Content", isDirectory: true)
-        }
+        content = Self.contentDir
         guard fm.fileExists(atPath: content.appendingPathComponent("Shaders").path) else {
             fatalError("No shaders in \(content.path). Run scripts/run.sh, or set JIMVIZ_CONTENT to the repo's Content folder.")
         }

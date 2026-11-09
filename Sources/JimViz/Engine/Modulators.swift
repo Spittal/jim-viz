@@ -90,7 +90,7 @@ enum MacroParams {
 
 /// The modulator tools.
 enum ModulatorType: String {
-    /// A low-frequency oscillator: bipolar, free running or synced to a Clock. Its Reset
+    /// A low-frequency oscillator: bipolar, free running or synced to Audio In's beat. Its Reset
     /// trigger input restarts its cycle.
     case lfo
     /// Takes one value in through its `a` knob, does some math with `b`, and outputs the result.
@@ -122,7 +122,7 @@ final class ModulatorRuntime: Identifiable {
     let type: ModulatorType
     let presetLabel: String?
     var enabled: Bool { didSet { rEnabled = enabled } }
-    /// Whether Clock · Sync is mapped into its `mod.<id>.sync` input.
+    /// Whether Audio In · Sync is mapped into its `mod.<id>.sync` input.
     private(set) var isSynced = false
     let bank: ParamBank
     /// Its outputs. LFO and Math have one, `mod.<id>.out`: bipolar (-1...1) for an LFO, 0...1
@@ -132,11 +132,11 @@ final class ModulatorRuntime: Identifiable {
     var output: OutputSignal { outputs[0] }
 
     @ObservationIgnored private var rEnabled: Bool
-    /// The Clock it follows, through its Sync input. Set when the scene is built.
-    @ObservationIgnored private var syncClock: ClockRuntime?
+    /// The beat it follows, through its Sync input. Set when the scene is built.
+    @ObservationIgnored private var syncClock: BeatClock?
     /// Free-running phase, integrated so changing `hz` never jumps.
     @ObservationIgnored private var freePhase: Double = 0
-    /// Synced: the Clock beat its cycles count from, moved by Reset.
+    /// Synced: the beat its cycles count from, moved by Reset.
     @ObservationIgnored private var syncOrigin: Double = 0
     /// LFOs: `mod.<id>.reset`, which restarts the cycle each time it fires.
     @ObservationIgnored let resetTrigger: TriggerInput?
@@ -165,8 +165,8 @@ final class ModulatorRuntime: Identifiable {
         rEnabled ? bank.live(name) : 0
     }
 
-    /// Follows a Clock's beat, or runs free (nil). Called when the scene is built, from its mappings.
-    func sync(to clock: ClockRuntime?) {
+    /// Follows Audio In's beat, or runs free (nil). Called when the scene is built, from its mappings.
+    func sync(to clock: BeatClock?) {
         syncClock = clock
         isSynced = clock != nil
     }

@@ -120,9 +120,9 @@ final class RenderLoop: NSObject {
         let primaryScene = activeTransition?.to ?? sceneProvider()
         guard primaryScene != nil || activeTransition != nil else { return }
 
-        // Each scene runs its own tools (Audio In, Clock, LFOs…) from this; nothing else is shared.
+        // Each scene runs its own tools (Audio In, LFOs…) from this; nothing else is shared.
         let signals = SignalFrame(time: Float(now - startTime), dt: Float(dt), now: now)
-        // Shaders get only time; audio and the clock reach them through mappings.
+        // Shaders get only time; audio and the beat reach them through mappings.
         var frame = FrameUniforms()
         frame.time = signals.time
         frame.dt = signals.dt

@@ -130,7 +130,7 @@ struct DeviceBrowser: View {
     private func toolInUse(_ tool: Tool) -> Bool {
         guard let scene = engine.current else { return false }
         switch tool.kind {
-        case .input: return tool.name == "audio" ? scene.hasAudioInput : tool.name == "clock" ? scene.hasClock : false
+        case .input: return tool.name == "audio" ? scene.hasAudioInput : false
         case .camera: return scene.cameraMotion?.rig.rawValue == tool.name
         case .lens: return scene.lens?.type == tool.name
         case .palette: return !scene.palettes.isEmpty

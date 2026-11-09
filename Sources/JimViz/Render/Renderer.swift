@@ -204,13 +204,12 @@ final class PaletteModel: Identifiable {
 
 /// A device in the scene's Inputs section.
 enum InputDevice: Identifiable {
-    case audio(AudioInRuntime), clock(ClockRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime), video(VideoRuntime), picture(PictureRuntime)
+    case audio(AudioInRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime), video(VideoRuntime), picture(PictureRuntime)
 
     /// Chain key, as used for selection and in mapping keys.
     var id: String {
         switch self {
         case .audio: return "audio"
-        case .clock: return "clock"
         case .midi(let m): return m.key
         case .webcam(let w): return w.key
         case .video(let v): return v.key
@@ -224,10 +223,9 @@ final class RenderScene {
     let generators: [GeneratorRuntime]
     var generator: GeneratorRuntime? { generators.first }
     var generatorLabel: String? { generators.first?.label }
-    /// Audio In, Clock, MIDI and webcam inputs, in chain order.
+    /// Audio In, MIDI and webcam inputs, in chain order.
     let inputs: [InputDevice]
     let audioIn: AudioInRuntime?
-    let clock: ClockRuntime?
     let modulators: [ModulatorRuntime]
     let midiInputs: [MIDIInputRuntime]
     let webcams: [WebcamRuntime]
@@ -238,7 +236,7 @@ final class RenderScene {
     /// Every stream output (video, spectrum, palette) and stream input in the chain, in chain order.
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
-    /// Every trigger input in the chain, in chain order: Clock · First Beat, Videos' Jump,
+    /// Every trigger input in the chain, in chain order: Audio In · First Beat, Videos' Jump,
     /// LFOs' Reset, the Cutter's Cut.
     let triggerInputs: [TriggerInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
@@ -261,7 +259,6 @@ final class RenderScene {
     /// Knob banks by target prefix: `generator`, `camera`, `post.<id>`, `mod.<id>`.
     let banksByPath: [String: ParamBank]
     var hasAudioInput: Bool { audioIn != nil }
-    var hasClock: Bool { clock != nil }
     /// Every device's chain key, left to right: inputs, `camera`, `lens`, palettes, generators, `post.<id>`.
     let deviceKeys: [String]
     /// The stream feeding each generator's and effect's inputs, by generator key and effect id.
@@ -269,8 +266,6 @@ final class RenderScene {
     let effectSources: [String: [StreamOutput?]]
     /// Palettes whose colours something reads, so their gradients are worth updating.
     let boundPalettes: [PaletteModel]
-    /// True when Audio In's Audio Out is mapped into the Clock's Audio input.
-    var clockHearsAudio: Bool { clock?.hearsAudio == true }
     /// The MIDI input learning controls, if any.
     var learningMIDI: MIDIInputRuntime? { midiInputs.first(where: \.isLearning) }
 
@@ -284,7 +279,6 @@ final class RenderScene {
         self.inputs = inputs
         self.modulators = modulators
         audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
-        clock = inputs.lazy.compactMap { if case .clock(let c) = $0 { return c } else { return nil } }.first
         midiInputs = inputs.compactMap { if case .midi(let m) = $0 { return m } else { return nil } }
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         videos = inputs.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
@@ -294,15 +288,14 @@ final class RenderScene {
             case .webcam(let w): return w
             case .video(let v): return v
             case .picture(let p): return p
-            case .audio, .clock, .midi: return nil
+            case .audio, .midi: return nil
             }
         }
         self.streamOutputs = streamOutputs
         self.streamBindings = streamBindings
         let syncInputs: [StreamInput] = modulators.filter { $0.type == .lfo }
             .map { StreamInput(key: "mod.\($0.id).sync", label: "Sync", kind: .clock) }
-        streamInputs = (clock != nil ? [StreamInput(key: StreamInput.clockAudioKey, label: "Audio", kind: .audio)] : [])
-            + syncInputs
+        streamInputs = syncInputs
             + (camera != nil ? [StreamInput(key: StreamInput.cameraLensKey, label: "Lens", kind: .stmap)] : [])
             + generators.flatMap { gen in gen.inputs.map { StreamInput(key: "\(gen.key).\($0.name)", label: $0.label, kind: $0.kind) } }
             + effects.flatMap { fx in fx.inputs.map { StreamInput(key: "post.\(fx.id).\($0.name)", label: $0.label, kind: $0.kind) } }
@@ -312,7 +305,7 @@ final class RenderScene {
                                    uniquingKeysWith: { a, _ in a })
         let boundKeys = Set(streamBindings.values.map(\.key))
         boundPalettes = palettes.filter { boundKeys.contains($0.outputKey) }
-        triggerInputs = (clock.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
+        triggerInputs = (audioIn.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
             + modulators.compactMap(\.resetTrigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.lens = lens
@@ -320,7 +313,7 @@ final class RenderScene {
         self.effects = effects; self.palettes = palettes
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (lens != nil ? [LensRuntime.key] : []) + palettes.map(\.key) + generators.map(\.key) + effects.map { "post.\($0.id)" }
-        banks = [audioIn?.bank, clock?.bank].compactMap { $0 } + palettes.map(\.bank) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
+        banks = [audioIn?.bank].compactMap { $0 } + palettes.map(\.bank) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
     }
 
     /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
@@ -328,13 +321,12 @@ final class RenderScene {
         for m in midiInputs where m.isLearning != (m.key == key) { m.isLearning = m.key == key }
     }
 
-    /// Render thread, once per frame: runs its inputs (Audio In analyses, then the Clock
-    /// advances, hearing that analysis if mapped), updates every output, then applies mappings
+    /// Render thread, once per frame: runs its inputs (Audio In analyses and advances its
+    /// beat), updates every output, then applies mappings
     /// to every knob and fires trigger inputs, and moves Videos to their in and out points
     /// (and jumps). Nothing here is shared with another scene.
     func modulate(_ f: SignalFrame) {
-        audioIn?.process(dt: f.dt)
-        clock?.advance(f)
+        audioIn?.process(f)
         for o in outputs { o.update(f) }
         for bank in banks { for p in bank.params { p.modAccum = 0 } }
         for m in mappings { m.modulate(f.dt) }

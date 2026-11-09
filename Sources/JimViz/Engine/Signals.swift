@@ -8,13 +8,13 @@ struct SignalFrame {
     /// Seconds since rendering started, for shaders.
     var time: Float = 0
     var dt: Float = 1.0 / 60
-    /// Host time of the frame (`CACurrentMediaTime` scale), for the Clock's tempo tracking.
+    /// Host time of the frame (`CACurrentMediaTime` scale), for Audio In's beat.
     var now: CFTimeInterval = 0
 }
 
 // MARK: - Waves
 
-/// Shapes shared by the clock and LFOs. All return 0...1.
+/// Shapes shared by the beat and LFOs. All return 0...1.
 enum Wave {
     /// 1 on the beat, decaying towards 0.
     static func pulse(_ phase: Double) -> Float { Float(exp(-phase * 6)) }
@@ -46,7 +46,7 @@ enum Wave {
 
 /// A signal a tool produces (0...1 for unipolar, -1...1 for bipolar), that mappings
 /// can route to any knob in the scene.
-/// Keys: `audio.bass`, `clock.pulse`, `mod.lfo.out`, `camera.angle`. Each tool makes its own
+/// Keys: `audio.bass`, `audio.pulse`, `mod.lfo.out`, `camera.angle`. Each tool makes its own
 /// and computes it from its own state. `compute` runs on the render thread once per frame;
 /// `value` is read by the UI meters.
 ///
@@ -55,7 +55,7 @@ enum Wave {
 final class OutputSignal: Identifiable {
     let key: String
     let name: String
-    /// The device it belongs to, for grouping ("Audio In", "Clock", "lfo2").
+    /// The device it belongs to, for grouping ("Audio In", "lfo2").
     let device: String
     let isBipolar: Bool
     /// `.value` or `.trigger`.
@@ -85,7 +85,7 @@ final class OutputSignal: Identifiable {
         if kind == .trigger && value > 0 { lastFired = f.now }
     }
 
-    /// The device it belongs to, as a chain key: `audio`, `clock`, `mod.lfo`, `camera`.
+    /// The device it belongs to, as a chain key: `audio`, `mod.lfo`, `camera`.
     var deviceKey: String { devicePath(key) }
 }
 
@@ -102,7 +102,6 @@ enum Outputs {
         switch parts.first {
         case "midi" where parts.count == 3: return "MIDI · \(MIDIControl(key: parts[2])?.label ?? parts[2])"
         case "audio": return "Audio In · \(humanize(parts.last ?? key))"
-        case "clock": return "Clock · \(humanize(parts.last ?? key))"
         case "mod" where parts.count == 3: return "\(parts[1]) · \(humanize(parts[2]))"
         default: return key
         }

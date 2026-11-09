@@ -14,15 +14,15 @@ struct Preset: Codable {
 // MARK: - Scene
 
 /// A scene is a composed device chain, left to right:
-/// inputs (Audio In, Clock, MIDI, Webcam) → modulation (LFOs) → camera, lens, palette, generators → effects.
+/// inputs (Audio In, MIDI, Webcam) → modulation (LFOs) → camera, lens, palette, generators → effects.
 /// Plus mappings, which route any tool's outputs (and MIDI controls) to any knob.
 /// Each device names its tool and the preset it was loaded from; the preset's values are
 /// copied in, so a scene never depends on (or changes) a preset file.
 /// Edits happen in memory and are written with ⌘S.
 struct SceneFile: Codable, Equatable {
     var name: String
-    /// Signal sources, in chain order: at most one `audio` and one `clock`, any number of `midi`s.
-    /// Without Audio In, audio signals read 0; without Clock, clock outputs aren't available.
+    /// Signal sources, in chain order: at most one `audio`, any number of the rest.
+    /// Without Audio In, audio signals read 0 and there's no beat.
     var inputs: [InputSpec]
     /// LFOs and Maths. Any number.
     var modulators: [ModulatorSpec]
@@ -71,7 +71,7 @@ struct ModulatorSpec: Codable, Equatable {
 }
 
 struct InputSpec: Codable, Equatable {
-    /// Input tool: `audio`, `clock`, `midi`, `webcam`, `video` or `picture`.
+    /// Input tool: `audio`, `midi`, `webcam`, `video` or `picture`.
     var type: String
     /// MIDI inputs, webcams, videos, pictures: unique id within the scene. `midi.<id>`,
     /// `webcam.<id>`, `video.<id>`, `picture.<id>` in mapping keys.
@@ -93,7 +93,7 @@ struct InputSpec: Codable, Equatable {
     var isWebcam: Bool { type == "webcam" }
     var isVideo: Bool { type == "video" }
     var isPicture: Bool { type == "picture" }
-    /// Chain key: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
+    /// Chain key: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
     var deviceKey: String { isMIDI || isWebcam || isVideo || isPicture ? "\(type).\(id ?? type)" : type }
 }
 
@@ -153,7 +153,7 @@ struct EffectSpec: Codable, Equatable {
 }
 
 struct MappingSpec: Codable, Equatable {
-    /// A value output (`audio.kick`, `clock.pulse`, `mod.lfo.out`, `midi.midi.cc-31-7`, `camera.angle`)
+    /// A value output (`audio.kick`, `audio.pulse`, `mod.lfo.out`, `midi.midi.cc-31-7`, `camera.angle`)
     /// or a stream output (`webcam.<id>.video`, `audio.spectrum`, `palette.colors`, `palette.<id>.colors`).
     var source: String
     /// A knob (`generator.<param>`, `camera.<param>`, `post.<id>.<param>`, `mod.<id>.<param>`,

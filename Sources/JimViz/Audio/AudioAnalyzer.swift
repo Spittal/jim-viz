@@ -19,14 +19,24 @@ struct AudioFeatures {
     var active = false
 }
 
-/// Audio In's knobs: analysis settings, per scene and mappable (`audio.<name>`).
+/// Audio In's knobs, per scene and mappable (`audio.<name>`): analysis settings, then the beat's.
 enum AudioParams {
-    static let defs: [ParamDef] = [
+    static let analysis: [ParamDef] = [
         ParamDef(name: "range", defaultValue: 30, min: 6, max: 60, isInt: false),
         ParamDef(name: "release", defaultValue: 0.12, min: 0, max: 1, isInt: false),
         ParamDef(name: "sensitivity", defaultValue: 0.5, min: 0, max: 1, isInt: false),
         ParamDef(name: "gate", defaultValue: -50, min: -90, max: -20, isInt: false),
     ]
+    static let beat: [ParamDef] = [
+        /// Shifts the visuals earlier (positive), in ms, to make up for projector and audio delay.
+        ParamDef(name: "latency", defaultValue: 0, min: -100, max: 250, isInt: false),
+        /// The tempo range beat tracking searches. One octave (max = 2 × min) keeps half- and
+        /// double-time from being confused. Shared by scenes listening to the same source.
+        ParamDef(name: "minBPM", defaultValue: 90, min: 40, max: 250, isInt: true),
+        ParamDef(name: "maxBPM", defaultValue: 180, min: 40, max: 250, isInt: true),
+    ]
+    static let defs = analysis + beat
+    static let beatNames = Set(beat.map(\.name))
 }
 
 /// FFT analysis, run on the render thread once per frame on the latest audio window.
@@ -48,8 +58,6 @@ final class AudioAnalyzer {
     private var lastWritten = 0
 
     private(set) var features = AudioFeatures()
-    /// Weighted onset flux of this frame, for tempo estimation. 0 when no new audio arrived.
-    private(set) var onsetStrength: Float = 0
     /// True when this frame analysed new audio.
     private(set) var fresh = false
     /// Log-spaced spectra, 0...1, for shaders: the whole signal, and its harmonic and
@@ -182,7 +190,6 @@ final class AudioAnalyzer {
         }
         if fresh { onsetDt = 0 }
         self.fresh = fresh
-        onsetStrength = fresh ? onsets[0].lastFlux + 0.5 * onsets[1].lastFlux + 0.25 * onsets[2].lastFlux : 0
         f.kick = onsets[0].envelope
         f.snare = onsets[1].envelope
         f.hat = onsets[2].envelope
@@ -238,7 +245,6 @@ struct OnsetDetector {
     let refractory: Float
     let decay: Float
     private(set) var envelope: Float = 0
-    private(set) var lastFlux: Float = 0
     private var peakDb: Float = -70
     private var lastEnergy: Float = 0
     private var mean: Float = 0
@@ -255,7 +261,6 @@ struct OnsetDetector {
         let energy = pow(10, (db - peakDb) / 10)
         let flux = max(0, energy - lastEnergy)
         lastEnergy = energy
-        lastFlux = active ? flux : 0
         // Adaptive threshold: mean + k·σ of recent flux, never below a floor.
         // Higher sensitivity lowers both.
         let k = 2.5 - 1.5 * sensitivity

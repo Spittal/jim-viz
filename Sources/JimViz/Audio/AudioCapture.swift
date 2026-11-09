@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import QuartzCore
 import Observation
 
 /// Captures one source into a mono ring buffer: Rekordbox (via a Core Audio process tap),
@@ -53,7 +54,9 @@ final class AudioCapture {
     /// Number of selectable stereo pairs on the tapped device (1 for a stereo mixdown).
     private(set) var channelPairs = 1
 
-    @ObservationIgnored let ring = SampleRing()
+    @ObservationIgnored let ring: SampleRing
+    /// Beat and bar tracking on this source, running only while a Clock follows it.
+    @ObservationIgnored let beats: LiveBeatTracker
     @ObservationIgnored private let ioQueue = DispatchQueue(label: "jim-viz.audio", qos: .userInteractive)
     @ObservationIgnored private var tapID = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var aggregateID = AudioObjectID(kAudioObjectUnknown)
@@ -74,6 +77,8 @@ final class AudioCapture {
     init(source: Source, channelPair: Int) {
         self.source = source
         self.channelPair = channelPair
+        ring = SampleRing()
+        beats = LiveBeatTracker(ring: ring)
     }
 
     /// True while a scene on screen listens to it. Capture runs only then.
@@ -266,8 +271,11 @@ final class AudioCapture {
         let ring = self.ring
         let pair = channelPair
         var proc: AudioDeviceIOProcID?
-        try check(AudioDeviceCreateIOProcIDWithBlock(&proc, device, ioQueue) { _, input, _, _, _ in
-            Self.consume(input, pair: pair, tapChannels: tapChannels, into: ring)
+        try check(AudioDeviceCreateIOProcIDWithBlock(&proc, device, ioQueue) { _, input, inputTime, _, _ in
+            let t = inputTime.pointee
+            let host = t.mFlags.contains(.hostTimeValid)
+                ? Double(AudioConvertHostTimeToNanos(t.mHostTime)) / 1e9 : CACurrentMediaTime()
+            Self.consume(input, pair: pair, tapChannels: tapChannels, hostTime: host, into: ring)
         }, "Create IO proc")
         procID = proc
         ioDevice = device
@@ -277,7 +285,7 @@ final class AudioCapture {
     /// Mixes the chosen channel pair to mono and writes it to the ring. Handles both
     /// interleaved and per-channel buffer layouts.
     private static func consume(_ input: UnsafePointer<AudioBufferList>, pair: Int, tapChannels: Int?,
-                                into ring: SampleRing) {
+                                hostTime: CFTimeInterval, into ring: SampleRing) {
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         var total = 0
         for b in abl { total += Int(b.mNumberChannels) }
@@ -300,7 +308,7 @@ final class AudioCapture {
         }
         guard let (lp, lc, ln) = locate(left), let (rp, rc, rn) = locate(right) else { return }
         let frames = Int(abl[0].mDataByteSize) / (MemoryLayout<Float>.size * max(Int(abl[0].mNumberChannels), 1))
-        ring.write(frames: frames) { i in (lp[i * ln + lc] + rp[i * rn + rc]) * 0.5 }
+        ring.write(frames: frames, hostTime: hostTime) { i in (lp[i * ln + lc] + rp[i * rn + rc]) * 0.5 }
     }
 
     private var rateText: String {

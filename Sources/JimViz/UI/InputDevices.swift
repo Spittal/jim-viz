@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// An LFO, in the Modulation section. Its output (in the inspector) drives other knobs, and its
-/// own knobs can be mapped, so LFOs can modulate each other. It syncs to clock only when
-/// mapped from Clock (Clock · Sync → mod.<id>.sync); otherwise it runs free.
+/// own knobs can be mapped, so LFOs can modulate each other. It syncs to the beat only when
+/// mapped from Audio In (Audio In · Sync → mod.<id>.sync); otherwise it runs free.
 struct LFODevice: View {
     @Environment(Engine.self) private var engine
     @Bindable var mod: ModulatorRuntime

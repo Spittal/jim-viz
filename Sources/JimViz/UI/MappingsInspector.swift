@@ -184,11 +184,11 @@ private struct DeviceInspector: View {
             InspectorSection("Inputs", key: "video-in") {
                 ForEach(sockets) { StreamInputTag(scene: scene, input: $0) }
                 if !sockets.isEmpty {
-                    empty("Each takes one output of its kind: video from a Webcam, Spectrum or Audio Out from Audio In, Colours from the Palette, Sync from the Clock, an ST Map from a Lens. Unmapped, video and spectrum are off, the palette is grey, LFOs and rate knobs run free, the Clock doesn't follow the audio, and the Camera sees straight.")
+                    empty("Each takes one output of its kind: video from a Webcam, Spectrum, Audio Out or Sync from Audio In, Colours from the Palette, an ST Map from a Lens. Unmapped, video and spectrum are off, the palette is grey, LFOs and rate knobs run free, and the Camera sees straight.")
                 }
                 ForEach(triggers) { TriggerInputTag(scene: scene, input: $0) }
                 if !triggers.isEmpty {
-                    empty("Triggers fire from any number of outputs: a trigger (Clock · On Beat, Camera · On Cut) on its event, or a value each time it rises past ½ (an LFO, a kick, a MIDI pad). Click one to fire it by hand or pick what fires it.")
+                    empty("Triggers fire from any number of outputs: a trigger (Audio In · On Beat, Camera · On Cut) on its event, or a value each time it rises past ½ (an LFO, a kick, a MIDI pad). Click one to fire it by hand or pick what fires it.")
                 }
             }
         }
@@ -202,7 +202,7 @@ private struct DeviceInspector: View {
 
     private var kind: String {
         switch key {
-        case "audio", "clock": return "Input"
+        case "audio": return "Input"
         case _ where key.hasPrefix("webcam."): return "Input · Video"
         case _ where key.hasPrefix("video."): return "Input · Video"
         case _ where key.hasPrefix("picture."): return "Input · Picture"

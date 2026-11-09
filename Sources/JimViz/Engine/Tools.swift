@@ -11,7 +11,7 @@ enum ToolCardinality: String, CaseIterable, Codable, Hashable {
 struct Tool: Identifiable, Hashable {
     var id: String { "\(kind.rawValue):\(name)" }
     let kind: DeviceKind
-    /// Tool id: `audio`, `clock`, `midi`, a camera rig (`orbit`, `static`…), a lens shader, `palette`, a generator shader or an effect shader name.
+    /// Tool id: `audio`, `midi`, a camera rig (`orbit`, `static`…), a lens shader, `palette`, a generator shader or an effect shader name.
     let name: String
     let label: String
     let cardinality: ToolCardinality
@@ -34,7 +34,6 @@ enum Tools {
     static func label(_ kind: DeviceKind, _ name: String) -> String {
         switch (kind, name) {
         case (.input, "audio"): return "Audio In"
-        case (.input, "clock"): return "Clock"
         case (.modulation, _): return ModulatorType(rawValue: name)?.label ?? humanize(name)
         case (.input, "midi"): return "MIDI Input"
         case (.input, "webcam"): return "Webcam"
@@ -57,7 +56,6 @@ enum Tools {
         switch kind {
         case .input:
             switch name {
-            case "clock": return "metronome"
             case "midi": return "pianokeys"
             case "webcam": return "video"
             case "video": return "play.rectangle"
@@ -117,7 +115,6 @@ enum Tools {
     static func cardinality(_ kind: DeviceKind, _ name: String) -> ToolCardinality {
         switch (kind, name) {
         case (.input, "audio"): return .one
-        case (.input, "clock"): return .one
         case (.camera, _): return .one
         case (.lens, _): return .one
         case (.palette, _): return .many
@@ -138,7 +135,7 @@ enum Tools {
             return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name),
                         presets: presets, category: category)
         }
-        return [tool(.input, "audio"), tool(.input, "clock"), tool(.input, "midi"), tool(.input, "webcam"),
+        return [tool(.input, "audio"), tool(.input, "midi"), tool(.input, "webcam"),
                 tool(.input, "video"), tool(.input, "picture"),
                 tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro")]
             + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + store.availableLenses().map { tool(.lens, $0) }

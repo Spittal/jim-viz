@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The scene's device chain, processed left to right in three sections:
-/// INPUTS (Audio In, Clock, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, lens,
+/// INPUTS (Audio In, MIDI, Webcam) | MODULATION (LFOs, Maths) | GENERATION (camera, lens,
 /// palettes, generators) | EFFECTS.
 /// Devices come from the browser by drag or double-click; effects reorder by dragging their header.
 /// Click a device to select it: the inspector then shows its outputs and mappings.
@@ -25,12 +25,6 @@ struct DeviceChain: View {
                                     Button("Remove", role: .destructive) { engine.removeInput("audio") }
                                 }
                                 .chainFrame("device:input:audio:audio")
-                        case .clock(let c):
-                            ClockDevice(clock: c, accent: isReplacing(key: "clock", kind: .input))
-                                .contextMenu {
-                                    Button("Remove", role: .destructive) { engine.removeInput("clock") }
-                                }
-                                .chainFrame("device:input:clock:clock")
                         case .midi(let input):
                             MIDIInputDevice(input: input, accent: isReplacing(key: input.id, kind: .input))
                                 .chainFrame("device:input:\(input.id):midi")

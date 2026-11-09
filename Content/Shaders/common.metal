@@ -20,7 +20,7 @@
 //
 // The spectrum is 128 log-spaced bins from 30 Hz (u=0) to 16 kHz (u=1), values 0..1.
 // Audio levels, hits and the clock reach shaders the same way as anything else: map an
-// output (Audio In · Kick, Clock · Pulse) onto a knob.
+// output (Audio In · Kick, Audio In · Pulse) onto a knob.
 
 #include <metal_stdlib>
 using namespace metal;

@@ -46,13 +46,13 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 
 | Kind | Example outputs | Consumed by |
 |---|---|---|
-| value (0–1) | Audio In · Kick, Audio In · Percussive, Clock · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
+| value (0–1) | Audio In · Kick, Audio In · Percussive, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
 | spectrum | Audio In · Spectrum, Harmonic Spectrum, Percussive Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
-| audio | Audio In · Audio Out | Clock · Audio |
-| clock | Clock · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
-| trigger | Clock · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Clock · First Beat |
+| audio | Audio In · Audio Out | nothing yet |
+| clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
+| trigger | Audio In · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Audio In · First Beat |
 | stmap | Lens · ST Map (Nuke convention: s, t in red, green; t bottom to top) | Camera · Lens, which reprojects the rendered picture before the effects |
 
 - A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%
@@ -67,14 +67,14 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 The device chain reads like an Ableton track, and the picture is built left to right:
 
 ```
-Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens → Palette → Generator → Effects…
+Inputs (Audio In, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens → Palette → Generator → Effects…
 ```
 
 - Inputs and modulators produce signals.
 - The generator renders the scene.
 - Each effect processes the previous effect's output (`src`), in chain order. Reordering
   effects changes the image.
-- Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
+- Chain keys: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
   `mod.<id>`, `camera`, `lens`, `palette` (the first palette) and `palette.<id>` (the rest),
   `generator` (the first generator) and `generator.<id>` (the rest), `post.<id>`.
 - **A scene** is one such chain plus its mappings, saved as JSON in the library's `Scenes` folder (see Storage).
@@ -155,7 +155,7 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
   `Presets`, `Playlists`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
   in git, and the app creates the folders empty on first launch.
   - `JIMVIZ_LIBRARY` overrides it.
-- **Content: the repo's `Content/`** holds `Shaders` and `Maps`, which are code and ship
+- **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking), which are code and ship
   with the app.
   - `scripts/run.sh` points `JIMVIZ_CONTENT` at it, so shaders hot-reload.
   - The bundled app reads its own copy in `Contents/Resources/Content`.

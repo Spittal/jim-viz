@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Compile every shader, render every scene offscreen with a synthetic 124 BPM track feeding
-# the audio analyzer, and score onset detection against known hit times.
+# the audio analyzer, and score onset detection and beat tracking against known hit times.
 # Pass a directory to also write a PNG snapshot of each scene: scripts/check.sh /tmp/snaps
 # Runs on a scratch copy of your library (~/Library/Application Support/jim-viz), so your
 # scenes, presets and playlists are checked but never written to.
@@ -22,7 +22,7 @@ trap "rm -rf $scratch" EXIT
 for d in Scenes Presets Playlists; do if [[ -d "$src/$d" ]]; then cp -R "$src/$d" $scratch/; fi; done
 for d in Videos Pictures; do if [[ -d "$src/$d" ]]; then ln -s "$src/$d" $scratch/$d; fi; done
 JIMVIZ_CONTENT="$PWD/Content" JIMVIZ_LIBRARY=$scratch .build/debug/JimViz $args
-echo "--- onset detection"
-.build/debug/JimViz --analyze $track --truth $truth
-echo "--- onset detection under a pad"
-.build/debug/JimViz --analyze $padded --truth $truth
+echo "--- onset detection and beat tracking"
+JIMVIZ_CONTENT="$PWD/Content" .build/debug/JimViz --analyze $track --truth $truth --expect-bpm 124
+echo "--- onset detection and beat tracking under a pad"
+JIMVIZ_CONTENT="$PWD/Content" .build/debug/JimViz --analyze $padded --truth $truth --expect-bpm 124

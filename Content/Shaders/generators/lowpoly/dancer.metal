@@ -4,8 +4,8 @@
 // then a turn to the side for a creep, a hands-to-head bounce, a lean back, and a lunge with
 // both arms thrust out, pulsing, before it turns back to the front.
 //
-// tempo is the dance's speed: 1 is 120 BPM. Map Clock · Sync into Sync and it follows the
-// Clock instead: 1 is on the beat, 2 double time, 0.5 half time. snap holds each pose and
+// tempo is the dance's speed: 1 is 120 BPM. Map Audio In · Sync into Sync and it follows
+// the beat instead: 1 is on the beat, 2 double time, 0.5 half time. snap holds each pose and
 // pops to the next (0 glides between them); energy is how far each pose goes from standing
 // still (0 stands, past 1 overdoes it). hit throws every limb out into a star and jumps (map
 // a kick here); flail jerks the limbs about on their own. limbWidth thickens every bone,

@@ -54,14 +54,20 @@ enum SelfCheck {
         let ring = SampleRing(capacity: 16384)
         ring.setSampleRate(rate)
         let analyzer = AudioAnalyzer()
-        let tempo = AudioTempo()
+        let tempo = BeatTracker()
         if let i = CommandLine.arguments.firstIndex(of: "--bpm-range"), i + 1 < CommandLine.arguments.count {
             let parts = CommandLine.arguments[i + 1].split(separator: "-").compactMap { Double($0) }
-            if parts.count == 2 { tempo.minBPM = parts[0]; tempo.maxBPM = parts[1] }
+            if parts.count == 2 { tempo.setRange(minBPM: parts[0], maxBPM: parts[1]) }
         }
+        // `--activations out.bin`: BeatNet's (beat, downbeat) per frame, float32, for comparing
+        // against a reference.
+        let dumpPath = CommandLine.arguments.firstIndex(of: "--activations").flatMap { CommandLine.arguments[$0 + 1] }
+        var activations: [Float] = []
+        var trackSeconds = 0.0
         var tempoLog: [String] = []
         var beatAt: [(Double, Double)] = [] // (time, beat) when usable
         let chunk = Int(rate / 60)
+        var mono = [Float](repeating: 0, count: chunk)
         var detected: [String: [Double]] = ["kick": [], "snare": [], "hat": []]
         var prev = AudioFeatures()
         var sums = (bass: Float(0), mid: Float(0), high: Float(0)), count = 0
@@ -69,23 +75,28 @@ enum SelfCheck {
         var pos = 0
         while pos < frames {
             let n = min(chunk, frames - pos)
-            ring.write(frames: n) { i in
+            for i in 0..<n {
                 var v: Float = 0
                 for c in 0..<channels { v += data[c][pos + i] }
-                return v / Float(channels)
+                mono[i] = v / Float(channels)
             }
+            ring.write(frames: n, hostTime: Double(pos) / rate) { mono[$0] }
+            let framesBefore = tempo.frames
+            let clock = CACurrentMediaTime()
+            mono.withUnsafeBufferPointer { tempo.push(UnsafeBufferPointer(rebasing: $0[0..<n]), rate: rate, time: Double(pos) / rate) }
+            trackSeconds += CACurrentMediaTime() - clock
+            if dumpPath != nil, tempo.frames != framesBefore { activations += [tempo.activation.beat, tempo.activation.downbeat] }
             pos += n
             analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
             splitLog.append((t, f.harmonic, f.percussive))
-            if analyzer.fresh { tempo.feed(strength: analyzer.onsetStrength, active: f.active, time: t) }
-            tempo.update(now: t)
-            if let rd = tempo.reading(at: t) { beatAt.append((t, rd.beat)) }
+            if let rd = tempo.estimate.reading(at: t) { beatAt.append((t, rd.beat)) }
             if pos / chunk % 120 == 0 {
-                let st = tempo.status()
-                tempoLog.append(String(format: "%.0fs %.1f (%.0f%%%@)", t, st.bpm, st.confidence * 100,
-                                       tempo.reading(at: t) == nil ? ", unusable" : ""))
+                let st = tempo.estimate
+                tempoLog.append(String(format: "%.0fs %.1f (%.0f%%%@%@)", t, st.bpm, st.confidence * 100,
+                                       st.barOffset == nil ? "" : ", bar",
+                                       st.reading(at: t) == nil ? ", unusable" : ""))
             }
             if f.kick > prev.kick + 0.5 { detected["kick"]!.append(t) }
             if f.snare > prev.snare + 0.5 { detected["snare"]!.append(t) }
@@ -96,7 +107,11 @@ enum SelfCheck {
         print(String(format: "mean levels: bass %.2f  mid %.2f  high %.2f", sums.bass / Float(count),
                      sums.mid / Float(count), sums.high / Float(count)))
         print("tempo: " + tempoLog.joined(separator: " · "))
-        let finalTempo = tempo.status().bpm
+        print(String(format: "beat tracking: %.3f ms per 20 ms frame (%d frames)", trackSeconds * 1000 / Double(max(tempo.frames, 1)), tempo.frames))
+        if let dumpPath {
+            activations.withUnsafeBytes { try? Data($0).write(to: URL(fileURLWithPath: dumpPath)) }
+        }
+        let finalTempo = tempo.estimate.bpm
         var truth: [String: [Double]] = [:]
         if let truthPath, let text = try? String(contentsOfFile: truthPath, encoding: .utf8) {
             for line in text.split(separator: "\n") {
@@ -126,8 +141,18 @@ enum SelfCheck {
             }
             if !errs.isEmpty {
                 let meanAbs = errs.map(abs).reduce(0, +) / Double(errs.count)
-                print(String(format: "beat phase at kicks: mean |error| %.0f ms over %d kicks", meanAbs, errs.count))
+                let mean = errs.reduce(0, +) / Double(errs.count)
+                print(String(format: "beat phase at kicks: mean |error| %.0f ms, mean %+.0f ms (+ is early) over %d kicks", meanAbs, mean, errs.count))
             }
+        }
+        // Bar: which beat of the tracked bar each clap lands on (2 and 4 when the bar is right).
+        if let claps = truth["snare"], !beatAt.isEmpty {
+            var inBar = [0, 0, 0, 0]
+            for k in claps {
+                guard let rd = beatAt.first(where: { $0.0 >= k }), rd.0 - k < 0.02 else { continue }
+                inBar[((Int(rd.1.rounded()) % 4) + 4) % 4] += 1
+            }
+            print("claps by beat of the tracked bar (1-4): \(inBar.map(String.init).joined(separator: " "))")
         }
         if let expected = CommandLine.arguments.firstIndex(of: "--expect-bpm").flatMap({ Double(CommandLine.arguments[$0 + 1]) }) {
             let good = abs(finalTempo - expected) < 1
@@ -198,7 +223,7 @@ enum SelfCheck {
         // Its own empty scene (camera, no generator) to paste into, so the check never
         // depends on scenes you might rename or delete.
         let emptyURL = engine.store.scenesDir.appendingPathComponent("selfcheck-empty.json")
-        let empty = SceneFile(name: "Self-check Empty", inputs: [InputSpec(type: "clock")], modulators: [],
+        let empty = SceneFile(name: "Self-check Empty", inputs: [InputSpec(type: "audio", device: "system")], modulators: [],
                               camera: CameraSlot(type: "orbit"), palettes: [PaletteSlot(colors: Tools.defaultPalette)],
                               generators: [], effects: [], mappings: [])
         do { try empty.write(to: emptyURL) } catch { return "could not write the test scene" }
@@ -217,7 +242,7 @@ enum SelfCheck {
             return "mappings not all active: \(scene.mappings.compactMap(\.problem))"
         }
         let keys = Set(scene.outputs.map(\.key))
-        guard keys.isSuperset(of: ["audio.kick", "clock.pulse", "clock.bar", "mod.lfo.out", "camera.angle"]) else {
+        guard keys.isSuperset(of: ["audio.kick", "audio.pulse", "audio.bar", "mod.lfo.out", "camera.angle"]) else {
             return "outputs missing: \(keys.sorted())"
         }
         // Audio In's Intensity climbs while the music is loud and busy.
@@ -229,22 +254,22 @@ enum SelfCheck {
         for _ in 0..<180 { intensity.update(SignalFrame()) }
         guard intensity.value > 0.7 else { return "intensity didn't rise: \(intensity.value)" }
 
-        // Audio In's and the Clock's knobs belong to the scene and map like any other.
+        // Audio In's knobs, the beat's included, belong to the scene and map like any other.
         engine.addMapping(source: "mod.lfo.out", target: "audio.gate")
-        engine.addMapping(source: "audio.kick", target: "clock.latency")
-        guard let tools = engine.current, tools.mappings.filter({ $0.target == "audio.gate" || $0.target == "clock.latency" }).allSatisfy(\.isActive),
-              tools.audioIn?.bank["gate"]?.isModulated == true, tools.clock?.bank["latency"]?.isModulated == true else {
-            return "Audio In or Clock knobs not mappable"
+        engine.addMapping(source: "audio.kick", target: "audio.latency")
+        guard let tools = engine.current, tools.mappings.filter({ $0.target == "audio.gate" || $0.target == "audio.latency" }).allSatisfy(\.isActive),
+              tools.audioIn?.bank["gate"]?.isModulated == true, tools.audioIn?.bank["latency"]?.isModulated == true else {
+            return "Audio In knobs not mappable"
         }
         tools.audioIn?.bank["sensitivity"]?.setBase(0.8)
-        tools.clock?.bank["minBPM"]?.setBase(100)
+        tools.audioIn?.bank["minBPM"]?.setBase(100)
         guard let saved = engine.currentSnapshot(),
               saved.inputs.first(where: { $0.type == "audio" })?.params?["sensitivity"] == 0.8,
-              saved.inputs.first(where: { $0.type == "clock" })?.params?["minBPM"] == 100 else {
-            return "Audio In or Clock knobs not saved with the scene"
+              saved.inputs.first(where: { $0.type == "audio" })?.params?["minBPM"] == 100 else {
+            return "Audio In knobs not saved with the scene"
         }
         engine.removeMappings(target: "audio.gate")
-        engine.removeMappings(target: "clock.latency")
+        engine.removeMappings(target: "audio.latency")
 
         // Palette inputs: hue turns red to green at +120°, brightness scales, and they're mappable.
         let green = PaletteParams.adjust(SIMD3(1, 0, 0)) { ["hue": 120, "saturation": 1, "brightness": 1][$0] ?? 1 }
@@ -290,15 +315,15 @@ enum SelfCheck {
             return "second palette not removed cleanly"
         }
 
-        // Frames that take no time, at a beat set on the scene's own Clock.
+        // Frames that take no time, at a beat set on the scene's own Audio In.
         var f = SignalFrame()
         f.dt = 0
-        engine.current?.clock?.manager.seek(beat: 8)  // on a downbeat: pulse = 1, bar ramp = 0
+        engine.current?.audioIn?.clock.seek(beat: 8)  // on a downbeat: pulse = 1, bar ramp = 0
 
         // Modulation adds amount × signal × range on top of the knob.
-        engine.addMapping(source: "clock.pulse", target: "camera.fov")
+        engine.addMapping(source: "audio.pulse", target: "camera.fov")
         guard let s1 = engine.current, let fov = s1.camera?["fov"],
-              let m = s1.mappings.first(where: { $0.source == "clock.pulse" && $0.target == "camera.fov" }),
+              let m = s1.mappings.first(where: { $0.source == "audio.pulse" && $0.target == "camera.fov" }),
               m.isActive, m.amount == 0.25, fov.isModulated else { return "pulse → fov not mapped" }
         s1.modulate(f)
         guard abs(fov.live - fov.def.clamp(fov.base + 0.25 * fov.def.span)) < 0.01 else { return "modulation amount wrong: \(fov.live)" }
@@ -309,7 +334,7 @@ enum SelfCheck {
         guard abs(fov.live - fov.def.clamp(fov.base - 0.1 * fov.def.span)) < 0.01 else { return "inverted amount wrong" }
         guard abs(m.contribution + 0.1) < 0.001 else { return "mapping contribution wrong: \(m.contribution)" }
         // Settings survive structural edits.
-        engine.addMapping(source: "clock.bar", target: "camera.roll")
+        engine.addMapping(source: "audio.bar", target: "camera.roll")
         guard let kept = engine.current?.mappings.first(where: { $0.target == "camera.fov" }),
               kept.amount == 0.1, kept.invert else {
             return "mapping settings lost on rebuild"
@@ -370,21 +395,11 @@ enum SelfCheck {
             return "audio mapping not restored"
         }
         engine.apply(.input, "audio")
-        guard engine.current?.inputs.map(\.id) == ["audio", "clock"] else {
+        guard engine.current?.inputs.map(\.id) == ["audio"] else {
             return "inputs out of order or duplicated: \(engine.current?.inputs.map(\.id) ?? [])"
         }
-        engine.removeInput("clock")
-        guard engine.current?.hasClock == false,
-              engine.current?.mappings.first(where: { $0.source == "clock.bar" })?.problem == "Needs Clock in the chain" else {
-            return "clock mapping not paused without Clock"
-        }
-        engine.apply(.input, "clock")
-        guard engine.current?.inputs.map(\.id) == ["audio", "clock"],
-              engine.current?.mappings.filter({ $0.source.hasPrefix("clock.") }).allSatisfy(\.isActive) == true else {
-            return "clock not restored after Audio In"
-        }
 
-        // LFOs: unique ids, starts free, syncs only with Clock mapping, bipolar output, mappable knobs.
+        // LFOs: unique ids, starts free, syncs only with a Sync mapping, bipolar output, mappable knobs.
         engine.apply(.modulation, "lfo", preset: "selfcheck-bar-saw")
         guard let lfo2 = engine.current?.modulators.first(where: { $0.id == "lfo2" }), lfo2.id == "lfo2", lfo2.presetLabel == "Bar Saw" else {
             return "LFO preset not added as lfo2"
@@ -407,27 +422,27 @@ enum SelfCheck {
         // Sync via mapping only: typed stream mapping.
         let mapCount = engine.current?.mappings.count ?? 0
         engine.addMapping(source: "audio.kick", target: "mod.lfo2.sync")
-        guard engine.current?.mappings.count == mapCount else { return "value mapped into clock sync input" }
-        engine.addMapping(source: StreamOutput.clockSyncKey, target: "mod.lfo2.sync")
+        guard engine.current?.mappings.count == mapCount else { return "value mapped into a Sync input" }
+        engine.addMapping(source: StreamOutput.syncKey, target: "mod.lfo2.sync")
         guard let s2 = engine.current, s2.modulators.first(where: { $0.id == "lfo2" })?.isSynced == true else {
-            return "LFO not synced after clock mapping"
+            return "LFO not synced after Sync mapping"
         }
         guard s2.mappings.filter({ $0.source.hasPrefix("mod.") }).allSatisfy(\.isActive) else {
             return "LFO mappings inactive"
         }
         let depth = s2.modulators.first { $0.id == "lfo2" }!.bank["depth"]!.live
         // Synced 1-bar saw up: at beat 3 (3/4 cycle), bipolar output is +0.5 * depth.
-        s2.clock?.manager.seek(beat: 3)
+        s2.audioIn?.clock.seek(beat: 3)
         s2.modulate(f)
         s2.modulate(f)
         guard let out = s2.outputs.first(where: { $0.key == "mod.lfo2.out" }),
               abs(out.value - 0.5 * depth) < 0.02 else { return "LFO positive output wrong" }
         // At beat 1 (1/4 cycle), bipolar output is -0.5 * depth (negative swing).
-        s2.clock?.manager.seek(beat: 1)
+        s2.audioIn?.clock.seek(beat: 1)
         s2.modulate(f)
         s2.modulate(f)
         guard abs(out.value - (-0.5 * depth)) < 0.02 else { return "LFO negative bipolar output wrong" }
-        // Removing clock mapping reverts LFO to free running.
+        // Removing the Sync mapping reverts LFO to free running.
         engine.removeMappings(target: "mod.lfo2.sync")
         guard engine.current?.modulators.first(where: { $0.id == "lfo2" })?.isSynced == false else {
             return "LFO still synced after sync mapping removed"
@@ -566,7 +581,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum", "clock.sync", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum", "audio.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -785,72 +800,67 @@ enum SelfCheck {
         return nil
     }
 
-    /// The Clock follows audio only through a mapping: Audio In · Audio Out into Clock · Audio.
-    private static func checkClockAudio(engine: Engine) -> String? {
+    /// Audio In's beat: its outputs are typed and start unmapped, and the beat follows the
+    /// tracker while it's sure and carries on at the last tempo while it isn't.
+    private static func checkBeat(engine: Engine) -> String? {
         let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
-        guard let scene = engine.current, scene.hasClock, scene.hasAudioInput else { return "test scene needs Audio In and Clock" }
-        engine.removeMappings(target: StreamInput.clockAudioKey)
-        guard engine.current?.clockHearsAudio == false else { return "Clock hears audio without a mapping" }
+        guard let scene = engine.current, let audio = scene.audioIn else { return "test scene needs Audio In" }
+        let keys = Set(scene.outputs.map(\.key))
+        for k in ["audio.pulse", "audio.beat", "audio.bar", "audio.phrase", "audio.onBeat", "audio.onBar", "audio.onPhrase"] where !keys.contains(k) {
+            return "Audio In has no \(k)"
+        }
+        guard scene.streamOutputs.contains(where: { $0.key == StreamOutput.syncKey && $0.kind == .clock }),
+              scene.streamOutputs.contains(where: { $0.key == StreamOutput.audioKey && $0.kind == .audio }),
+              scene.triggerInputs.contains(where: { $0 === audio.firstBeatTrigger }) else {
+            return "Audio In lacks Sync, Audio Out or First Beat"
+        }
 
-        // Typed: audio only into the Clock, and the Clock takes only audio.
+        // Typed: Sync and Audio Out go nowhere they don't belong.
         let count = engine.current?.mappings.count
         engine.addMapping(source: StreamOutput.audioKey, target: "generator.spec")
         engine.addMapping(source: StreamOutput.audioKey, target: "camera.fov")
-        engine.addMapping(source: StreamOutput.spectrumKey, target: StreamInput.clockAudioKey)
-        engine.addMapping(source: "audio.kick", target: StreamInput.clockAudioKey)
-        guard engine.current?.mappings.count == count else { return "audio mapped across kinds" }
+        engine.addMapping(source: StreamOutput.syncKey, target: "camera.fov")
+        engine.addMapping(source: StreamOutput.spectrumKey, target: "audio.firstBeat")
+        guard engine.current?.mappings.count == count else { return "beat or audio mapped across kinds" }
 
-        engine.addMapping(source: StreamOutput.audioKey, target: StreamInput.clockAudioKey)
-        guard engine.current?.clockHearsAudio == true else { return "Audio Out → Clock · Audio did not connect" }
-
-        // Without Audio In the mapping waits; without the Clock it has nowhere to go.
+        // Nothing connects itself: re-adding Audio In brings back its mappings and adds none.
+        let mapped = engine.current?.mappings.count
         engine.removeInput("audio")
-        guard engine.current?.clockHearsAudio == false,
-              engine.current?.mappings.first(where: { $0.target == StreamInput.clockAudioKey })?.problem == "Needs Audio In in the chain" else {
-            return "Clock still hears audio without Audio In"
-        }
         engine.apply(.input, "audio")
-        guard engine.current?.clockHearsAudio == true else { return "mapping did not resume when Audio In came back" }
+        guard engine.current?.mappings.count == mapped else { return "new Audio In connected its beat" }
 
-        // Nothing connects itself: a Clock added to a scene starts unmapped.
-        engine.removeMappings(target: StreamInput.clockAudioKey)
-        engine.removeInput("clock")
-        engine.apply(.input, "clock")
-        guard engine.current?.hasClock == true, engine.current?.clockHearsAudio == false else { return "new Clock connected itself" }
-
-        // The clock follows a steady beat only while it hears it.
-        func run(hearing: Bool) -> ClockSourceKind {
-            let clock = ClockManager()
-            let period = 60.0 / 124
-            for i in 0..<(60 * 10) {
-                let t = Double(i) / 60
-                let onBeat = (t.truncatingRemainder(dividingBy: period)) < 1.0 / 60
-                if hearing { clock.audioTempo.feed(strength: onBeat ? 1 : 0, active: true, time: t) }
-                clock.advance(now: t, dt: 1.0 / 60, hearsAudio: hearing)
-            }
-            return clock.active
+        // Follows a sure tracker; carries on at the same tempo when it isn't.
+        let clock = BeatClock()
+        let source = SteadyBeat(bpm: 124)
+        var t = 0.0
+        for _ in 0..<(60 * 10) { t += 1.0 / 60; clock.advance(now: t, dt: 1.0 / 60, source: source) }
+        guard clock.following, abs(clock.bpm - 124) < 0.1 else { return "beat didn't follow a steady tracker" }
+        source.on = false
+        let before = clock.beat
+        for _ in 0..<(60 * 4) { t += 1.0 / 60; clock.advance(now: t, dt: 1.0 / 60, source: source) }
+        guard !clock.following, abs((clock.beat - before) - 4 * 124 / 60) < 0.05 else {
+            return String(format: "beat didn't carry on at the tempo without the tracker (%.2f beats in 4 s)", clock.beat - before)
         }
-        guard run(hearing: false) == .manual else { return "clock followed audio it wasn't mapped to hear" }
-        guard run(hearing: true) == .audio else { return "clock didn't follow a steady mapped beat" }
 
         // First Beat: the beat nearest the press becomes bar 1, beat 1 of the phrase, whether
         // pressed a little early or late, without the output jumping.
         func firstBeat(early: Bool, hearing: Bool) -> String? {
-            let clock = ClockManager()
-            let period = 60.0 / 124
+            let clock = BeatClock()
+            // Without a tracked beat the clock carries on at its starting tempo.
+            let period = 60.0 / (hearing ? 124 : 120)
             let dt = 1.0 / 60
             let downbeat = period * 20  // the beat the user means, ~10 s in
             let press = downbeat + (early ? -0.1 : 0.1) * period
+            let source = SteadyBeat(bpm: 124)
+            source.on = hearing
             var pressed = false
             var last: Double?
             for i in 0..<(60 * 16) {
                 let t = Double(i) * dt
-                let onBeat = (t.truncatingRemainder(dividingBy: period)) < dt
-                if hearing { clock.audioTempo.feed(strength: onBeat ? 1 : 0, active: true, time: t) }
                 if !pressed, t >= press { clock.firstBeat(at: press); pressed = true }
-                clock.advance(now: t, dt: dt, hearsAudio: hearing)
+                clock.advance(now: t, dt: dt, source: source)
                 if let l = last {
                     // Renumbering moves the count by whole beats only; the phase keeps flowing.
                     let step = clock.beat - l
@@ -859,9 +869,9 @@ enum SelfCheck {
                 }
                 last = clock.beat
             }
-            if hearing, clock.active != .audio { return "clock lost the beat after First Beat" }
+            if hearing, !clock.following { return "clock lost the beat after First Beat" }
             // At the end, the beat count should match the beats elapsed since the downbeat:
-            // following audio that's the beat the press was nearest; on the manual clock, the
+            // following the tracker that's the beat the press was nearest; carrying on, the
             // press itself.
             let end = Double(60 * 16 - 1) * dt
             let expected = (end - (hearing ? downbeat : press)) / period
@@ -877,10 +887,99 @@ enum SelfCheck {
                 if let e = firstBeat(early: early, hearing: hearing) { return e }
             }
         }
+        if let e = checkClockBar() { return e }
         return nil
     }
 
-    /// Every scene owns its tools: Audio In analyses with its own knobs and Clock keeps its own
+    /// BeatNet, the bar-pointer HMM and the grid on the synthetic 124 BPM track (kick on every beat
+    /// but a two-bar breakdown, claps on 2 and 4), played twice: the tempo, beats within a few ms
+    /// of the kicks, a downbeat that isn't a clap, and the same answer every run.
+    private static func checkBeatTracker(_ audio: (samples: [Float], rate: Double)) -> String? {
+        let period = 60.0 / 124
+        let length = Double(audio.samples.count) / audio.rate
+        func run() -> (BeatEstimate, [Double], [Int]) {
+            let tracker = BeatTracker()
+            let chunk = Int(audio.rate / 100)
+            var errors: [Double] = [], clapBeats: [Int] = []
+            var pos = 0
+            let total = audio.samples.count * 2
+            var buf = [Float](repeating: 0, count: chunk)
+            var nextBeat = 0
+            while pos + chunk <= total {
+                for i in 0..<chunk { buf[i] = audio.samples[(pos + i) % audio.samples.count] }
+                buf.withUnsafeBufferPointer { tracker.push($0, rate: audio.rate, time: Double(pos) / audio.rate) }
+                pos += chunk
+                let now = Double(pos) / audio.rate
+                // Score the second pass: each beat of the loop, once it has been heard.
+                while length + Double(nextBeat) * period <= now - 0.05 {
+                    let b = nextBeat; nextBeat += 1
+                    let t = length + Double(b) * period
+                    guard t < 2 * length - 1, let r = tracker.estimate.reading(at: t) else { continue }
+                    if !(16..<24).contains(b) { errors.append(abs(r.beat - r.beat.rounded()) * period * 1000) }
+                    if b % 2 == 1, r.barKnown { clapBeats.append(((Int(r.beat.rounded()) % 4) + 4) % 4) }
+                }
+            }
+            return (tracker.estimate, errors, clapBeats)
+        }
+        let (e, errors, claps) = run()
+        guard abs(e.bpm - 124) < 0.5 else { return String(format: "tempo %.2f, expected 124", e.bpm) }
+        guard errors.count >= 18 else { return "the beat was usable on only \(errors.count) beats" }
+        let sorted = errors.sorted()
+        let median = sorted[sorted.count / 2]
+        guard median < 15 else { return String(format: "beats %.0f ms off the kicks (median)", median) }
+        guard !claps.isEmpty, claps.allSatisfy({ $0 == 1 || $0 == 3 }) else { return "claps landed on beats \(claps.map { $0 + 1 }) of the bar, not 2 and 4" }
+        let again = run().0
+        guard again.origin == e.origin, again.period == e.period, again.barOffset == e.barOffset else { return "two runs over the same audio differ" }
+        return nil
+    }
+
+    /// The tracker's downbeat becomes beat 1 of the beat clock's bar by whole-beat renumbering, never
+    /// a phase jump. First Beat overrides it until the tracker loses the beat; then the tracker's
+    /// bar comes back.
+    private static func checkClockBar() -> String? {
+        let clock = BeatClock()
+        let dt = 1.0 / 60
+        let source = SteadyBeat(bpm: 124)
+        source.barKnown = true
+        source.downbeatBeat = 1  // the tracker's beats 1, 5, 9… are downbeats
+        func bar(_ t: Double) -> Double {
+            var x = (clock.beat - source.reading(at: t)!.beat).truncatingRemainder(dividingBy: 4)
+            if x >= 2 { x -= 4 }
+            if x < -2 { x += 4 }
+            return x
+        }
+        var t = 0.0, last: Double?
+        func run(_ seconds: Double, press: Double? = nil) -> String? {
+            var pressed = false
+            for _ in 0..<Int(seconds / dt) {
+                t += dt
+                if let p = press, !pressed, t >= p { clock.firstBeat(at: p); pressed = true }
+                clock.advance(now: t, dt: dt, source: source)
+                if let l = last {
+                    let step = clock.beat - l
+                    if abs(step - step.rounded()) > 2 * dt * 124 / 60 { return "the bar made the clock jump" }
+                }
+                last = clock.beat
+            }
+            return nil
+        }
+        if let e = run(4) { return e }
+        guard abs(bar(t)) < 0.05 else { return String(format: "the bar is %.2f beats off the tracker's", bar(t)) }
+        // First Beat on the tracker's beat 3 of the bar: the user's bar stands.
+        let period = 60.0 / 124
+        let press = (Double(Int(t / period) / 4 * 4 + 4 + 3)) * period
+        if let e = run(6, press: press) { return e }
+        guard abs(abs(bar(t)) - 2) < 0.05, clock.barPinned else { return String(format: "First Beat didn't hold over the tracker's bar (%.2f)", bar(t)) }
+        // Losing the beat lets the tracker's bar back.
+        source.on = false
+        if let e = run(1) { return e }
+        source.on = true
+        if let e = run(3) { return e }
+        guard abs(bar(t)) < 0.05, !clock.barPinned else { return String(format: "tracker's bar didn't return after a dropout (%.2f)", bar(t)) }
+        return nil
+    }
+
+    /// Every scene owns its tools: Audio In analyses with its own knobs and keeps its own
     /// beat, nothing is broadcast to scenes without them, a switch continues levels and the
     /// beat, and hardware stays off without a device that uses it.
     private static func checkEncapsulation(engine: Engine) -> String? {
@@ -888,21 +987,23 @@ enum SelfCheck {
         guard let fileB = try? SceneFile.load(fixtureB) else { return "test scene B didn't load" }
         engine.load(urlA, animated: false)
         defer { engine.load(urlA, animated: false) }
-        guard let a = engine.current, let audioA = a.audioIn, let clockA = a.clock else { return "test scene needs Audio In and Clock" }
+        guard let a = engine.current, let audioA = a.audioIn else { return "test scene needs Audio In" }
+        let clockA = audioA.clock
 
-        // Switching: the incoming scene has its own Audio In and Clock, which pick up the
-        // outgoing scene's beat on their first frame.
+        // Switching: the incoming scene has its own Audio In, which picks up the outgoing
+        // scene's beat on its first frame.
         var still = SignalFrame()
         still.dt = 0
-        clockA.manager.seek(beat: 17.5)
-        guard let b = engine.build(fileB, reuse: nil), let audioB = b.audioIn, let clockB = b.clock else { return "second scene needs Audio In and Clock" }
+        clockA.seek(beat: 17.5)
+        guard let b = engine.build(fileB, reuse: nil), let audioB = b.audioIn else { return "second scene needs Audio In" }
+        let clockB = audioB.clock
         guard audioA !== audioB, audioA.analyzer !== audioB.analyzer, audioA.bank !== audioB.bank,
-              audioA.spectrum !== audioB.spectrum, clockA.manager !== clockB.manager else { return "scenes share Audio In or Clock state" }
+              audioA.spectrum !== audioB.spectrum, clockA !== clockB else { return "scenes share Audio In or beat state" }
         b.modulate(still)
-        guard abs(clockB.beat - 17.5) < 1e-6 else { return "incoming Clock didn't continue the beat: \(clockB.beat)" }
-        clockB.manager.seek(beat: 2)
+        guard abs(clockB.beat - 17.5) < 1e-6 else { return "incoming Audio In didn't continue the beat: \(clockB.beat)" }
+        clockB.seek(beat: 2)
         a.modulate(still)
-        guard abs(clockA.beat - 17.5) < 1e-6 else { return "one scene's Clock moved another's" }
+        guard abs(clockA.beat - 17.5) < 1e-6 else { return "one scene's beat moved another's" }
 
         // Audio In's source is the scene's: scenes on the same source share one capture, another
         // source or channel pair gets its own, and a scene must name its source.
@@ -928,23 +1029,23 @@ enum SelfCheck {
             }
         }
         engine.load(urlA, animated: false)
-        guard let a2 = engine.current, let audioA2 = a2.audioIn, let clockA2 = a2.clock else { return "test scene did not reload" }
+        guard let a2 = engine.current, let audioA2 = a2.audioIn else { return "test scene did not reload" }
+        let clockA2 = audioA2.clock
 
         // A chain edit keeps the same analysis and beat running.
         engine.apply(.effect, "glow")
-        guard let edited = engine.current, edited.audioIn?.analyzer === audioA2.analyzer, edited.clock?.manager === clockA2.manager else {
-            return "a chain edit restarted Audio In or Clock"
+        guard let edited = engine.current, edited.audioIn?.analyzer === audioA2.analyzer, edited.audioIn?.clock === clockA2 else {
+            return "a chain edit restarted Audio In or its beat"
         }
 
-        // Without Audio In or Clock there are no audio or clock outputs, and LFOs run free.
-        engine.addMapping(source: StreamOutput.clockSyncKey, target: "mod.lfo.sync")
+        // Without Audio In there are no audio or beat outputs, and LFOs run free.
+        engine.addMapping(source: StreamOutput.syncKey, target: "mod.lfo.sync")
         guard engine.current?.modulators.first?.isSynced == true else { return "LFO did not sync" }
         engine.removeInput("audio")
-        engine.removeInput("clock")
-        guard let bare = engine.current, bare.audioIn == nil, bare.clock == nil,
-              !bare.outputs.contains(where: { $0.key.hasPrefix("audio.") || $0.key.hasPrefix("clock.") }),
-              !bare.streamOutputs.contains(where: { $0.key.hasPrefix("audio.") || $0.key.hasPrefix("clock.") }),
-              bare.modulators.allSatisfy({ !$0.isSynced }) else { return "audio or clock signals reach a scene without them" }
+        guard let bare = engine.current, bare.audioIn == nil,
+              !bare.outputs.contains(where: { $0.key.hasPrefix("audio.") }),
+              !bare.streamOutputs.contains(where: { $0.key.hasPrefix("audio.") }),
+              bare.modulators.allSatisfy({ !$0.isSynced }) else { return "audio or beat signals reach a scene without Audio In" }
 
         // Headless, no hardware runs.
         guard engine.audioCaptures.all.allSatisfy({ !$0.isActive }), !engine.midi.isActive else { return "hardware started without a device on screen" }
@@ -1222,17 +1323,17 @@ enum SelfCheck {
 
     /// Dancer, on a scene built in memory (a static camera on the front): its Sync input starts
     /// unmapped, the routine draws a figure standing on the floor all the way through, it moves
-    /// at tempo and holds still at tempo 0, and with Clock · Sync mapped its tempo follows the
-    /// Clock's beat instead of the seconds.
+    /// at tempo and holds still at tempo 0, and with Audio In · Sync mapped its tempo follows the
+    /// beat instead of the seconds.
     private static func checkDancer(engine: Engine, snapshotDir: URL?) -> String? {
         func scene(_ params: [String: Float], synced: Bool = false) -> RenderScene? {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
-            let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "clock")] : [], modulators: [],
+            let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "audio", device: "system")] : [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
                                  palettes: [],
                                  generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 })],
                                  effects: [],
-                                 mappings: synced ? [MappingSpec(source: "clock.sync", target: "generator.sync")] : [])
+                                 mappings: synced ? [MappingSpec(source: "audio.sync", target: "generator.sync")] : [])
             return engine.build(file, reuse: nil)
         }
         guard let still = scene(["tempo": 0]), let gen = still.generator, let tempo = gen.bank["tempo"] else {
@@ -1261,34 +1362,37 @@ enum SelfCheck {
             if speed == 0, moved > 0.001 { return "moved at tempo 0: \(moved)" }
             if speed > 0, moved < 0.002 { return "didn't dance at tempo \(speed): \(moved)" }
         }
-        // Free, tempo 1 runs a second a second. Synced, a second is two of the Clock's beats.
+        // Free, tempo 1 runs a second a second. Synced, a second is two beats.
         guard let free = scene(["tempo": 1]), let freeTempo = free.generator?.bank["tempo"] else { return "didn't build" }
         _ = engine.renderOffscreen(free, frames: 60, snapshot: nil)
         guard abs(freeTempo.phase - 1) < 0.01 else { return "free, tempo ran \(freeTempo.phase) in a second" }
-        guard let synced = scene(["tempo": 1], synced: true), let clock = synced.clock,
-              let syncedTempo = synced.generator?.bank["tempo"] else { return "didn't build with a Clock" }
+        guard let synced = scene(["tempo": 1], synced: true), let clock = synced.audioIn?.clock,
+              let syncedTempo = synced.generator?.bank["tempo"] else { return "didn't build with Audio In" }
         guard synced.generator?.bank.syncClock === clock, synced.mappings.allSatisfy({ $0.problem == nil }) else {
-            return "Clock · Sync didn't map into Sync"
+            return "Audio In · Sync didn't map into Sync"
         }
         _ = engine.renderOffscreen(synced, frames: 30, snapshot: nil)
         guard abs(syncedTempo.phase - clock.beat / 2) < 0.001 else {
-            return "synced, the dance is at beat \(syncedTempo.phase * 2), the Clock at \(clock.beat)"
+            return "synced, the dance is at beat \(syncedTempo.phase * 2), Audio In at \(clock.beat)"
         }
+        // A jump of the beat (First Beat, a new downbeat) moves the dance with it: it follows
+        // the beat, not the seconds.
         let before = (phase: syncedTempo.phase, beat: clock.beat)
+        clock.seek(beat: clock.beat + 3)
         _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
         let beats = clock.beat - before.beat
-        guard abs(beats - 2) > 0.02 else { return "the Clock runs at 120 BPM, which tells nothing apart" }
+        guard beats > 4 else { return "the beat didn't jump" }
         guard abs((syncedTempo.phase - before.phase) - beats / 2) < 0.001 else { return "synced, the dance didn't keep to the beat" }
-        // Double time: the dance gains two beats on every beat of the Clock.
+        // Double time: the dance gains two beats on every beat.
         syncedTempo.setBase(2)
         let doubled = (phase: syncedTempo.phase, beat: clock.beat)
         _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
         guard abs((syncedTempo.phase - doubled.phase) - (clock.beat - doubled.beat)) < 0.05 else { return "synced, tempo 2 isn't double time" }
         // A value can't go into Sync, and Sync can't go onto a knob.
-        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "clock")], modulators: [], camera: nil, palettes: [],
+        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "audio", device: "system")], modulators: [], camera: nil, palettes: [],
                               generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:])], effects: [], mappings: [])
-        wrong.mappings = [MappingSpec(source: "clock.pulse", target: "generator.sync"),
-                          MappingSpec(source: "clock.sync", target: "generator.tempo")]
+        wrong.mappings = [MappingSpec(source: "audio.pulse", target: "generator.sync"),
+                          MappingSpec(source: "audio.sync", target: "generator.tempo")]
         guard let bad = engine.build(wrong, reuse: nil), bad.mappings.allSatisfy({ $0.problem != nil }),
               bad.generator?.bank.syncClock == nil else { return "Sync took a value, or a knob took Sync" }
         return nil
@@ -1411,14 +1515,14 @@ enum SelfCheck {
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
               decoded.generators.isEmpty, decoded.effects.isEmpty else { return "minimal scene JSON did not decode" }
-        // A new scene holds Audio In, Clock and a static camera: no palette, generator or effects.
+        // A new scene holds Audio In and a static camera: no palette, generator or effects.
         engine.createNewScene()
         guard let newURL = engine.currentURL, let fresh = try? SceneFile.load(newURL) else { return "new scene not created" }
         try? FileManager.default.removeItem(at: newURL)
         engine.refreshSceneList()
-        guard fresh.inputs.map(\.type) == ["audio", "clock"], fresh.camera?.type == CameraRig.still.rawValue,
+        guard fresh.inputs.map(\.type) == ["audio"], fresh.camera?.type == CameraRig.still.rawValue,
               fresh.palettes.isEmpty, fresh.generators.isEmpty, fresh.effects.isEmpty, fresh.modulators.isEmpty else {
-            return "new scene should be Audio In, Clock and a static camera"
+            return "new scene should be Audio In and a static camera"
         }
         let url = fixtureA!
         let presetURL = fixturePresets[0]
@@ -1491,9 +1595,8 @@ enum SelfCheck {
         engine.removeInput("audio")
         guard engine.current?.hasAudioInput == false else { return "input not removed" }
 
-        // Tool cardinality: audio/clock/camera/lens are single, palettes/generators/effects/LFOs/MIDI/webcams are many.
+        // Tool cardinality: audio/camera/lens are single, palettes/generators/effects/LFOs/MIDI/webcams are many.
         guard Tools.cardinality(.input, "audio") == .one,
-              Tools.cardinality(.input, "clock") == .one,
               Tools.cardinality(.camera, "orbit") == .one,
               Tools.cardinality(.palette, "palette") == .many,
               Tools.cardinality(.generator, "torus") == .many,
@@ -1866,7 +1969,7 @@ enum SelfCheck {
         do {
             let sceneFile = SceneFile(
                 name: "Self-Check Depth",
-                inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock"), InputSpec(type: "webcam", id: "webcam")],
+                inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "webcam", id: "webcam")],
                 modulators: [],
                 camera: CameraSlot(type: "orbit", params: ["distance": 7, "fov": 55, "height": 2.2, "lookY": -0.5]),
                 palettes: [PaletteSlot(preset: "sonar", colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"])],
@@ -1982,10 +2085,10 @@ enum SelfCheck {
     }
 
     /// The scenes and presets the checks load and edit, written to the library for the run and
-    /// removed after, so nothing depends on what's in your library. A: Audio In, Clock, an
-    /// LFO synced to the Clock, an orbit camera, a palette, a sphere with the palette and
+    /// removed after, so nothing depends on what's in your library. A: Audio In, an LFO
+    /// synced to its beat, an orbit camera, a palette, a sphere with the palette and
     /// spectrum mapped in, five value mappings and five effects. B: a different look, with the
-    /// same Audio In and Clock.
+    /// same Audio In.
     nonisolated(unsafe) private static var fixtureA: URL!
     nonisolated(unsafe) private static var fixtureB: URL!
     nonisolated(unsafe) private static var fixturePresets: [URL] = []
@@ -1993,7 +2096,7 @@ enum SelfCheck {
     private static func writeFixtures(_ engine: Engine) throws {
         let a = SceneFile(
             name: "Self-check A",
-            inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
+            inputs: [InputSpec(type: "audio", device: "system")],
             modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["rate": 18])],
             camera: CameraSlot(type: "orbit", params: ["distance": 6, "height": 1.2, "orbitSpeed": 0.2, "sway": 0.3]),
             palettes: [PaletteSlot(colors: ["#07040F", "#3B0A5C", "#B5177A", "#FF5E5B", "#FFD8A8"])],
@@ -2008,13 +2111,13 @@ enum SelfCheck {
                        MappingSpec(source: "audio.snare", target: "post.chroma.amount", amount: 0.3),
                        MappingSpec(source: "audio.bass", target: "generator.scale", amount: 0.06),
                        MappingSpec(source: "mod.lfo.out", target: "generator.twist", amount: 0.2),
-                       MappingSpec(source: "clock.bar", target: "generator.colorShift", amount: 0.25),
-                       MappingSpec(source: StreamOutput.clockSyncKey, target: "mod.lfo.sync"),
+                       MappingSpec(source: "audio.bar", target: "generator.colorShift", amount: 0.25),
+                       MappingSpec(source: StreamOutput.syncKey, target: "mod.lfo.sync"),
                        MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal"),
                        MappingSpec(source: StreamOutput.spectrumKey, target: "generator.spec")])
         let b = SceneFile(
             name: "Self-check B",
-            inputs: [InputSpec(type: "audio", device: "system"), InputSpec(type: "clock")],
+            inputs: [InputSpec(type: "audio", device: "system")],
             modulators: [],
             camera: CameraSlot(type: "static", params: ["x": 5, "y": 1, "z": 2, "fov": 60]),
             palettes: [PaletteSlot(colors: ["#020A0D", "#0E4D5C", "#2EC4B6", "#FF9F1C", "#FFE8C2"])],
@@ -2107,7 +2210,7 @@ enum SelfCheck {
         if let problem = checkTriggers(engine: engine) {
             print("FAIL triggers: \(problem)"); failures += 1
         } else {
-            print("ok   triggers (typed, start unmapped, values fire past ½, clock events, LFO reset, cutter, first beat)")
+            print("ok   triggers (typed, start unmapped, values fire past ½, beat events, LFO reset, cutter, first beat)")
         }
 
         if let problem = checkVideoTransport(engine: engine) {
@@ -2166,16 +2269,23 @@ enum SelfCheck {
             print("ok   playlists (strict file, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
         }
 
-        if let problem = checkClockAudio(engine: engine) {
-            print("FAIL clock: \(problem)"); failures += 1
+        if let audio = engine.offlineAudio {
+            if let problem = checkBeatTracker(audio) {
+                print("FAIL beat tracker: \(problem)"); failures += 1
+            } else {
+                print("ok   beat tracker (124 BPM test track: tempo, phase, bar, through a breakdown, deterministic)")
+            }
+        }
+        if let problem = checkBeat(engine: engine) {
+            print("FAIL beat: \(problem)"); failures += 1
         } else {
-            print("ok   clock (follows audio only through Audio Out → Clock · Audio, typed, starts unmapped)")
+            print("ok   beat (Audio In's beat outputs typed, start unmapped, follows the tracker, carries on without it, bar by whole beats, First Beat holds)")
         }
 
         if let problem = checkEncapsulation(engine: engine) {
             print("FAIL encapsulation: \(problem)"); failures += 1
         } else {
-            print("ok   encapsulation (scenes own their Audio In and Clock, beat continues across a switch, no broadcast, hardware idle)")
+            print("ok   encapsulation (scenes own their Audio In and beat, beat continues across a switch, no broadcast, hardware idle)")
         }
 
         if let problem = checkLowPoly(engine: engine) {
@@ -2201,7 +2311,7 @@ enum SelfCheck {
         if let problem = checkDancer(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL dancer: \(problem)"); failures += 1
         } else {
-            print("ok   dancer (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the Clock when synced)")
+            print("ok   dancer (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the beat when synced)")
         }
         if let problem = checkInstancing(engine: engine) {
             print("FAIL instancing: \(problem)"); failures += 1
@@ -2251,7 +2361,7 @@ extension SelfCheck {
         let highBins = (AudioAnalyzer.fftSize * 2000 / 48000)..<(AudioAnalyzer.fftSize / 2)
         var toneShares: [Float] = [], clickShares: [Float] = []
         for _ in 0..<180 {
-            ring.write(frames: frame) { k in
+            ring.write(frames: frame, hostTime: Double(pos) / rate) { k in
                 let i = pos + k
                 let tone = 0.3 * sin(2 * Float.pi * 440 * Float(i) / Float(rate))
                 let click = i >= 12000 && (i - 12000) % clickEvery < clickLength ? Float.random(in: -0.8...0.8, using: &rng) : 0
@@ -2350,7 +2460,7 @@ extension SelfCheck {
     /// knob, and its output is the chosen op of `a` and `b`, 0...1.
     static func checkMath(engine: Engine) -> String? {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-math.json")
-        let file = SceneFile(name: "Self-check Math", inputs: [InputSpec(type: "clock")],
+        let file = SceneFile(name: "Self-check Math", inputs: [InputSpec(type: "audio", device: "system")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo")],
                              camera: nil, palettes: [], generators: [], effects: [], mappings: [])
         do { try file.write(to: url) } catch { return "could not write the test scene" }
@@ -2392,8 +2502,8 @@ extension SelfCheck {
             guard abs(v - c.want) < 1e-3 else { return "\(MathParams.ops[c.op]) of \(c.a), \(c.b) is \(v), want \(c.want)" }
         }
         // A value mapped onto `a` reaches the output: a pulse on the downbeat, through A × 1.
-        engine.current?.clock?.manager.seek(beat: 8)
-        engine.addMapping(source: "clock.pulse", target: "mod.math.a")
+        engine.current?.audioIn?.clock.seek(beat: 8)
+        engine.addMapping(source: "audio.pulse", target: "mod.math.a")
         guard let s2 = engine.current, let m2 = s2.modulators.first(where: { $0.id == "math" }),
               let out2 = s2.outputs.first(where: { $0.key == "mod.math.out" }),
               s2.mappings.first(where: { $0.target == "mod.math.a" })?.isActive == true else { return "mapping onto math.a inactive" }
@@ -2554,7 +2664,7 @@ extension Engine {
 
     /// Renders frames at 60fps simulated time and returns the average GPU time per frame.
     /// The scene's tools run as they would live: Audio In analyses `offlineAudio` (written into
-    /// the capture's ring, which is silent without it), the Clock advances, then the mappings.
+    /// the capture's ring, which is silent without it) and advances its beat, then the mappings.
     func renderOffscreen(_ scene: RenderScene, frames: Int, snapshot: URL?) -> Double {
         var gpu = 0.0
         // Scenes on the same source share its capture, so the audio goes into that one ring.
@@ -2567,7 +2677,7 @@ extension Engine {
             if let (samples, rate) = offlineAudio {
                 ring?.setSampleRate(rate)
                 let n = Int(rate / 60)
-                ring?.write(frames: n) { k in samples[(audioPos + k) % samples.count] }
+                ring?.write(frames: n, hostTime: offlineTime) { k in samples[(audioPos + k) % samples.count] }
                 audioPos += n
             }
             scene.modulate(signals)
@@ -2625,10 +2735,10 @@ extension Engine {
 extension SelfCheck {
     /// Trigger IO: trigger inputs take triggers and values, knobs don't take triggers, nothing
     /// is mapped into a trigger by itself, a value fires once each time it rises past ½, the
-    /// Clock's On Beat fires once a beat, and LFO Reset and Clock First Beat do what they say.
+    /// Audio In's On Beat fires once a beat, and LFO Reset and First Beat do what they say.
     static func checkTriggers(engine: Engine) -> String? {
         let url = engine.store.scenesDir.appendingPathComponent("selfcheck-triggers.json")
-        let file = SceneFile(name: "Self-check Triggers", inputs: [InputSpec(type: "clock")],
+        let file = SceneFile(name: "Self-check Triggers", inputs: [InputSpec(type: "audio", device: "system")],
                              modulators: [ModulatorSpec(type: "lfo", id: "lfo", params: ["shape": 4, "hz": 2]),
                                           ModulatorSpec(type: "lfo", id: "slow", params: ["hz": 0.1])],
                              camera: CameraSlot(type: "cutter", params: ["rate": 0]), palettes: [], generators: [],
@@ -2644,7 +2754,7 @@ extension SelfCheck {
         }
         engine.load(url, animated: false)
         guard let scene = engine.current else { return "test scene didn't load" }
-        guard Set(scene.triggerInputs.map(\.key)) == ["clock.firstBeat", "mod.lfo.reset", "mod.slow.reset", "camera.cut"] else {
+        guard Set(scene.triggerInputs.map(\.key)) == ["audio.firstBeat", "mod.lfo.reset", "mod.slow.reset", "camera.cut"] else {
             return "trigger inputs are \(scene.triggerInputs.map(\.key))"
         }
         guard scene.mappings.isEmpty else { return "something mapped itself" }
@@ -2652,28 +2762,27 @@ extension SelfCheck {
         guard engine.current?.mappings.isEmpty == true else { return "a new LFO mapped its Reset" }
         engine.removeModulator(id: engine.current?.modulators.last?.id ?? "")
         let triggerOuts = scene.outputs.filter { $0.kind == .trigger }.map(\.key)
-        guard Set(triggerOuts) == ["clock.onBeat", "clock.onBar", "clock.onPhrase", "camera.onCut"] else {
+        guard Set(triggerOuts) == ["audio.onBeat", "audio.onBar", "audio.onPhrase", "camera.onCut"] else {
             return "trigger outputs are \(triggerOuts)"
         }
 
         // Typed: triggers only into trigger inputs; values into knobs and triggers; streams neither.
-        engine.addMapping(source: "clock.onBeat", target: "camera.fov")
-        engine.addMapping(source: "clock.sync", target: "camera.cut")
+        engine.addMapping(source: "audio.onBeat", target: "camera.fov")
+        engine.addMapping(source: "audio.sync", target: "camera.cut")
         guard engine.current?.mappings.isEmpty == true else { return "mapped a trigger onto a knob, or a stream onto a trigger" }
         engine.addMapping(source: "mod.lfo.out", target: "camera.cut")
-        engine.addMapping(source: "clock.onBeat", target: "mod.slow.reset")
+        engine.addMapping(source: "audio.onBeat", target: "mod.slow.reset")
         guard let s = engine.current, s.mappings.count == 2, s.mappings.allSatisfy({ $0.kind == .trigger && $0.isActive }),
               s.mappings.allSatisfy({ $0.spec.amount == nil }) else {
             return "value → trigger or trigger → trigger mapping missing, inactive or with settings: \(engine.current?.mappings.map { "\($0.source)>\($0.target) \($0.problem ?? "")" } ?? [])"
         }
         guard let cut = s.cameraMotion?.cutTrigger, let slow = s.modulators.first(where: { $0.id == "slow" }),
-              let clock = s.clock else { return "scene lost its devices" }
+              let clock = s.audioIn?.clock else { return "scene lost its devices" }
 
         // Run 2 s at 60 fps, 120 BPM: the 2 Hz square LFO fires Cut 4 times, On Beat fires 4
         // times, and each beat restarts the slow LFO, whose phase would otherwise only creep up.
-        clock.setManualBPM(120)
-        clock.manager.seek(beat: 0.5)
-        guard let onBeat = s.outputs.first(where: { $0.key == "clock.onBeat" }) else { return "no On Beat" }
+        clock.seek(beat: 0.5)  // carrying on at its starting 120 BPM: no audio here
+        guard let onBeat = s.outputs.first(where: { $0.key == "audio.onBeat" }) else { return "no On Beat" }
         var f = SignalFrame()
         f.dt = 1 / 60
         var beats = 0, cuts = 0, resets = 0
@@ -2705,8 +2814,8 @@ extension SelfCheck {
         guard fired == 2 else { return "a value fired \(fired) times (want 2: high at build doesn't fire, rises after dropping below ¼ do)" }
 
         // First Beat, by trigger: the beat nearest the fire becomes a downbeat.
-        clock.manager.seek(beat: 2.9)
-        clock.firstBeatTrigger.fire()
+        clock.seek(beat: 2.9)
+        s.audioIn?.firstBeatTrigger.fire()
         f.now = CACurrentMediaTime()
         s.modulate(f)
         let phrase = clock.beat.truncatingRemainder(dividingBy: 32)
@@ -2920,5 +3029,19 @@ extension SelfCheck {
         guard simd_length(straight - identity) < 0.002 else { return "identity lens changed the picture: \(straight) → \(identity)" }
         guard simd_reduce_add(warped) < simd_reduce_add(straight) - 0.01 else { return "barrel lens didn't change the picture: \(straight) → \(warped)" }
         return nil
+    }
+}
+
+/// A perfectly steady beat for the beat clock to follow in checks.
+private final class SteadyBeat: BeatSource {
+    let period: Double
+    var on = true
+    var barKnown = false
+    /// Which of its beats is a downbeat (mod 4).
+    var downbeatBeat = 0
+    init(bpm: Double) { period = 60 / bpm }
+    func reading(at time: CFTimeInterval) -> BeatReading? {
+        guard on else { return nil }
+        return BeatReading(beat: time / period - Double(barKnown ? downbeatBeat : 0), bpm: 60 / period, barKnown: barKnown)
     }
 }

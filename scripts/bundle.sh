@@ -8,7 +8,7 @@ app=build/JimViz.app
 rm -rf $app
 mkdir -p $app/Contents/MacOS $app/Contents/Resources/Content
 cp .build/release/JimViz $app/Contents/MacOS/JimViz
-cp -R Content/Shaders Content/Maps $app/Contents/Resources/Content/
+cp -R Content/Shaders Content/Maps Content/Models $app/Contents/Resources/Content/
 # The depth model (scripts/fetch-depth-model.sh), if it's been fetched.
 model="$HOME/Library/Application Support/jim-viz/Models/DepthAnythingV2SmallF16.mlpackage"
 if [[ -d $model ]]; then
