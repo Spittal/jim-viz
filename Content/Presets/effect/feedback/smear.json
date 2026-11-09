@@ -1,8 +1,0 @@
-{
-  "name": "Smear",
-  "params": {
-    "amount": 0.95,
-    "zoom": 1.0,
-    "driftX": 0.004
-  }
-}

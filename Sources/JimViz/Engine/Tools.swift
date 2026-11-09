@@ -78,6 +78,7 @@ enum Tools {
             case "wheel": return "fanblades"
             case "hand": return "hand.raised"
             case "dancer": return "figure.dance"
+            case "street": return "building.2"
             default: return "cube.transparent"
             }
         case .effect:

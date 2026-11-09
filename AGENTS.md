@@ -77,7 +77,7 @@ Inputs (Audio In, Clock, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens
 - Chain keys: `audio`, `clock`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
   `mod.<id>`, `camera`, `lens`, `palette` (the first palette) and `palette.<id>` (the rest),
   `generator` (the first generator) and `generator.<id>` (the rest), `post.<id>`.
-- **A scene** is one such chain plus its mappings, saved as JSON in `Content/Scenes`.
+- **A scene** is one such chain plus its mappings, saved as JSON in the library's `Scenes` folder (see Storage).
 - **Switching scenes** renders the outgoing and incoming scenes at once and blends them.
   Today that's a crossfade.
 
@@ -137,8 +137,9 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
     error (e.g. "JSON invalid" or "invalid shape") rather than silently falling back to a default.
   - Work lost is fine; prioritize clean, simple, unencumbered Swift and Metal code over
     defensive parsing or edge-case handling.
-  - When a format or tool changes, update the files in `Content/Scenes` and `Content/Presets`
-    directly without adding compatibility shims.
+  - When a format or tool changes, update the files in the library's `Scenes`, `Presets`
+    and `Playlists` directly without adding compatibility shims. They're the user's files and
+    aren't in git, so say which ones you changed.
 - **Never commit or push unless asked.** The remote is `git@github.com:Spittal/jim-viz.git`,
   branch `main`.
 - **Don't add behaviour that wasn't asked for.** If you think something extra is needed,
@@ -148,14 +149,28 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
 - **Say what you verified and what you didn't.** For example: "tested with a synthetic
   frame, not a real camera".
 
+## Storage
+
+- **Library: `~/Library/Application Support/jim-viz`** holds the user's `Scenes`,
+  `Presets`, `Playlists`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
+  in git, and the app creates the folders empty on first launch.
+  - `JIMVIZ_LIBRARY` overrides it.
+- **Content: the repo's `Content/`** holds `Shaders` and `Maps`, which are code and ship
+  with the app.
+  - `scripts/run.sh` points `JIMVIZ_CONTENT` at it, so shaders hot-reload.
+  - The bundled app reads its own copy in `Contents/Resources/Content`.
+- **Caches: `~/Library/Caches/jim-viz`** holds the compiled depth model.
+- **The self-check never touches the real library.** It runs on a scratch copy and writes
+  its own fixture scenes and preset, so it passes with an empty library.
+
 ## Build, run, verify
 
 Only the Command Line Tools are installed, no Xcode. SwiftPM builds the app, and shaders
 compile at runtime.
 
 ```sh
-scripts/run.sh [--release] [--output fullscreen]  # runs against the repo's Content/
-scripts/check.sh [/tmp/snaps]   # headless self-check: shaders, scenes, mappings, onsets
+scripts/run.sh [--release] [--output fullscreen]  # repo shaders, your library
+scripts/check.sh [/tmp/snaps]   # headless self-check on a scratch copy of your library
 scripts/bundle.sh               # build/JimViz.app
 scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
 ```
@@ -171,11 +186,6 @@ scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
 
 ## Gotchas
 
-- **The bundled app reads a copy of the content.**
-  - It copies `Content/` to `~/Library/Application Support/jim-viz/Content` on first launch
-    and reads from there.
-  - After shader changes, that copy is stale and may fail to compile. Delete it before
-    launching a newly bundled app.
 - **Audio-capture permission belongs to whichever app ran `scripts/run.sh`** (Zed or
   Terminal), and that app may need a restart after the permission is granted.
 - **With a Core Audio process tap,** the tap's channels are the *last* channels of the

@@ -82,7 +82,7 @@ struct ContentView: View {
                 }
             }
         } message: {
-            Text("Are you sure you want to delete this scene? The file will be removed from Content/Scenes.")
+            Text("Are you sure you want to delete this scene? The file will be removed from the library’s Scenes folder.")
         }
     }
 }
@@ -102,8 +102,8 @@ private struct SceneList: View {
                 HStack(spacing: 8) {
                     Text("Scenes")
                     Spacer()
-                    Button { NSWorkspace.shared.open(engine.contentRoot) } label: { Image(systemName: "folder") }
-                        .help("Open Content Folder")
+                    Button { NSWorkspace.shared.open(engine.libraryRoot) } label: { Image(systemName: "folder") }
+                        .help("Open Library Folder")
                     Button { engine.createNewScene() } label: { Image(systemName: "plus") }
                         .help("New Empty Scene (⌘N)")
                 }

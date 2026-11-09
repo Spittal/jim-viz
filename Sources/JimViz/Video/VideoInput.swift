@@ -33,7 +33,7 @@ final class VideoManager {
         for f in active { f.play() }
     }
 
-    /// Resolves a path: checks absolute/tilde paths, then Content/Videos.
+    /// Resolves a path: checks absolute/tilde paths, then <library>/Videos.
     static func resolveURL(_ path: String?, store: ContentStore) -> URL? {
         guard let path, !path.isEmpty else { return nil }
         let expanded = (path as NSString).expandingTildeInPath

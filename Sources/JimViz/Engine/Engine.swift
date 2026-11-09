@@ -133,7 +133,7 @@ final class Engine {
         errors.sorted { $0.key < $1.key }.first.map { "\($0.key): \($0.value)" }
     }
 
-    var contentRoot: URL { store.root }
+    var libraryRoot: URL { store.library }
 
     // MARK: Scenes
 

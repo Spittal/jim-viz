@@ -1,9 +1,0 @@
-{
-  "name": "On the Beat",
-  "params": {
-    "rate": 0,
-    "glide": 0,
-    "drift": 0.2,
-    "rollRange": 20
-  }
-}

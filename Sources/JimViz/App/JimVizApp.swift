@@ -77,7 +77,7 @@ struct JimVizApp: App {
                 Divider()
                 Button("Reload Scenes and Shaders") { engine.reloadAll() }
                     .keyboardShortcut("r")
-                Button("Open Content Folder") { NSWorkspace.shared.open(engine.contentRoot) }
+                Button("Open Library Folder") { NSWorkspace.shared.open(engine.libraryRoot) }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
             CommandMenu("Output") {

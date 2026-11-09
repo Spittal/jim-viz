@@ -254,7 +254,7 @@ enum SelfCheck {
               engine.current?.palettes.first?.bank["brightness"]?.isModulated == true else { return "palette input not mappable" }
         engine.current?.palettes.first?.bank["hue"]?.setBase(30)
         engine.selectDevice("palette")
-        engine.apply(.palette, "palette", preset: "ice")
+        engine.apply(.palette, "palette", preset: "selfcheck-ice")
         guard engine.current?.palettes.count == 1, engine.current?.palettes.first?.bank["hue"]?.base == 30 else {
             return "palette inputs lost on a preset change"
         }
@@ -264,7 +264,7 @@ enum SelfCheck {
         // removing it leaves the first alone.
         let originalPal = engine.current?.streamBindings["generator.pal"]?.key
         engine.selectDevice(nil)
-        engine.apply(.palette, "palette", preset: "acid")
+        engine.apply(.palette, "palette", preset: "selfcheck-acid")
         guard let two = engine.current, two.palettes.map(\.key) == ["palette", "palette.palette2"],
               two.palettes.last?.title == "Palette 2", two.palettes.last?.label == "Acid",
               two.streamOutputs.contains(where: { $0.key == "palette.palette2.colors" && $0.kind == .palette }),
@@ -281,7 +281,7 @@ enum SelfCheck {
             return "second palette not mappable"
         }
         guard let saved2 = engine.currentSnapshot(), saved2.palettes.map(\.key) == ["palette", "palette.palette2"],
-              saved2.palettes.last?.preset == "acid" else { return "second palette not saved" }
+              saved2.palettes.last?.preset == "selfcheck-acid" else { return "second palette not saved" }
         engine.removeMappings(target: "palette.palette2.hue")
         engine.removeMappings(target: "generator.pal")
         if let originalPal { engine.addMapping(source: originalPal, target: "generator.pal") }
@@ -385,7 +385,7 @@ enum SelfCheck {
         }
 
         // LFOs: unique ids, starts free, syncs only with Clock mapping, bipolar output, mappable knobs.
-        engine.apply(.modulation, "lfo", preset: "bar-saw")
+        engine.apply(.modulation, "lfo", preset: "selfcheck-bar-saw")
         guard let lfo2 = engine.current?.modulators.first(where: { $0.id == "lfo2" }), lfo2.id == "lfo2", lfo2.presetLabel == "Bar Saw" else {
             return "LFO preset not added as lfo2"
         }
@@ -954,7 +954,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "globe", "drive"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "globe", "drive", "street"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -968,7 +968,7 @@ enum SelfCheck {
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
                                      "hand": "pinkyCurl", "face": "vowel", "dancer": "snap", "globe": "ocean",
-                                     "drive": "lane"]
+                                     "drive": "lane", "street": "footprint"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -983,7 +983,7 @@ enum SelfCheck {
             for knob in ["noiseAmount", "spin", "tumble", "brownian", "lightSpin", "turn", "shardSpin"] {
                 if let p = gen.bank[knob], p.base != 0 { return "\(geo) starts with \(knob) \(p.base), expected 0" }
             }
-            if geo != "drive", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
+            if geo != "drive", geo != "street", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
             guard engine.current?.streamBindings.keys.contains(where: { $0.hasPrefix(gen.key + ".") }) == false else {
                 return "\(geo) connected itself"
             }
@@ -1006,9 +1006,9 @@ enum SelfCheck {
                 scale.reset()
             }
 
-            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive has no Motion
-            // group: its road scrolls instead of its mesh turning.
-            if geo == "drive" { continue }
+            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive and Street have
+            // no Motion group: their road scrolls instead of their mesh turning.
+            if geo == "drive" || geo == "street" { continue }
             guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
                 return "\(geo) missing spin or tumble"
             }
@@ -1146,6 +1146,66 @@ enum SelfCheck {
         _ = engine.renderOffscreen(scene, frames: 10, snapshot: snapshotDir?.appendingPathComponent("drive-wild.png"))
         guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn at full tilt" }
         print(String(format: "     drive %.2f ms/frame GPU, %d vertices", ms, gen.vertexCount))
+        return nil
+    }
+
+    /// Street, a Low Poly generator: starts unmapped, and on a scene built in memory (a camera
+    /// looking down the street, a palette) draws buildings both sides of the frame, draws one
+    /// instance per lot plus the street, rebuilds its mesh when segments or detail change, draws
+    /// every style, and keeps drawing walking backwards, bent, shattered and wired.
+    private static func checkStreet(engine: Engine, snapshotDir: URL?) -> String? {
+        let file = SceneFile(name: "street", inputs: [], modulators: [],
+                             camera: CameraSlot(type: "static", preset: nil,
+                                                params: ["x": 6, "y": 0, "z": 0, "lookX": -6, "lookY": 0.5, "fov": 60]),
+                             palettes: [PaletteSlot(colors: ["#0A0820", "#3A4A7A", "#C8B8A0", "#FFD27A"])],
+                             generators: [GeneratorSlot(id: nil, type: "street", preset: nil, params: [:])],
+                             effects: [], mappings: [])
+        guard let scene = engine.build(file, reuse: nil), let gen = scene.generator else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.mesh == .street, gen.vertexCount > 0 else { return "built an empty mesh" }
+        guard scene.mappings.isEmpty, scene.streamBindings.isEmpty else { return "connected itself" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+        let meshKnobs = gen.bank.params.filter(\.def.rebuildsMesh)
+        guard meshKnobs.map(\.def.name).sorted() == ["detail", "segments"] else { return "mesh knobs mismatch" }
+        for knob in meshKnobs {
+            let before = gen.vertexCount
+            knob.live = knob.def.clamp(knob.base + (knob.def.name == "detail" ? -1 : knob.def.span * 0.25))
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount != before else { return "mesh didn't change with \(knob.def.name)" }
+            knob.live = knob.base
+            gen.finishMeshBuild(device: engine.device)
+            guard gen.vertexCount == before else { return "mesh didn't return when \(knob.def.name) went back" }
+        }
+        // One instance per lot each side, plus the street, following the street's length.
+        let lots = streetLots(distance: 180, behind: 30, lot: 16)
+        guard lots == 14, gen.mesh.instanceCount(gen.bank.live) == 1 + 2 * lots else { return "instance count doesn't follow the lots" }
+
+        var coloured = file
+        coloured.mappings = [MappingSpec(source: "palette.colors", target: "generator.pal")]
+        guard let scene = engine.build(coloured, reuse: nil), let gen = scene.generator else { return "didn't build with a palette" }
+        let ms = engine.renderOffscreen(scene, frames: 30, snapshot: snapshotDir?.appendingPathComponent("street.png"))
+        let drawn = engine.coverage(engine.renderer.history)
+        // Buildings both sides and the street below: most of the frame, the sky down the middle.
+        guard drawn.fraction > 0.4, drawn.fraction < 0.97, abs(drawn.centroid.x - 0.5) < 0.15 else {
+            return "drew \(drawn.fraction) of the frame, centred at \(drawn.centroid)"
+        }
+        // Every style on its own draws a street of it.
+        for style in 1...StreetStyle.allCases.count {
+            gen.bank["style"]?.setBase(Float(style))
+            gen.bank["variety"]?.setBase(0)
+            _ = engine.renderOffscreen(scene, frames: 2, snapshot: snapshotDir?.appendingPathComponent("street-style\(style).png"))
+            guard engine.coverage(engine.renderer.history).fraction > 0.3 else { return "style \(style) drew nothing" }
+        }
+        gen.bank["style"]?.reset(); gen.bank["variety"]?.reset()
+        // Backwards, bent, hilly, shattered and wired: still draws.
+        for (name, value) in [("speed", -6), ("curves", 3), ("hills", 3), ("explode", 2), ("wire", 1), ("strafe", 1), ("rise", 1)] as [(String, Float)] {
+            gen.bank[name]?.setBase(value)
+        }
+        _ = engine.renderOffscreen(scene, frames: 10, snapshot: snapshotDir?.appendingPathComponent("street-wild.png"))
+        guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn walking backwards" }
+        if let err = engine.errorSummary { return err }
+        print(String(format: "     street %.2f ms/frame GPU, %d vertices × %d instances", ms, gen.vertexCount, 1 + 2 * lots))
         return nil
     }
 
@@ -1350,7 +1410,7 @@ enum SelfCheck {
             return "new scene should be Audio In, Clock and a static camera"
         }
         let url = fixtureA!
-        let presetURL = engine.store.presetsDir(.effect, "glow").appendingPathComponent("bloom.json")
+        let presetURL = fixturePresets[0]
         let presetBefore = try? Data(contentsOf: presetURL)
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
@@ -1390,7 +1450,7 @@ enum SelfCheck {
         guard engine.current?.generators.first?.key == secondGen.key else { return "generator not moved left" }
         engine.removeGenerator(key: secondGen.key)
         guard engine.current?.generators.count == 1 else { return "second generator not removed" }
-        engine.apply(.effect, "glow", preset: "bloom", at: 0)
+        engine.apply(.effect, "glow", preset: "selfcheck-bloom", at: 0)
         guard let added = engine.current?.effects.first, added.effect == "glow", added.id != "glow",
               added.bank["amount"]?.base == 1.4, added.presetLabel == "Bloom",
               engine.current?.effects.count == n + 1 else { return "effect not inserted with a unique id" }
@@ -1408,12 +1468,12 @@ enum SelfCheck {
         guard engine.isIOShown("generator"), !engine.isIOShown("camera") else { return "device IO not shown" }
         engine.toggleIO("generator")
         guard !engine.isIOShown("generator") else { return "device IO not hidden" }
-        engine.apply(.camera, "orbit", preset: "drift")
+        engine.apply(.camera, "orbit", preset: "selfcheck-drift")
         guard engine.current?.cameraLabel == "Drift", engine.current?.camera?["distance"]?.base == 9 else { return "camera preset not applied" }
         // A palette preset recolours the selected palette, or adds the scene's first.
         let paletteCount = max(engine.current?.palettes.count ?? 0, 1)
         if engine.current?.palettes.isEmpty == false { engine.selectDevice("palette") }
-        engine.apply(.palette, "palette", preset: "ice")
+        engine.apply(.palette, "palette", preset: "selfcheck-ice")
         guard engine.current?.palettes.count == paletteCount, engine.current?.palettes.first?.label == "Ice" else {
             return "palette preset not applied"
         }
@@ -1444,7 +1504,7 @@ enum SelfCheck {
         guard engine.current?.palettes.map(\.key) == ["palette"] else { return "palette not restored" }
 
         // Drag and drop: 'one' replaces, 'many' appends.
-        engine.drop(.device(.camera, tool: "orbit", preset: "barrel-roll"), at: .replace(.camera))
+        engine.drop(.device(.camera, tool: "orbit", preset: "selfcheck-barrel-roll"), at: .replace(.camera))
         guard engine.current?.cameraLabel == "Barrel Roll" else { return "camera drop didn't replace" }
 
         // Multiple generators render on the same stage.
@@ -1910,13 +1970,14 @@ enum SelfCheck {
         return (nil, String(format: "first depth after %.1f s, %.0f ms per frame", Date().timeIntervalSince(start), est.milliseconds))
     }
 
-    /// The scenes the checks load and edit, written to Content/Scenes for the run and removed
-    /// after, so nothing depends on scenes you might rename or delete. A: Audio In, Clock, an
+    /// The scenes and presets the checks load and edit, written to the library for the run and
+    /// removed after, so nothing depends on what's in your library. A: Audio In, Clock, an
     /// LFO synced to the Clock, an orbit camera, a palette, a sphere with the palette and
     /// spectrum mapped in, five value mappings and five effects. B: a different look, with the
     /// same Audio In and Clock.
     nonisolated(unsafe) private static var fixtureA: URL!
     nonisolated(unsafe) private static var fixtureB: URL!
+    nonisolated(unsafe) private static var fixturePresets: [URL] = []
 
     private static func writeFixtures(_ engine: Engine) throws {
         let a = SceneFile(
@@ -1953,14 +2014,30 @@ enum SelfCheck {
         fixtureB = engine.store.scenesDir.appendingPathComponent("selfcheck-b.json")
         try a.write(to: fixtureA)
         try b.write(to: fixtureB)
-        engine.store.markSeen(fixtureA)
-        engine.store.markSeen(fixtureB)
+        let presets: [(DeviceKind, String, String, Preset)] = [
+            (.effect, "glow", "bloom", Preset(name: "Bloom", params: ["amount": 1.4, "radius": 0.025, "threshold": 0.4])),
+            (.palette, "palette", "ice", Preset(name: "Ice", colors: ["#020814", "#0D324D", "#1C7293", "#9EB3C2", "#F0F8FF"])),
+            (.palette, "palette", "acid", Preset(name: "Acid", colors: ["#000000", "#0B3D20", "#39FF14", "#E6FF9E"])),
+            (.modulation, "lfo", "bar-saw", Preset(name: "Bar Saw", params: ["shape": 2, "rate": 14])),
+            (.camera, "orbit", "drift", Preset(name: "Drift", params: ["distance": 9, "height": 2, "orbitSpeed": 0.05, "fov": 45, "sway": 0.5])),
+            (.camera, "orbit", "barrel-roll", Preset(name: "Barrel Roll", params: ["distance": 5, "height": 0.5, "orbitSpeed": 0.3, "fov": 80, "rollSpeed": 0.1])),
+        ]
+        fixturePresets = try presets.map { kind, tool, id, preset in
+            let dir = engine.store.presetsDir(kind, tool)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("selfcheck-\(id).json")
+            try JSONEncoder().encode(preset).write(to: url)
+            return url
+        }
+        for url in [fixtureA!, fixtureB!] + fixturePresets { engine.store.markSeen(url) }
         engine.refreshSceneList()
+        engine.refreshTools()
     }
 
     private static func removeFixtures(_ engine: Engine) {
-        for url in [fixtureA, fixtureB].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
+        for url in [fixtureA, fixtureB].compactMap({ $0 }) + fixturePresets { try? FileManager.default.removeItem(at: url) }
         engine.refreshSceneList()
+        engine.refreshTools()
     }
 
     private static func run(snapshotDir: URL?, audioPath: String?) -> Int32 {
@@ -1972,7 +2049,8 @@ enum SelfCheck {
             print("audio: \(audioPath)")
         }
         var failures = 0
-        print("content: \(engine.contentRoot.path)")
+        print("library: \(engine.libraryRoot.path)")
+        print("content: \(engine.store.content.path)")
 
         for name in engine.availableEffects {
             if let err = engine.checkEffect(name) { print("FAIL effect \(name): \(err)"); failures += 1 }
@@ -2104,6 +2182,11 @@ enum SelfCheck {
         } else {
             print("ok   drive (starts unmapped, road, car, palms, sun and mountains drawn, mesh knobs rebuild)")
         }
+        if let problem = checkStreet(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL street: \(problem)"); failures += 1
+        } else {
+            print("ok   street (starts unmapped, buildings both sides, every style draws, walks both ways, one instance per lot)")
+        }
         if let problem = checkDancer(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL dancer: \(problem)"); failures += 1
         } else {
@@ -2182,10 +2265,8 @@ extension SelfCheck {
         guard let click = clickShares.min(), click > 0.8 else { return "clicks not percussive on arrival: \(clickShares.min() ?? 0)" }
 
         // In a scene: the outputs exist, start unmapped, and are typed.
-        guard let url = engine.sceneURLs.first(where: { url in
-            engine.load(url, animated: false)
-            return engine.current?.audioIn != nil && engine.current?.cameraMotion != nil
-        }) else { return "no scene with Audio In and a camera" }
+        let url = fixtureA!
+        engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
         guard let scene = engine.current else { return "scene did not load" }
         let splitKeys: Set = ["audio.harmonic", "audio.percussive", StreamOutput.harmonicSpectrumKey, StreamOutput.percussiveSpectrumKey]

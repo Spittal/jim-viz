@@ -1,38 +1,47 @@
 import Foundation
 
-/// Locates the Content folder (scenes and shaders) and watches it for changes.
+/// Locates jim-viz's two folders and watches them for changes.
 ///
-/// Resolution order:
-/// 1. `JIMVIZ_CONTENT` environment variable (used by scripts/run.sh to edit the repo copy live).
-/// 2. `~/Library/Application Support/jim-viz/Content`, seeded from the app bundle on first launch.
+/// - `library`: the user's scenes, presets, playlists, videos and pictures, in
+///   `~/Library/Application Support/jim-viz`. Not in git. Created empty on first launch.
+///   `JIMVIZ_LIBRARY` overrides it (scripts/check.sh runs on a scratch copy).
+/// - `content`: shaders and maps, which ship with the app. `JIMVIZ_CONTENT` points it at the
+///   repo's Content folder (scripts/run.sh), so shader edits hot-reload; otherwise it's the app
+///   bundle's copy.
 final class ContentStore {
-    let root: URL
-    var scenesDir: URL { root.appendingPathComponent("Scenes") }
-    var shadersDir: URL { root.appendingPathComponent("Shaders") }
-    var presetsDir: URL { root.appendingPathComponent("Presets") }
-    var videosDir: URL { root.appendingPathComponent("Videos") }
-    var picturesDir: URL { root.appendingPathComponent("Pictures") }
-    var mapsDir: URL { root.appendingPathComponent("Maps") }
-    var playlistsDir: URL { root.appendingPathComponent("Playlists") }
+    let library: URL
+    let content: URL
+    var scenesDir: URL { library.appendingPathComponent("Scenes") }
+    var presetsDir: URL { library.appendingPathComponent("Presets") }
+    var playlistsDir: URL { library.appendingPathComponent("Playlists") }
+    var videosDir: URL { library.appendingPathComponent("Videos") }
+    var picturesDir: URL { library.appendingPathComponent("Pictures") }
+    var shadersDir: URL { content.appendingPathComponent("Shaders") }
+    var mapsDir: URL { content.appendingPathComponent("Maps") }
 
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?
 
     init() {
         let fm = FileManager.default
-        if let env = ProcessInfo.processInfo.environment["JIMVIZ_CONTENT"], !env.isEmpty {
-            root = URL(fileURLWithPath: env, isDirectory: true)
-            return
+        let env = ProcessInfo.processInfo.environment
+        if let path = env["JIMVIZ_LIBRARY"], !path.isEmpty {
+            library = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            library = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("jim-viz", isDirectory: true)
         }
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("jim-viz/Content", isDirectory: true)
-        if !fm.fileExists(atPath: support.path),
-           let bundled = Bundle.main.resourceURL?.appendingPathComponent("Content"),
-           fm.fileExists(atPath: bundled.path) {
-            try? fm.createDirectory(at: support.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.copyItem(at: bundled, to: support)
+        if let path = env["JIMVIZ_CONTENT"], !path.isEmpty {
+            content = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            content = Bundle.main.resourceURL!.appendingPathComponent("Content", isDirectory: true)
         }
-        root = support
+        guard fm.fileExists(atPath: content.appendingPathComponent("Shaders").path) else {
+            fatalError("No shaders in \(content.path). Run scripts/run.sh, or set JIMVIZ_CONTENT to the repo's Content folder.")
+        }
+        for dir in [scenesDir, presetsDir, playlistsDir] {
+            try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
     }
 
     func sceneURLs() -> [URL] {
@@ -152,11 +161,13 @@ final class ContentStore {
 
     private func snapshot() -> [URL: Date] {
         var result: [URL: Date] = [:]
-        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
-            return result
-        }
-        for case let url as URL in e where ["json", "metal"].contains(url.pathExtension) {
-            result[url.standardizedFileURL] = modDate(url)
+        for root in [library, content] {
+            guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                continue
+            }
+            for case let url as URL in e where ["json", "metal"].contains(url.pathExtension) {
+                result[url.standardizedFileURL] = modDate(url)
+            }
         }
         return result
     }

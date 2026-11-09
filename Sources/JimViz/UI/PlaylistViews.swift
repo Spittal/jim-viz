@@ -46,7 +46,7 @@ extension Engine {
 
 // MARK: - Sidebar
 
-/// The playlists in `Content/Playlists`. Selecting one opens it in the bottom bar; one
+/// The playlists in `<library>/Playlists`. Selecting one opens it in the bottom bar; one
 /// always stays selected.
 struct PlaylistList: View {
     @Environment(Engine.self) private var engine
@@ -90,7 +90,7 @@ struct PlaylistList: View {
                 state.pendingDeletion = nil
             }
         } message: {
-            Text("The file will be removed from Content/Playlists. Its scenes stay.")
+            Text("The file will be removed from the library’s Playlists folder. Its scenes stay.")
         }
     }
 }
@@ -304,7 +304,7 @@ private struct PlaylistSlot: View {
             Divider()
             Button("Remove from Playlist", role: .destructive) { engine.removePlaylistEntry(index) }
         }
-        .help(url == nil ? "“\(entry.scene)” isn't in Content/Scenes" : "Click to play, drag to reorder")
+        .help(url == nil ? "“\(entry.scene)” isn't in the library’s Scenes folder" : "Click to play, drag to reorder")
     }
 }
 

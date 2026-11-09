@@ -21,7 +21,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, hand, face, dancer, globe
+    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, globe
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -33,10 +33,20 @@ enum MeshShape: String, CaseIterable {
         case .shards: return ["count"]
         case .wheel: return ["blades", "segments"]
         case .drive: return ["segments", "palms"]
+        case .street: return ["segments", "detail"]
         case .hand: return ["sides", "segments"]
         case .face: return ["detail"]
         case .dancer: return ["sides"]
         case .globe: return ["detail", "facets"]
+        }
+    }
+
+    /// How many copies of the mesh to draw, from the live knobs, for a shape that sets its own;
+    /// nil draws the `instances` knob's count. Street draws the street and one copy per lot.
+    func instanceCount(_ value: (String) -> Float) -> Int? {
+        switch self {
+        case .street: return 1 + 2 * streetLots(distance: value("distance"), behind: value("behind"), lot: value("lot"))
+        default: return nil
         }
     }
 }
@@ -77,6 +87,7 @@ struct MeshBuilder {
         case .shards: return [min(max(i("count"), 1), 4000)]
         case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
         case .drive: return [min(max(i("segments"), 8), 512), min(max(i("palms"), 0), 256)]
+        case .street: return [min(max(i("segments"), 8), 512), min(max(i("detail"), 0), 2)]
         case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
         case .face: return [min(max(i("detail"), 0), 4)]
         case .dancer: return [min(max(i("sides"), 3), 16)]
@@ -94,6 +105,7 @@ struct MeshBuilder {
         case .shards: b.shards(t[0])
         case .wheel: b.wheel(blades: t[0], segments: t[1])
         case .drive: b.drive(segments: t[0], palms: t[1])
+        case .street: b.street(segments: t[0], detail: t[1])
         case .hand: b.hand(sides: t[0], segments: t[1])
         case .face: b.face(detail: t[0])
         case .dancer: b.dancer(sides: t[0])

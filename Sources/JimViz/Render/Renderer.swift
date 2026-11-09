@@ -835,7 +835,7 @@ final class Renderer {
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)
                 enc.setVertexBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
-                let instances = max(1, Int(gen.bank["instances"]?.live ?? 1))
+                let instances = gen.mesh.instanceCount(gen.bank.live) ?? max(1, Int(gen.bank["instances"]?.live ?? 1))
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: gen.vertexCount, instanceCount: instances)
             }
             enc.endEncoding()

@@ -27,12 +27,12 @@ struct TransitionSpec: Codable, Equatable {
 /// A scene in a playlist, and the transition into the entry after it. The last entry's
 /// transition wraps around to the first, so the playlist loops.
 struct PlaylistEntry: Codable, Equatable {
-    /// The scene's file name in `Content/Scenes`, without `.json`.
+    /// The scene's file name in `<library>/Scenes`, without `.json`.
     var scene: String
     var transition: TransitionSpec
 }
 
-/// A sequence of scenes played left to right, in `Content/Playlists/<slug>.json`.
+/// A sequence of scenes played left to right, in `<library>/Playlists/<slug>.json`.
 struct PlaylistFile: Codable, Equatable {
     var name: String
     var entries: [PlaylistEntry]

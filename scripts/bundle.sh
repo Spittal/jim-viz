@@ -1,14 +1,14 @@
 #!/bin/zsh
-# Build a release .app into build/JimViz.app. Content is bundled and copied to
-# ~/Library/Application Support/jim-viz/Content on first launch.
+# Build a release .app into build/JimViz.app. Shaders and maps are bundled and read from the
+# app; scenes, presets and playlists live in ~/Library/Application Support/jim-viz.
 set -e
 cd "${0:A:h}/.."
 swift build -c release
 app=build/JimViz.app
 rm -rf $app
-mkdir -p $app/Contents/MacOS $app/Contents/Resources
+mkdir -p $app/Contents/MacOS $app/Contents/Resources/Content
 cp .build/release/JimViz $app/Contents/MacOS/JimViz
-cp -R Content $app/Contents/Resources/Content
+cp -R Content/Shaders Content/Maps $app/Contents/Resources/Content/
 # The depth model (scripts/fetch-depth-model.sh), if it's been fetched.
 model="$HOME/Library/Application Support/jim-viz/Models/DepthAnythingV2SmallF16.mlpackage"
 if [[ -d $model ]]; then

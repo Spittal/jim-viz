@@ -30,7 +30,7 @@ final class PictureManager {
         // Picture feeds hold static textures; depth updates when depthWanted is set.
     }
 
-    /// Resolves a path: checks absolute/tilde paths, then Content/Pictures.
+    /// Resolves a path: checks absolute/tilde paths, then <library>/Pictures.
     static func resolveURL(_ path: String?, store: ContentStore) -> URL? {
         guard let path, !path.isEmpty else { return nil }
         let expanded = (path as NSString).expandingTildeInPath

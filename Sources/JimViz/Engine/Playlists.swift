@@ -15,7 +15,7 @@ enum SidebarTab: String, CaseIterable {
     var label: String { self == .scenes ? "Scenes" : "Playlists" }
 }
 
-/// Playlists in `Content/Playlists`, the one open in the bottom bar, and the bar's MIDI
+/// Playlists in `<library>/Playlists`, the one open in the bottom bar, and the bar's MIDI
 /// bindings. Main thread only; the render thread never reads it.
 @Observable
 final class PlaylistState {
@@ -267,7 +267,7 @@ extension Engine {
 
     // MARK: Playing
 
-    /// A playlist entry's scene file, if it's in `Content/Scenes`.
+    /// A playlist entry's scene file, if it's in `<library>/Scenes`.
     func playlistSceneURL(_ scene: String) -> URL? {
         sceneURLs.first { $0.deletingPathExtension().lastPathComponent == scene }
     }
@@ -302,7 +302,7 @@ extension Engine {
         playlists.position = index
         let scene = file.entries[index].scene
         guard let url = playlistSceneURL(scene) else {
-            errors["playlist"] = "\(file.name): scene “\(scene)” not found in Content/Scenes"
+            errors["playlist"] = "\(file.name): scene “\(scene)” not found in the library’s Scenes folder"
             return
         }
         errors["playlist"] = nil

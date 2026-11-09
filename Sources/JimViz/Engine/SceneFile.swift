@@ -3,7 +3,7 @@ import simd
 
 // MARK: - Presets
 
-/// Saved settings for one tool, in `Content/Presets/<kind>/<tool>/<id>.json`.
+/// Saved settings for one tool, in `<library>/Presets/<kind>/<tool>/<id>.json`.
 /// Fields that don't apply to a tool are left out (only palettes have colors).
 struct Preset: Codable {
     var name: String
