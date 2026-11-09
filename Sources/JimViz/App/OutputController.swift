@@ -96,7 +96,9 @@ struct ScreenInfo: Identifiable, Hashable {
 
 /// Manages the projector output: off, a normal window for testing, or borderless fullscreen
 /// on a chosen display. If the projector disconnects, output drops to a window and returns
-/// to fullscreen automatically when it reconnects.
+/// to fullscreen automatically when it reconnects. While output is fullscreen (or waiting for
+/// its display), or any of the app's windows is in native fullscreen, display and system idle
+/// sleep are held off.
 @Observable
 final class OutputController: NSObject, NSWindowDelegate {
     enum Mode: Equatable {
@@ -112,6 +114,7 @@ final class OutputController: NSObject, NSWindowDelegate {
     @ObservationIgnored private let loop: RenderLoop
     @ObservationIgnored private var window: NSWindow?
     @ObservationIgnored private var waitingForDisplay: CGDirectDisplayID?
+    @ObservationIgnored private var sleepActivity: NSObjectProtocol?
 
     init(device: MTLDevice, loop: RenderLoop) {
         self.device = device
@@ -125,6 +128,11 @@ final class OutputController: NSObject, NSWindowDelegate {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.screensChanged()
+        }
+        for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.updateSleep()
+            }
         }
     }
 
@@ -199,6 +207,7 @@ final class OutputController: NSObject, NSWindowDelegate {
             window = w
         }
         followScreen()
+        updateSleep()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -207,11 +216,27 @@ final class OutputController: NSObject, NSWindowDelegate {
             waitingForDisplay = nil
             mode = .off
             followScreen()
+            updateSleep()
         }
     }
 
     func windowDidChangeScreen(_ notification: Notification) {
         followScreen()
+    }
+
+    /// Keep the display and system awake while the visuals are fullscreen anywhere.
+    private func updateSleep() {
+        var outputFullscreen = waitingForDisplay != nil
+        if case .fullscreen = mode { outputFullscreen = true }
+        let keepAwake = outputFullscreen || NSApp.windows.contains { $0.styleMask.contains(.fullScreen) }
+        if keepAwake, sleepActivity == nil {
+            sleepActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled, .userInitiated],
+                reason: "jim-viz is showing visuals fullscreen")
+        } else if !keepAwake, let activity = sleepActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            sleepActivity = nil
+        }
     }
 
     /// Pace rendering to the output's display so the projector gets clean frames.
@@ -246,6 +271,7 @@ final class OutputController: NSObject, NSWindowDelegate {
             apply(.fullscreen(id))
         }
         followScreen()
+        updateSleep()
     }
 }
 
