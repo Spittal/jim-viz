@@ -984,6 +984,17 @@ enum SelfCheck {
                 if let p = gen.bank[knob], p.base != 0 { return "\(geo) starts with \(knob) \(p.base), expected 0" }
             }
             if geo != "drive", geo != "street", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
+            // Sections: Instances, Shape, Surface, Motion, the generator's own, then input-gated ones in input order.
+            let titles = KnobGrid.groups(gen.bank.params, leading: KnobGrid.generatorGroups,
+                                         inputs: gen.inputs.map(\.name)).compactMap(\.title)
+            let lead = KnobGrid.generatorGroups.filter(titles.contains)
+            let gated = gen.inputs.compactMap { i in gen.bank.params.first { $0.def.requiresInput == i.name }?.def.group }
+            guard Array(titles.prefix(lead.count)) == lead, Array(titles.suffix(gated.count)) == gated else {
+                return "\(geo) sections out of order: \(titles.joined(separator: ", "))"
+            }
+            if geo == "cube", titles != ["Instances", "Shape", "Surface", "Motion", "Look", "Intersection", "Spectrum", "Texture"] {
+                return "cube sections out of order: \(titles.joined(separator: ", "))"
+            }
             guard engine.current?.streamBindings.keys.contains(where: { $0.hasPrefix(gen.key + ".") }) == false else {
                 return "\(geo) connected itself"
             }

@@ -18,7 +18,7 @@
 // Height (bass at the neck), Around (bass at the front) or Random (per plane).
 // sing opens the mouth by how loud the voice range of the Spectrum is, on top of open; singVowel
 // shapes it by the spectrum's brightness, on top of vowel (brighter is wider, darker rounder).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Height,Around,Random
 // @param sing 1 0 3

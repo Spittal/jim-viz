@@ -12,7 +12,7 @@
 
 // Audio: Spectrum pushes shards out. spectrumMode picks the frequency each reads:
 // Distance (bass at the centre), Random (per face) or Angle (around the vertical axis).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 1 0 2 int Distance,Random,Angle
 

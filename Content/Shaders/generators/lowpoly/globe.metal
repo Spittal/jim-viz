@@ -18,7 +18,7 @@
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Longitude (around the globe), Latitude (bass at the south pole) or Country (each country
 // its own band, and each ocean face).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Longitude,Latitude,Country
 

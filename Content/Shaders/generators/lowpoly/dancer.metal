@@ -28,7 +28,7 @@
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Limb (each bone its own band, bass in the hips), Along (bass where a bone starts, highs at
 // its end) or Random (per face).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Limb,Along,Random
 

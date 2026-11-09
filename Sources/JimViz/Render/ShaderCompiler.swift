@@ -64,6 +64,16 @@ final class ShaderCompiler {
         if let clash = inputs.first(where: { v in defs.contains { $0.name == v.name } }) {
             throw ShaderError(file: name, message: "\(clash.kind.rawValue) input \(clash.name) has the same name as a param")
         }
+        // A group shown only while an input is connected is titled after that input.
+        for def in defs {
+            guard let req = def.requiresInput else { continue }
+            guard let input = inputs.first(where: { $0.name == req }) else {
+                throw ShaderError(file: name, message: "group \(def.group ?? "") requires unknown input \(req)")
+            }
+            guard def.group == input.label else {
+                throw ShaderError(file: name, message: "group \(def.group ?? "") must be named \(input.label), after the input that shows it")
+            }
+        }
         let phases = defs.filter(\.isRate).map { "\($0.name)Phase" }
         if let clash = phases.first(where: { n in defs.contains { $0.name == n } || inputs.contains { $0.name == n } }) {
             throw ShaderError(file: name, message: "\(clash) is generated for a rate param and can't be declared too")

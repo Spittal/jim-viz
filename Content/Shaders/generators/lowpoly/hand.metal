@@ -18,7 +18,7 @@
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Finger (each finger its own band), Along (bass at the wrist, highs at the fingertips) or
 // Random (per face). flick lifts each finger at its knuckle by its own band, up to that many degrees.
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Finger,Along,Random
 // @param flick 0 0 90

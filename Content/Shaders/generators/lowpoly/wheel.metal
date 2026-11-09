@@ -19,7 +19,7 @@
 // Audio: Spectrum pushes vertices off the paddles. spectrumMode picks the frequency each vertex
 // reads: Blade (each paddle its own band), Along (bass at the hinge) or Random (per face).
 // flap swings each paddle on its hinge by its own band, up to that many degrees.
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Blade,Along,Random
 // @param flap 30 0 90

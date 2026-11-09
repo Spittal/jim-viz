@@ -116,7 +116,8 @@ struct DeviceChain: View {
                     ForEach(Array(scene.generators.enumerated()), id: \.element.id) { index, gen in
                         DevicePanel(title: "Generator", icon: Tools.icon(.generator, gen.type), subtitle: gen.label ?? gen.type,
                                     accent: slotColor(.generator, key: gen.key), select: gen.key, onClose: { engine.removeGenerator(key: gen.key) }) {
-                            KnobGrid(params: gen.bank.params, prefix: gen.key)
+                            KnobGrid(params: gen.bank.params, prefix: gen.key,
+                                     leadingGroups: KnobGrid.generatorGroups, inputs: gen.inputs.map(\.name))
                         }
                         .contextMenu {
                             Button("Move Left") { engine.moveGenerator(key: gen.key, by: -1) }.disabled(index == 0)
@@ -257,7 +258,13 @@ struct KnobGrid: View {
     @Environment(Engine.self) private var engine
     let params: [Param]
     var prefix: String = ""
+    /// Groups placed first, in this order; the rest follow in declaration order.
+    var leadingGroups: [String] = []
+    /// Stream input names, top to bottom; groups shown by an input go last, in this order.
+    var inputs: [String] = []
     private let rows = 3
+
+    static let generatorGroups = ["Instances", "Shape", "Surface", "Motion"]
 
     var body: some View {
         let visibleParams = filterVisible(params)
@@ -271,9 +278,10 @@ struct KnobGrid: View {
                         .frame(width: 1)
                         .padding(.vertical, 4)
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                // One column sized to the wider of title and knobs: title left, knobs centred.
+                Grid(alignment: .leading, verticalSpacing: 4) {
                     if let title = group.title {
-                        HStack(spacing: 3) {
+                        GridRow { HStack(spacing: 3) {
                             Text(title.uppercased())
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(.secondary)
@@ -285,9 +293,9 @@ struct KnobGrid: View {
                                     resetMotion(group.params)
                                 }
                             }
-                        }
+                        } }
                     }
-                    HStack(alignment: .top, spacing: 2) {
+                    GridRow { HStack(alignment: .top, spacing: 2) {
                         let count = (group.params.count + rows - 1) / rows
                         ForEach(0..<count, id: \.self) { col in
                             VStack(spacing: 4) {
@@ -297,8 +305,7 @@ struct KnobGrid: View {
                             }
                         }
                     }
-                    // Centred under the group's title when the title is the wider of the two.
-                    .frame(maxWidth: .infinity)
+                    .gridCellAnchor(.top) }
                 }
             }
         }
@@ -312,30 +319,31 @@ struct KnobGrid: View {
         }
     }
 
-    private struct ParamGroup {
+    struct ParamGroup {
         let title: String?
         let params: [Param]
     }
 
     private func groupParams(_ list: [Param]) -> [ParamGroup] {
-        var groups: [ParamGroup] = []
-        var currentTitle: String? = nil
-        var currentParams: [Param] = []
+        Self.groups(list, leading: leadingGroups, inputs: inputs)
+    }
 
+    /// Groups params by title (first appearance order), then puts `leadingGroups` first and
+    /// input-gated groups last in input order.
+    static func groups(_ list: [Param], leading leadingGroups: [String], inputs: [String]) -> [ParamGroup] {
+        var titles: [String?] = []
+        var byTitle: [String?: [Param]] = [:]
         for p in list {
-            if p.def.group != currentTitle {
-                if !currentParams.isEmpty {
-                    groups.append(ParamGroup(title: currentTitle, params: currentParams))
-                    currentParams = []
-                }
-                currentTitle = p.def.group
-            }
-            currentParams.append(p)
+            if byTitle[p.def.group] == nil { titles.append(p.def.group) }
+            byTitle[p.def.group, default: []].append(p)
         }
-        if !currentParams.isEmpty {
-            groups.append(ParamGroup(title: currentTitle, params: currentParams))
+        func rank(_ title: String?) -> Int {
+            if let title, let i = leadingGroups.firstIndex(of: title) { return i }
+            guard let req = byTitle[title]?.first?.def.requiresInput else { return leadingGroups.count }
+            return leadingGroups.count + 1 + (inputs.firstIndex(of: req) ?? inputs.count)
         }
-        return groups
+        let ordered = titles.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+        return ordered.map { ParamGroup(title: $0.element, params: byTitle[$0.element]!) }
     }
 
     private func isMotionGroup(_ title: String) -> Bool {
@@ -522,7 +530,6 @@ struct DevicePanel<Content: View>: View {
     @ViewBuilder
     private func folded(_ on: Bool) -> some View {
         let strip = VStack(spacing: 8) {
-            if let icon { iconView(icon) }
             if isOn != nil {
                 Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)
@@ -531,6 +538,7 @@ struct DevicePanel<Content: View>: View {
             } else if let statusColor {
                 Circle().fill(statusColor).frame(width: 8, height: 8)
             }
+            if let icon { iconView(icon) }
             modulationDot
             Text(subtitle.map { "\(title)  \($0)" } ?? title)
                 .font(Theme.titleFont)
@@ -554,7 +562,6 @@ struct DevicePanel<Content: View>: View {
     private var bar: some View {
         let on = isOn?.wrappedValue ?? true
         return HStack(spacing: 6) {
-            if let icon { iconView(icon) }
             if isOn != nil {
                 Button(action: toggleOn) {
                     Circle().fill(on ? Theme.accent : Theme.knobTrack).frame(width: 9, height: 9)
@@ -565,6 +572,7 @@ struct DevicePanel<Content: View>: View {
             if let statusColor {
                 Circle().fill(statusColor).frame(width: 8, height: 8)
             }
+            if let icon { iconView(icon) }
             Text(title)
                 .font(Theme.titleFont)
                 .foregroundStyle(failed ? Theme.error : Theme.text)

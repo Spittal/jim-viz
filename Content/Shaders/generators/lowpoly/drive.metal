@@ -65,7 +65,7 @@
 // @param explode 0 0 4
 
 // Audio: eq is how far the spectrum raises the mountains and the ground's outer edges.
-// @group Audio spec
+// @group Spectrum spec
 // @param eq 0 0 3
 
 // Layout must match MeshVertex in Render/Mesh.swift.

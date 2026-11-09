@@ -11,7 +11,7 @@
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Face (each of the six faces its own band), Height (bass at the bottom) or Random (per triangle).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 0 0 2 int Face,Height,Random
 

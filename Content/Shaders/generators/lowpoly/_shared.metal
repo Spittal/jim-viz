@@ -67,7 +67,7 @@
 // videoScatter turns and shifts each face's copy by a random amount in Faces mode, so the
 // facets don't all match. videoTint recolours the video through the palette by brightness.
 // @video texVideo Texture
-// @group Video texVideo
+// @group Texture texVideo
 // @param videoTex 0.8 0 1
 // @param videoMap 0 0 5 int Faces,Screen,Shards,Sphere,Normal,Front
 // @param videoScale 1 0.25 4

@@ -15,7 +15,7 @@
 
 // Audio: Spectrum pushes vertices out. spectrumMode picks the frequency each vertex reads:
 // Ring (round the ring), Tube (round the tube) or Random (per face).
-// @group Audio spec
+// @group Spectrum spec
 // @param spectrum 0 0 2
 // @param spectrumMode 2 0 2 int Ring,Tube,Random
 
