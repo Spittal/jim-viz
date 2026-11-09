@@ -1,0 +1,33 @@
+{
+  "entries" : [
+    {
+      "scene" : "spooder",
+      "transition" : {
+        "duration" : 0.69,
+        "type" : "crossfade"
+      }
+    },
+    {
+      "scene" : "face-rainbow",
+      "transition" : {
+        "duration" : 0.3,
+        "type" : "crossfade"
+      }
+    },
+    {
+      "scene" : "pinky-up",
+      "transition" : {
+        "duration" : 0.3,
+        "type" : "crossfade"
+      }
+    },
+    {
+      "scene" : "affinity",
+      "transition" : {
+        "duration" : 0.3,
+        "type" : "crossfade"
+      }
+    }
+  ],
+  "name" : "wuzzup"
+}

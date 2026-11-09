@@ -66,11 +66,13 @@ struct JimVizApp: App {
             CommandGroup(after: .sidebar) {
                 Button(engine.showInspector ? "Hide Mappings" : "Show Mappings") { engine.showInspector.toggle() }
                     .keyboardShortcut("0", modifiers: [.command, .option])
+                Button(engine.playlists.expanded ? "Hide Playlist" : "Show Playlist") { engine.togglePlaylistBar() }
+                    .keyboardShortcut("y", modifiers: [.command, .shift])
             }
             CommandMenu("Scene") {
-                Button("Next Scene") { engine.stepScene(1) }
+                Button(engine.playlistActive ? "Next Scene in Playlist" : "Next Scene") { engine.stepScene(1) }
                     .keyboardShortcut("]")
-                Button("Previous Scene") { engine.stepScene(-1) }
+                Button(engine.playlistActive ? "Previous Scene in Playlist" : "Previous Scene") { engine.stepScene(-1) }
                     .keyboardShortcut("[")
                 Divider()
                 Button("Reload Scenes and Shaders") { engine.reloadAll() }

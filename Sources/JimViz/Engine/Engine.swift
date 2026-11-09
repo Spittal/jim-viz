@@ -16,6 +16,8 @@ final class Engine {
     let audioCaptures = AudioCaptures()
     /// MIDI controllers, for MIDI Inputs.
     let midi = MIDIEngine()
+    /// Playlists, and the one open in the bottom bar.
+    let playlists: PlaylistState
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
     /// Looping video files in use.
@@ -37,8 +39,8 @@ final class Engine {
     @ObservationIgnored private var sceneFile: SceneFile?
 
     /// Errors keyed by source file, so fixing a file clears its message.
-    private(set) var errors: [String: String] = [:]
-    private(set) var info: String = ""
+    var errors: [String: String] = [:]
+    var info: String = ""
 
     // Stats, refreshed at UI rate.
     private(set) var fps: Double = 0
@@ -73,6 +75,7 @@ final class Engine {
         webcams.captureEnabled = !headless
         videos = VideoManager(device: device)
         pictures = PictureManager(device: device)
+        playlists = PlaylistState(defaults: headless ? Self.selfCheckDefaults() : .standard)
         output = OutputController(device: device, loop: loop)
         loop.sceneProvider = { [unowned self] in
             self.sceneLock.lock(); defer { self.sceneLock.unlock() }
@@ -83,6 +86,7 @@ final class Engine {
         }
 
         refreshSceneList()
+        refreshPlaylists()
         if headless {
             enableAutoSave = false
             return
@@ -106,6 +110,13 @@ final class Engine {
         }
     }
     @ObservationIgnored private var launchObserver: NSObjectProtocol?
+
+    /// Empty defaults for the self-check, so it never touches the app's saved MIDI bindings.
+    private static func selfCheckDefaults() -> UserDefaults {
+        let suite = "jim-viz.selfcheck"
+        UserDefaults().removePersistentDomain(forName: suite)
+        return UserDefaults(suiteName: suite)!
+    }
 
     /// `--output windowed` or `--output fullscreen` (projector, or main screen if none).
     private func applyLaunchArguments() {
@@ -279,6 +290,7 @@ final class Engine {
             store.markSeen(dest)
             if dest.standardizedFileURL != url.standardizedFileURL { try FileManager.default.removeItem(at: url) }
             errors["rename"] = nil
+            renameSceneInPlaylists(from: oldSlug, to: slug)
         } catch {
             errors["rename"] = "rename failed: \(error.localizedDescription)"
             return
@@ -294,12 +306,14 @@ final class Engine {
         info = "Renamed to \(name)"
     }
 
-    func load(_ url: URL, animated: Bool = true) {
+    /// Loads a scene. Animated, it blends in from the scene on screen with `transition`.
+    func load(_ url: URL, animated: Bool = true, transition: TransitionSpec = .default) {
         do {
             let file = try SceneFile.load(url)
             errors[url.lastPathComponent] = nil
             let isReload = url == currentURL
             guard let nextScene = build(file, reuse: isReload ? current : nil) else { return }
+            followPlaylist(url)
             autoSaveWorkItem?.cancel()
             autoSaveWorkItem = nil
             isDirty = false
@@ -307,7 +321,7 @@ final class Engine {
             if animated, let currentScene = current, !isReload {
                 pendingScene = (url, file, nextScene)
                 activateHardware()
-                loop.transition.start(from: currentScene, to: nextScene, now: CACurrentMediaTime())
+                loop.transition.start(from: currentScene, to: nextScene, spec: transition, now: CACurrentMediaTime())
                 info = "Loaded \(file.name)"
             } else {
                 sceneFile = file
@@ -359,7 +373,9 @@ final class Engine {
         }
     }
 
+    /// Steps the open playlist, or with none open, the scene list.
     func stepScene(_ delta: Int) {
+        if playlistActive { stepPlaylist(delta); return }
         guard !sceneURLs.isEmpty else { return }
         let idx = currentURL.flatMap { sceneURLs.firstIndex(of: $0) } ?? -1
         load(sceneURLs[(idx + delta + sceneURLs.count) % sceneURLs.count])
@@ -906,7 +922,7 @@ final class Engine {
     /// Runs only the hardware the scenes on screen (both, mid-transition) use: the audio
     /// sources their Audio Ins listen to, MIDI while one has a MIDI Input, and the cameras their webcams
     /// use, with depth estimation for those whose Depth is mapped. Everything else stops.
-    private func activateHardware() {
+    func activateHardware() {
         let scenes = [current, pendingScene?.scene].compactMap { $0 }
         let sources = scenes.flatMap(\.videoSources)
         let depthFeeds = Set(sources.filter(\.depthMapped).map { ObjectIdentifier($0.sourceFeed) })
@@ -918,7 +934,7 @@ final class Engine {
 
         guard hardwareReady else { return }
         audioCaptures.activate(scenes.compactMap { $0.audioIn?.capture })
-        midi.setActive(scenes.contains { !$0.midiInputs.isEmpty })
+        midi.setActive(playlistWantsMIDI || scenes.contains { !$0.midiInputs.isEmpty })
     }
 
     /// The source a new Audio In listens to.
@@ -1530,6 +1546,7 @@ final class Engine {
     private func filesChanged(_ urls: [URL]) {
         var rebuild = false
         var sceneChanged = false
+        var playlistsChanged = false
         for url in urls {
             if url.pathExtension == "metal" {
                 rebuild = true
@@ -1542,9 +1559,11 @@ final class Engine {
                 if url.standardizedFileURL == currentURL?.standardizedFileURL { sceneChanged = true }
                 // Preset names show in device headers.
                 if url.path.contains("/Presets/") { rebuild = true; refreshTools() }
+                if url.path.contains("/Playlists/") { playlistsChanged = true }
             }
         }
         refreshSceneList()
+        if playlistsChanged { refreshPlaylists() }
         guard let url = currentURL else {
             if let first = sceneURLs.first { load(first) }
             return
@@ -1585,6 +1604,7 @@ final class Engine {
     /// MIDI arrives on main and goes to the scene's MIDI inputs. Each takes what is for it;
     /// a control new to one that is learning is added to the scene as that input's output.
     func handleMIDI(_ msg: MIDIMessage) {
+        if handlePlaylistMIDI(msg) { return }
         guard let scene = current else { return }
         for input in scene.midiInputs {
             if let (control, value) = input.handle(msg) { learn(control, into: input, value: value) }

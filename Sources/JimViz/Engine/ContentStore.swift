@@ -13,6 +13,7 @@ final class ContentStore {
     var videosDir: URL { root.appendingPathComponent("Videos") }
     var picturesDir: URL { root.appendingPathComponent("Pictures") }
     var mapsDir: URL { root.appendingPathComponent("Maps") }
+    var playlistsDir: URL { root.appendingPathComponent("Playlists") }
 
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?
@@ -36,6 +37,12 @@ final class ContentStore {
 
     func sceneURLs() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: scenesDir, includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    func playlistURLs() -> [URL] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: playlistsDir, includingPropertiesForKeys: nil)) ?? []
         return urls.filter { $0.pathExtension == "json" }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }

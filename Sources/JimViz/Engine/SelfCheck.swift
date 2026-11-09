@@ -619,7 +619,7 @@ enum SelfCheck {
         }
 
         let controller = TransitionController()
-        controller.start(from: sceneA, to: sceneB, now: 100.0)
+        controller.start(from: sceneA, to: sceneB, spec: .default, now: 100.0)
         guard controller.isTransitioning else { return "crossfade did not start" }
         _ = controller.advance(now: 100.15)
         guard abs(controller.progress - 0.5) < 0.05 else { return "crossfade not halfway at 150 ms" }
@@ -658,6 +658,130 @@ enum SelfCheck {
         guard abs(movedA - expectA) < 1e-3, abs(movedB - expectB) < 1e-3 else {
             return "cameras moved \(movedA), \(movedB) in 10 crossfade frames; expected \(expectA), \(expectB)"
         }
+        return nil
+    }
+
+    /// Playlists: strict files, stepping that loops both ways with the transition on the link
+    /// it crosses, edits saved straight away, MIDI learn for the buttons with trigger-style
+    /// firing, and scene renames followed.
+    private static func checkPlaylists(engine: Engine) -> String? {
+        // Strict format: a missing field is an error, not a default.
+        let broken = Data(#"{"name": "x", "entries": [{"scene": "a"}]}"#.utf8)
+        guard (try? JSONDecoder().decode(PlaylistFile.self, from: broken)) == nil else { return "entry without a transition decoded" }
+
+        // Timing follows the spec.
+        let controller = TransitionController()
+        guard let fileA = try? SceneFile.load(fixtureA), let sceneA = engine.build(fileA, reuse: nil) else { return "test scene didn't build" }
+        controller.start(from: sceneA, to: sceneA, spec: TransitionSpec(type: .crossfade, duration: 0.6), now: 10)
+        _ = controller.advance(now: 10.3)
+        guard abs(controller.progress - 0.5) < 0.02 else { return "0.6 s crossfade at \(controller.progress) after 0.3 s" }
+        controller.start(from: sceneA, to: sceneA, spec: TransitionSpec(type: .crossfade, duration: 0), now: 20)
+        guard controller.advance(now: 20)?.progress == 1, !controller.isTransitioning else { return "0 s transition didn't cut" }
+
+        let a = fixtureA.deletingPathExtension().lastPathComponent, b = fixtureB.deletingPathExtension().lastPathComponent
+        // At launch the first playlist is open (none, without playlists).
+        guard engine.playlists.selectedURL == engine.playlists.urls.first else { return "the first playlist isn't open by default" }
+        let url = engine.store.playlistsDir.appendingPathComponent("selfcheck.json")
+        defer {
+            engine.selectPlaylist(nil)
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshPlaylists()
+            engine.load(fixtureA, animated: false)
+        }
+        do { try PlaylistFile(name: "Self-check", entries: []).write(to: url) } catch { return "could not write: \(error)" }
+        engine.store.markSeen(url)
+        engine.refreshPlaylists()
+        guard engine.playlists.urls.contains(url) else { return "playlist not listed" }
+        // Deleting the open playlist opens the first one left (none, without playlists).
+        let extra = engine.store.playlistsDir.appendingPathComponent("selfcheck-extra.json")
+        do { try PlaylistFile(name: "Extra", entries: []).write(to: extra) } catch { return "could not write: \(error)" }
+        engine.refreshPlaylists()
+        engine.selectPlaylist(extra)
+        engine.deletePlaylist(extra)
+        guard engine.playlists.selectedURL == engine.playlists.urls.first, !engine.playlists.urls.contains(extra) else {
+            return "deleting the open playlist didn't fall back to the first"
+        }
+        engine.load(fixtureB, animated: false)
+        engine.selectPlaylist(url)
+        guard engine.playlists.file?.entries.isEmpty == true, !engine.playlistActive else { return "new playlist not empty" }
+
+        // A → (0.4 s) → B → (0.7 s) → back to A. Scenes added get the default crossfade.
+        engine.insertPlaylistScene(a)
+        engine.insertPlaylistScene(b)
+        guard engine.playlists.file?.entries.map(\.transition) == [.default, .default] else { return "added scenes don't start with a 300 ms crossfade" }
+        engine.setPlaylistTransition(0, TransitionSpec(type: .crossfade, duration: 0.4))
+        engine.setPlaylistTransition(1, TransitionSpec(type: .crossfade, duration: 0.7))
+        guard let saved = try? PlaylistFile.load(url), saved.entries.map(\.scene) == [a, b],
+              saved.entries.map(\.transition.duration) == [0.4, 0.7] else { return "edits not saved" }
+
+        // Each step starts with the scene it leaves on screen, so the load blends.
+        func step(_ d: Int, expect position: Int, duration: Double, _ what: String) -> String? {
+            engine.loop.transition.cancel()
+            engine.load(position == 0 ? fixtureB : fixtureA, animated: false)
+            engine.stepScene(d)
+            guard engine.playlists.position == position else { return "\(what): at \(String(describing: engine.playlists.position)), expected \(position)" }
+            guard engine.loop.transition.isTransitioning, abs(engine.loop.transition.duration - duration) < 1e-9 else {
+                return "\(what): transition \(engine.loop.transition.duration) s, expected \(duration) s"
+            }
+            return nil
+        }
+        // The scene on screen (B) isn't where the playlist starts, so Next goes to the first entry,
+        // across the wrap-around link.
+        engine.selectPlaylist(nil); engine.load(fixtureA, animated: false); engine.selectPlaylist(url)
+        guard engine.playlists.position == 0 else { return "opening didn't find the scene on screen" }
+        if let e = step(1, expect: 1, duration: 0.4, "A → B") { return e }
+        if let e = step(1, expect: 0, duration: 0.7, "B → A, looping") { return e }
+        if let e = step(-1, expect: 1, duration: 0.7, "A ← B, looping back") { return e }
+        if let e = step(-1, expect: 0, duration: 0.4, "B ← A") { return e }
+        engine.loop.transition.cancel()
+        engine.load(fixtureA, animated: false)
+        engine.playPlaylistEntry(1)
+        guard engine.playlists.position == 1, abs(engine.loop.transition.duration - 0.4) < 1e-9 else { return "clicking B didn't use the link into it" }
+
+        // Moving takes the transition with the entry.
+        engine.movePlaylistEntry(from: 1, to: 0)
+        guard engine.playlists.file?.entries.map(\.scene) == [b, a], engine.playlists.file?.entries.first?.transition.duration == 0.7,
+              engine.playlists.position == 0 else { return "move didn't carry the transition or the position" }
+
+        // MIDI: nothing is bound at first; learning takes the next control pressed, and a bound
+        // control fires once per press.
+        guard engine.playlists.bindings.isEmpty else { return "playlist buttons start mapped" }
+        func note(_ n: Int, _ v: Int) -> MIDIMessage {
+            MIDIMessage(channel: 1, command: v > 0 ? .noteOn : .noteOff, data1: n, data2: v, timestamp: 0)
+        }
+        engine.playlists.mapMode = true
+        engine.learnPlaylistMIDI(.next)
+        engine.handleMIDI(note(36, 100))
+        guard engine.playlists.bindings[.next] == MIDIControl(kind: .note, number: 36, channel: 1), engine.playlists.learning == nil else {
+            return "Next didn't learn the note"
+        }
+        guard engine.playlists.position == 0 else { return "learning also stepped" }
+        engine.playlists.mapMode = false
+        engine.handleMIDI(note(36, 100))
+        guard engine.playlists.position == 0 else { return "the learning press fired on its repeat without a release" }
+        engine.handleMIDI(note(36, 0))
+        engine.handleMIDI(note(36, 100))
+        guard engine.playlists.position == 1 else { return "bound note didn't step" }
+        engine.handleMIDI(note(36, 100))
+        guard engine.playlists.position == 1 else { return "held note fired twice" }
+        guard engine.playlistWantsMIDI else { return "bound buttons don't want MIDI" }
+        engine.selectPlaylist(nil)
+        guard !engine.playlistWantsMIDI else { return "MIDI wanted with no playlist open" }
+        engine.selectPlaylist(url)
+        engine.clearPlaylistMIDI(.next)
+
+        // Renaming a scene follows into playlists.
+        engine.renameSceneInPlaylists(from: a, to: "renamed-a")
+        guard (try? PlaylistFile.load(url))?.entries.map(\.scene) == [b, "renamed-a"] else { return "rename not followed" }
+        guard engine.playlistSceneURL("renamed-a") == nil else { return "missing scene resolved" }
+
+        // Loading a scene from outside moves the highlight: onto it if it's in the playlist, else off.
+        engine.loop.transition.cancel()
+        engine.load(fixtureB, animated: false)
+        guard engine.playlists.position == 0 else { return "loading a scene in the playlist didn't highlight it" }
+        engine.load(fixtureA, animated: false)
+        guard engine.playlists.position == nil else { return "loading a scene not in the playlist left one highlighted" }
+        engine.loop.transition.cancel()
         return nil
     }
 
@@ -1945,6 +2069,12 @@ enum SelfCheck {
             print("FAIL transitions: \(problem)"); failures += 1
         } else {
             print("ok   transitions (timing, outgoing and incoming scenes both drawn and blended, own cameras)")
+        }
+
+        if let problem = checkPlaylists(engine: engine) {
+            print("FAIL playlists: \(problem)"); failures += 1
+        } else {
+            print("ok   playlists (strict file, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
         }
 
         if let problem = checkClockAudio(engine: engine) {

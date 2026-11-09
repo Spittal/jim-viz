@@ -7,11 +7,24 @@ struct ContentView: View {
     var body: some View {
         @Bindable var engine = engine
         NavigationSplitView {
-            // Scenes on top, device browser below, like Ableton's left-hand browser.
-            // Mappings live in the inspector on the right.
+            // Scenes (or playlists) on top, device browser below, like Ableton's left-hand
+            // browser. Mappings live in the inspector on the right.
             VSplitView {
-                SceneList()
-                    .frame(minHeight: 110, idealHeight: 200)
+                VStack(spacing: 0) {
+                    Picker("", selection: Binding(get: { engine.playlists.tab }, set: { engine.playlists.tab = $0 })) {
+                        ForEach(SidebarTab.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    switch engine.playlists.tab {
+                    case .scenes: SceneList()
+                    case .playlists: PlaylistList()
+                    }
+                }
+                .frame(minHeight: 110, idealHeight: 200)
                 DeviceBrowser()
                     .frame(minHeight: 180, idealHeight: 420)
             }
@@ -31,6 +44,8 @@ struct ContentView: View {
                         .background(Theme.chainBackground)
                 }
                 Divider()
+                PlaylistBar()
+                Divider()
                 StatusBar()
             }
             .toolbar { TransportToolbar() }
@@ -40,10 +55,10 @@ struct ContentView: View {
             }
             // Esc leaves map mode and MIDI learning.
             .background {
-                Button("") { engine.mapSource = nil; engine.current?.learnMIDI(nil) }
+                Button("") { engine.mapSource = nil; engine.current?.learnMIDI(nil); engine.playlists.mapMode = false; engine.learnPlaylistMIDI(nil) }
                     .keyboardShortcut(.escape, modifiers: [])
                     .opacity(0)
-                    .disabled(engine.mapSource == nil && engine.current?.learningMIDI == nil)
+                    .disabled(engine.mapSource == nil && engine.current?.learningMIDI == nil && !engine.playlists.mapMode)
             }
         }
         .navigationTitle(engine.current?.name ?? "jim-viz")
@@ -80,6 +95,8 @@ private struct SceneList: View {
             Section {
                 ForEach(engine.sceneURLs, id: \.self) { url in
                     SceneRow(url: url).tag(url)
+                        // The list's own drag, which leaves clicks to selection (onDrag on a row doesn't).
+                        .itemProvider { PlaylistDrag.scene(url.deletingPathExtension().lastPathComponent).provider(engine) }
                 }
             } header: {
                 HStack(spacing: 8) {
@@ -168,6 +185,8 @@ private struct TransportToolbar: ToolbarContent {
         @Bindable var engine = engine
         ToolbarItemGroup(placement: .primaryAction) {
             OutputMenu(output: engine.output)
+            Button { engine.togglePlaylistBar() } label: { Label("Playlist", systemImage: "rectangle.bottomthird.inset.filled") }
+                .help("Show or hide the playlist (⇧⌘Y)")
             Button { engine.showInspector.toggle() } label: { Label("Mappings", systemImage: "sidebar.right") }
                 .help("Show or hide the mappings inspector (⌥⌘0)")
         }
