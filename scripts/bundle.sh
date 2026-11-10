@@ -9,6 +9,7 @@ rm -rf $app
 mkdir -p $app/Contents/MacOS $app/Contents/Resources/Content
 cp .build/release/JimViz $app/Contents/MacOS/JimViz
 cp -R Content/Shaders Content/Maps Content/Models $app/Contents/Resources/Content/
+cp Resources/AppIcon.icns $app/Contents/Resources/
 # The depth model (scripts/fetch-depth-model.sh), if it's been fetched.
 model="$HOME/Library/Application Support/jim-viz/Models/DepthAnythingV2SmallF16.mlpackage"
 if [[ -d $model ]]; then
@@ -26,6 +27,7 @@ cat > $app/Contents/Info.plist <<PLIST
   <key>CFBundleDisplayName</key><string>jim-viz</string>
   <key>CFBundleIdentifier</key><string>com.jimviz.app</string>
   <key>CFBundleExecutable</key><string>JimViz</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
