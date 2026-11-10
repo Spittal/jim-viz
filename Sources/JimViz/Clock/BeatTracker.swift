@@ -1,4 +1,3 @@
-import AVFoundation
 import Foundation
 
 /// The beat the Clock follows: a continuous count where whole numbers are beats, and multiples
@@ -105,7 +104,7 @@ final class BeatTracker {
     /// Adds audio at `rate`; `time` is the host time of its first sample.
     func push(_ samples: UnsafeBufferPointer<Float>, rate: Double, time: Double) {
         if resampler?.rate != rate {
-            resampler = Resampler(from: rate)
+            resampler = Resampler(from: rate, to: BeatNet.sampleRate)
             inputCount = 0; outputCount = 0
             inputStart = time
         }
@@ -330,82 +329,5 @@ struct BeatGrid {
         } else if votes[best] >= 2, votes[best] > 2 * votes[order[1]] {
             estimate.barOffset = best
         }
-    }
-}
-
-/// Streams audio to 22.05 kHz with AVAudioConverter.
-final class Resampler {
-    let rate: Double
-    /// How far each output sample lags the input sample it stands for, in seconds. Measured once
-    /// per rate with an impulse.
-    let latency: Double
-    private let converter: AVAudioConverter
-    private let input: AVAudioPCMBuffer
-    private let output: AVAudioPCMBuffer
-
-    private static let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: BeatNet.sampleRate, channels: 1, interleaved: false)!
-    private static let capacity = 16384
-
-    init(from rate: Double) {
-        self.rate = rate
-        let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
-        converter = AVAudioConverter(from: inFormat, to: Self.outFormat)!
-        converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        input = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(Self.capacity))!
-        let outCap = Int((Double(Self.capacity) * BeatNet.sampleRate / rate).rounded(.up)) + 256
-        output = AVAudioPCMBuffer(pcmFormat: Self.outFormat, frameCapacity: AVAudioFrameCount(outCap))!
-        latency = Self.measureLatency(rate: rate)
-    }
-
-    func process(_ samples: UnsafeBufferPointer<Float>, _ emit: (UnsafeBufferPointer<Float>) -> Void) {
-        var start = 0
-        while start < samples.count {
-            let n = min(Self.capacity, samples.count - start)
-            memcpy(input.floatChannelData![0], samples.baseAddress! + start, n * 4)
-            input.frameLength = AVAudioFrameCount(n)
-            start += n
-            var fed = false
-            while true {
-                output.frameLength = 0
-                var error: NSError?
-                let status = converter.convert(to: output, error: &error) { _, state in
-                    if fed { state.pointee = .noDataNow; return nil }
-                    fed = true
-                    state.pointee = .haveData
-                    return self.input
-                }
-                if output.frameLength > 0 {
-                    emit(UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
-                }
-                if status != .haveData { break }
-            }
-        }
-    }
-
-    private static var latencies: [Double: Double] = [:]
-    private static let latencyLock = NSLock()
-
-    /// Feeds an impulse through a fresh converter and finds where it comes out.
-    private static func measureLatency(rate: Double) -> Double {
-        latencyLock.lock(); defer { latencyLock.unlock() }
-        if let l = latencies[rate] { return l }
-        let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
-        let conv = AVAudioConverter(from: inFormat, to: outFormat)!
-        conv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        let n = Int(rate / 5), at = n / 4
-        let inBuf = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(n))!
-        inBuf.frameLength = AVAudioFrameCount(n)
-        for i in 0..<n { inBuf.floatChannelData![0][i] = i == at ? 1 : 0 }
-        let outBuf = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(n))!
-        var fed = false, error: NSError?
-        _ = conv.convert(to: outBuf, error: &error) { _, state in
-            if fed { state.pointee = .noDataNow; return nil }
-            fed = true; state.pointee = .haveData; return inBuf
-        }
-        let out = UnsafeBufferPointer(start: outBuf.floatChannelData![0], count: Int(outBuf.frameLength))
-        let peak = out.indices.max { abs(out[$0]) < abs(out[$1]) } ?? 0
-        let l = Double(peak) / BeatNet.sampleRate - Double(at) / rate
-        latencies[rate] = l
-        return l
     }
 }

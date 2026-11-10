@@ -57,6 +57,8 @@ final class AudioCapture {
     @ObservationIgnored let ring: SampleRing
     /// Beat and bar tracking on this source, running only while a Clock follows it.
     @ObservationIgnored let beats: LiveBeatTracker
+    /// The separated stems, while a scene's stem outputs are mapped.
+    @ObservationIgnored let stems: LiveStems
     @ObservationIgnored private let ioQueue = DispatchQueue(label: "jim-viz.audio", qos: .userInteractive)
     @ObservationIgnored private var tapID = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var aggregateID = AudioObjectID(kAudioObjectUnknown)
@@ -79,6 +81,7 @@ final class AudioCapture {
         self.channelPair = channelPair
         ring = SampleRing()
         beats = LiveBeatTracker(ring: ring)
+        stems = LiveStems(ring: ring)
     }
 
     /// True while a scene on screen listens to it. Capture runs only then.

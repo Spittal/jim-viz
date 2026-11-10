@@ -46,9 +46,9 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 
 | Kind | Example outputs | Consumed by |
 |---|---|---|
-| value (0–1) | Audio In · Kick, Audio In · Percussive, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
+| value (0–1) | Audio In · Kick, Audio In · Percussive, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
-| spectrum | Audio In · Spectrum, Harmonic Spectrum, Percussive Spectrum (128 log bins) | `// @spectrum name Label` inputs |
+| spectrum | Audio In · Spectrum, Harmonic Spectrum, Percussive Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | nothing yet |
 | clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
@@ -155,7 +155,7 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
   `Presets`, `Playlists`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
   in git, and the app creates the folders empty on first launch.
   - `JIMVIZ_LIBRARY` overrides it.
-- **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking), which are code and ship
+- **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking, StemgenRT's for stem separation), which are code and ship
   with the app.
   - `scripts/run.sh` points `JIMVIZ_CONTENT` at it, so shaders hot-reload.
   - The bundled app reads its own copy in `Contents/Resources/Content`.

@@ -15,6 +15,9 @@ struct AudioFeatures {
     /// Levels of the harmonic (sustained, tonal) and percussive (hits, noise) parts.
     var harmonic: Float = 0
     var percussive: Float = 0
+    /// Levels of the separated stems, in `StemSeparator.Stem` order, each relative to the whole
+    /// mix's recent peak (1 only when the stem is the mix); 0 while not separating.
+    var stems = SIMD4<Float>()
     /// True when there is signal above the gate.
     var active = false
 }
@@ -55,6 +58,7 @@ final class AudioAnalyzer {
     private var real: [Float]
     private var imag: [Float]
     private var power: [Float]
+    private var stemPower: [Float]
     private var lastWritten = 0
 
     private(set) var features = AudioFeatures()
@@ -65,6 +69,8 @@ final class AudioAnalyzer {
     private(set) var spectrum = LogSpectrum()
     private(set) var harmonicSpectrum = LogSpectrum()
     private(set) var percussiveSpectrum = LogSpectrum()
+    /// The separated stems' spectra, in `StemSeparator.Stem` order.
+    private(set) var stemSpectra = [LogSpectrum](repeating: LogSpectrum(), count: 4)
     /// This frame's power spectrum split into harmonic and percussive parts.
     private(set) var split = HarmonicPercussive(bins: fftSize / 2)
     private var uiLock = os_unfair_lock()
@@ -77,9 +83,10 @@ final class AudioAnalyzer {
         return (uiFeatures, uiSpectrum)
     }
 
-    // Auto-gain and envelope state per band.
-    private var peaks: [Float] = Array(repeating: -40, count: 6)
-    private var envelopes: [Float] = Array(repeating: 0, count: 6)
+    // Auto-gain and envelope state per band: bass, mid, high, level, harmonic, percussive, then
+    // the four stems, whose auto-gain is shared: the whole mix's peak (`peaks[6]`).
+    private var peaks: [Float] = Array(repeating: -40, count: 7)
+    private var envelopes: [Float] = Array(repeating: 0, count: 10)
     private var onsetDt: Float = 0
     private var onsets: [OnsetDetector] = [
         OnsetDetector(refractory: 0.11, decay: 0.16),  // kick
@@ -96,6 +103,7 @@ final class AudioAnalyzer {
         real = [Float](repeating: 0, count: n / 2)
         imag = [Float](repeating: 0, count: n / 2)
         power = [Float](repeating: 0, count: n / 2)
+        stemPower = power
     }
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
@@ -108,6 +116,7 @@ final class AudioAnalyzer {
         spectrum = other.spectrum
         harmonicSpectrum = other.harmonicSpectrum
         percussiveSpectrum = other.percussiveSpectrum
+        stemSpectra = other.stemSpectra
         split = other.split
         onsets = other.onsets
         onsetDt = other.onsetDt
@@ -115,8 +124,9 @@ final class AudioAnalyzer {
         lastWritten = other.lastWritten
     }
 
-    /// Analyzes the latest window. `settings` holds live values of `AudioParams`.
-    func process(ring: SampleRing, dt: Float, settings: ParamBank?) {
+    /// Analyzes the latest window, and the stems' if `stems` is separating. `settings` holds
+    /// live values of `AudioParams`.
+    func process(ring: SampleRing, stems: LiveStems?, dt: Float, settings: ParamBank?) {
         let range = settings?.live("range") ?? 30
         let release = settings?.live("release") ?? 0.12
         let sensitivity = settings?.live("sensitivity") ?? 0.5
@@ -133,24 +143,10 @@ final class AudioAnalyzer {
         vDSP_rmsqv(samples, 1, &rms, vDSP_Length(n))
         let levelDb = 20 * log10(rms + 1e-9)
 
-        // Windowed real FFT → power spectrum.
-        vDSP_vmul(samples, 1, window, 1, &samples, 1, vDSP_Length(n))
-        real.withUnsafeMutableBufferPointer { re in
-            imag.withUnsafeMutableBufferPointer { im in
-                var split = DSPSplitComplex(realp: re.baseAddress!, imagp: im.baseAddress!)
-                samples.withUnsafeBytes { raw in
-                    vDSP_ctoz(raw.bindMemory(to: DSPComplex.self).baseAddress!, 2, &split, 1, vDSP_Length(n / 2))
-                }
-                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
-                vDSP_zvmags(&split, 1, &power, 1, vDSP_Length(n / 2))
-            }
-        }
-        var scale = 1 / Float(n * n)
-        vDSP_vsmul(power, 1, &scale, &power, 1, vDSP_Length(n / 2))
-        power[0] = 0
+        powerSpectrum(of: &samples, into: &power)
 
         let binHz = rate / Float(n)
-        func bandDb(_ lo: Float, _ hi: Float, of power: [Float]) -> Float {
+        func bandDb(_ lo: Float, _ hi: Float, of power: [Float], binHz: Float = binHz) -> Float {
             let a = max(1, Int(lo / binHz)), b = min(n / 2 - 1, max(a, Int(hi / binHz)))
             var sum: Float = 0
             power.withUnsafeBufferPointer { vDSP_sve($0.baseAddress! + a, 1, &sum, vDSP_Length(b - a + 1)) }
@@ -199,6 +195,24 @@ final class AudioAnalyzer {
         f.percussive = envelope(5, autoGain(5, bandDb(20, 16000, of: split.percussive)))
         harmonicSpectrum.update(split.harmonic, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
         percussiveSpectrum.update(split.percussive, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
+
+        // The stems' levels are measured against the mix's peak, not their own, over a narrower
+        // range. Against its own peak a stem that isn't playing has its bleed (some 40 dB down)
+        // gained up into view, and one that is playing sits pinned near 1. So a stem reads 1
+        // only when it is the whole mix. Zero until the separator has settled.
+        peaks[6] = max(bandDb(20, 16000), peaks[6] - decayPerSec * dt, gate + range)
+        if let stems {
+            let stemBinHz = Float(StemSeparator.sampleRate) / Float(n)
+            let stemRange = range * 0.6
+            let heard = active && stems.isSettled
+            for (i, r) in stems.rings.enumerated() {
+                r.copyLatest(into: &samples, count: n)
+                powerSpectrum(of: &samples, into: &stemPower)
+                let db = bandDb(20, 16000, of: stemPower, binHz: stemBinHz)
+                f.stems[i] = envelope(6 + i, heard ? min(max((db - (peaks[6] - stemRange)) / stemRange, 0), 1) : 0)
+                stemSpectra[i].update(stemPower, binHz: stemBinHz, dt: dt, range: spectrumRange, release: release, active: heard)
+            }
+        }
         features = f
 
         spectrum.update(power, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
@@ -206,6 +220,25 @@ final class AudioAnalyzer {
         uiFeatures = features
         for i in 0..<Self.spectrumBins { uiSpectrum[i] = spectrum.bins[i] }
         os_unfair_lock_unlock(&uiLock)
+    }
+
+    /// Windows `samples` (`fftSize` of them, overwritten) and writes its power spectrum, DC zeroed.
+    private func powerSpectrum(of samples: inout [Float], into power: inout [Float]) {
+        let n = Self.fftSize
+        vDSP_vmul(samples, 1, window, 1, &samples, 1, vDSP_Length(n))
+        real.withUnsafeMutableBufferPointer { re in
+            imag.withUnsafeMutableBufferPointer { im in
+                var split = DSPSplitComplex(realp: re.baseAddress!, imagp: im.baseAddress!)
+                samples.withUnsafeBytes { raw in
+                    vDSP_ctoz(raw.bindMemory(to: DSPComplex.self).baseAddress!, 2, &split, 1, vDSP_Length(n / 2))
+                }
+                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+                vDSP_zvmags(&split, 1, &power, 1, vDSP_Length(n / 2))
+            }
+        }
+        var scale = 1 / Float(n * n)
+        vDSP_vsmul(power, 1, &scale, &power, 1, vDSP_Length(n / 2))
+        power[0] = 0
     }
 }
 

@@ -87,7 +87,7 @@ enum SelfCheck {
             trackSeconds += CACurrentMediaTime() - clock
             if dumpPath != nil, tempo.frames != framesBefore { activations += [tempo.activation.beat, tempo.activation.downbeat] }
             pos += n
-            analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
+            analyzer.process(ring: ring, stems: nil, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
             splitLog.append((t, f.harmonic, f.percussive))
@@ -199,7 +199,7 @@ enum SelfCheck {
         var kicks = 0
         var lastKick: Float = 0
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
-            analyzer.process(ring: capture.ring, dt: 1 / 60, settings: nil)
+            analyzer.process(ring: capture.ring, stems: nil, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             if f.kick > lastKick + 0.5 { kicks += 1 }
             lastKick = f.kick
@@ -581,7 +581,8 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum", "audio.sync", "palette.colors"] else {
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum"]
+                + StreamOutput.stemSpectrumKeys + ["audio.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
 
@@ -2231,6 +2232,10 @@ enum SelfCheck {
             print("ok   streams (palette and spectrum only through mappings, typed, nothing connects itself)")
         }
 
+        let (stemsProblem, stemsSummary) = checkStems(engine: engine)
+        if let stemsProblem { print("FAIL stems: \(stemsProblem)"); failures += 1 }
+        else { print("ok   stems (outputs typed, start unmapped, separator only while mapped; \(stemsSummary))") }
+
         let (modelProblem, modelSummary) = checkDepthModel(engine: engine)
         if let modelProblem { print("FAIL depth model: \(modelProblem)"); failures += 1 }
         else { print("ok   depth model (\(modelSummary))") }
@@ -2368,7 +2373,7 @@ extension SelfCheck {
                 return tone + click
             }
             pos += frame
-            analyzer.process(ring: ring, dt: 1 / 60, settings: nil)
+            analyzer.process(ring: ring, stems: nil, dt: 1 / 60, settings: nil)
             guard pos > 24000 else { continue }
             let h = analyzer.split.harmonic, p = analyzer.split.percussive
             let sinceClick = (pos - 12000) % clickEvery
@@ -2415,6 +2420,131 @@ extension SelfCheck {
             return "split spectra stayed empty"
         }
         return nil
+    }
+
+    /// Audio In's stems. Their outputs are typed and start unmapped, and the separator runs only
+    /// while one is mapped. The separator reproduces the reference
+    /// implementation (StemgenRT's PyTorch source as numpy, matched to ONNX Runtime)
+    /// on a synthetic signal, and in a scene the stems drive the levels and spectra. Returns
+    /// (problem, summary).
+    static func checkStems(engine: Engine) -> (String?, String) {
+        let url = fixtureA!
+        engine.load(url, animated: false)
+        defer { engine.load(url, animated: false) }
+        guard let scene = engine.current, let audioIn = scene.audioIn else { return ("scene did not load", "") }
+        let levelKeys = StemSeparator.Stem.allCases.map { "audio.\($0.key)Stem" }
+        guard levelKeys.allSatisfy({ k in scene.outputs.contains { $0.key == k } }),
+              StreamOutput.stemSpectrumKeys.allSatisfy({ k in scene.streamOutputs.contains { $0.key == k && $0.kind == .spectrum } }) else {
+            return ("Audio In is missing stem outputs", "")
+        }
+        guard !scene.mappings.contains(where: { AudioInRuntime.stemKeys.contains($0.spec.source) }), !audioIn.stemsMapped else {
+            return ("stems mapped in \(url.lastPathComponent)", "")
+        }
+        _ = engine.renderOffscreen(scene, frames: 5, snapshot: nil)
+        guard !audioIn.capture.stems.isRunning else { return ("separator runs with no stem mapped", "") }
+        let count = scene.mappings.count
+        engine.addMapping(source: "audio.drumsSpectrum", target: "camera.fov")
+        engine.addMapping(source: "audio.drumsStem", target: "generator.spec")
+        guard engine.current?.mappings.count == count else { return ("a stem mapped across kinds", "") }
+
+        // A sub bass, a tone, and a noise burst every 250 ms, at 44.1 kHz.
+        func signal(_ i: Int, rate: Double) -> Float {
+            let t = Double(i) / rate
+            let noise = Double((i * 7919) % 2003) / 1001.5 - 1
+            let burst = exp(-Double(i % Int(rate / 4)) / (300 * rate / 44100)) * noise
+            return Float(0.3 * sin(2 * .pi * 55 * t) + 0.1 * sin(2 * .pi * 660 * t) + 0.5 * burst)
+        }
+        let hops = 400, h = StemSeparator.hop
+        let input = (0..<hops * h).map { signal($0, rate: StemSeparator.sampleRate) }
+        let separator = StemSeparator(weights: .shared)
+        var out = [Float](repeating: 0, count: 4 * h)
+        var sums = [Double](repeating: 0, count: 3)
+        let start = Date()
+        for k in 0..<hops {
+            input.withUnsafeBufferPointer { x in out.withUnsafeMutableBufferPointer { separator.step(x.baseAddress! + k * h, $0.baseAddress!) } }
+            guard k >= 200 else { continue }
+            for s in 0..<3 { for j in 0..<h { sums[s] += Double(out[s * h + j] * out[s * h + j]) } }
+        }
+        let ms = Date().timeIntervalSince(start) * 1000 / Double(hops)
+        // The reference's RMS of each stem over hops 200...399.
+        let expected = [0.056357, 0.224173, 0.001194]
+        for s in 0..<3 {
+            let rms = (sums[s] / Double(200 * h)).squareRoot()
+            guard abs(rms - expected[s]) <= 1e-3 * expected[s] + 1e-6 else {
+                return ("\(StemSeparator.Stem(rawValue: s)!.name) RMS \(rms), reference \(expected[s])", "")
+            }
+        }
+
+        // Live, on its own thread: audio arriving in real time in 10 ms blocks, demanded every
+        // frame, comes out as stems; a second after the demand stops, so does the separator.
+        let ring = SampleRing(capacity: 16384)
+        ring.setSampleRate(48000)
+        let liveStems = LiveStems(ring: ring)
+        var written = 0
+        let began = Date()
+        while Date().timeIntervalSince(began) < 1.5 {
+            ring.write(frames: 480, hostTime: CACurrentMediaTime()) { signal(written + $0, rate: 48000) }
+            written += 480
+            liveStems.demand(gate: -50)
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        var latest = [Float](repeating: 0, count: 4096)
+        liveStems.rings[1].copyLatest(into: &latest, count: latest.count)
+        let bassRMS = (latest.map { $0 * $0 }.reduce(0, +) / Float(latest.count)).squareRoot()
+        guard liveStems.isRunning, bassRMS > 0.05 else { return ("live separator produced no bass (RMS \(bassRMS))", "") }
+        Thread.sleep(forTimeInterval: 1.3)
+        guard !liveStems.isRunning else { return ("live separator still running a second after the demand stopped", "") }
+
+        // Silence. The networks need 1.5 s of audio to settle, and silence doesn't count. Once
+        // settled, they're paused through silence (run through it, the vocal network passes the
+        // whole mix for seconds afterwards; this signal doesn't provoke that, music does), so
+        // the stems are silent and the separator is still settled when the audio returns.
+        let gapRing = SampleRing(capacity: 16384)
+        gapRing.setSampleRate(48000)
+        let gapStems = LiveStems(ring: gapRing)
+        var fed = 0
+        func feed(seconds: Double, silent: Bool) {
+            for _ in 0..<Int(seconds * 100) {
+                gapRing.write(frames: 480, hostTime: CACurrentMediaTime()) { silent ? 0 : signal(fed + $0, rate: 48000) }
+                fed += 480
+                gapStems.demand(gate: -50)
+                gapStems.catchUp()
+            }
+        }
+        feed(seconds: 0.02, silent: false)  // the first read only marks where the audio starts
+        feed(seconds: 1, silent: true)
+        feed(seconds: 1.3, silent: false)
+        guard !gapStems.isSettled else { return ("separator settled after 1.3 s of audio", "") }
+        feed(seconds: 1.7, silent: false)
+        guard gapStems.isSettled else { return ("separator not settled after 3 s of audio", "") }
+        feed(seconds: 2, silent: true)
+        gapStems.rings[1].copyLatest(into: &latest, count: latest.count)
+        guard latest.allSatisfy({ $0 == 0 }) else { return ("stems not silent during silence", "") }
+        feed(seconds: 0.5, silent: false)
+        gapStems.rings[1].copyLatest(into: &latest, count: latest.count)
+        guard gapStems.isSettled, latest.contains(where: { $0 != 0 }) else { return ("stems didn't resume after silence", "") }
+
+        // In a scene, through the live path at 48 kHz: Drums Stem onto a knob, Bass Spectrum
+        // into the generator. The separator starts, and the levels and spectra move.
+        engine.addMapping(source: "audio.drumsStem", target: "camera.fov")
+        engine.setStreamInput("generator.spec", StreamOutput.stemSpectrumKeys[1])
+        guard let mapped = engine.current, let live = mapped.audioIn, live.stemsMapped else {
+            return ("mapping a stem didn't start the separator", "")
+        }
+        let audioBefore = engine.offlineAudio
+        engine.offlineAudio = (samples: (0..<48000).map { signal($0, rate: 48000) }, rate: 48000)
+        defer { engine.offlineAudio = audioBefore }
+        live.capture.ring.reset()
+        _ = engine.renderOffscreen(mapped, frames: 120, snapshot: nil)
+        let a = live.analyzer
+        guard live.capture.stems.isRunning, a.features.stems[0] > 0.2, a.features.stems[1] > 0.2,
+              a.stemSpectra[0].bins.max()! > 0, a.stemSpectra[1].bins.max()! > 0 else {
+            return ("stems stayed quiet: levels \(a.features.stems)", "")
+        }
+        engine.removeMappings(target: "camera.fov")
+        engine.setStreamInput("generator.spec", StreamOutput.spectrumKey)
+        guard engine.current?.audioIn?.stemsMapped == false else { return ("separator still wanted after unmapping", "") }
+        return (nil, String(format: "matches the reference, %.2f ms per 2.9 ms hop in this build, live thread starts and stops, pauses through silence", ms))
     }
 
     /// Speed knobs flagged `rate` hand the shader their integrated value, so turning one never
@@ -2679,6 +2809,8 @@ extension Engine {
                 let n = Int(rate / 60)
                 ring?.write(frames: n, hostTime: offlineTime) { k in samples[(audioPos + k) % samples.count] }
                 audioPos += n
+                // The separator's thread can't keep up with frames rendered faster than real time.
+                if scene.audioIn?.stemsMapped == true { scene.audioIn?.capture.stems.catchUp() }
             }
             scene.modulate(signals)
             var f = FrameUniforms()

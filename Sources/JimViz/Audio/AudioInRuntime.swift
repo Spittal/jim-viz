@@ -25,7 +25,8 @@ final class SpectrumTextures {
 /// `channelPair`, through a capture shared with other scenes on that source) and analyses it with its own knobs
 /// (`AudioParams`, mappable as `audio.<name>`) and offers what it hears as outputs: band levels
 /// and hits (values), Spectrum and Audio Out (streams), the harmonic/percussive split (Harmonic and
-/// Percussive levels and spectra), and the beat.
+/// Percussive levels and spectra), the separated stems (Drums, Bass, Vocals and Other Stem levels
+/// and spectra), and the beat.
 ///
 /// The beat comes from the source's beat tracker through a `BeatClock`, as values (Pulse, Beat,
 /// Bar and Phrase ramps), triggers (On Beat, On Bar, On Phrase) and a Sync stream that LFOs and
@@ -43,6 +44,7 @@ final class AudioInRuntime {
     @ObservationIgnored let spectrum: SpectrumTextures
     @ObservationIgnored let harmonicSpectrum: SpectrumTextures
     @ObservationIgnored let percussiveSpectrum: SpectrumTextures
+    @ObservationIgnored let stemSpectra: [SpectrumTextures]
     @ObservationIgnored private(set) var outputs: [OutputSignal] = []
     @ObservationIgnored private(set) var spectrumOutput: StreamOutput!
     @ObservationIgnored private(set) var audioOutput: StreamOutput!
@@ -53,6 +55,9 @@ final class AudioInRuntime {
     @ObservationIgnored let firstBeatTrigger = TriggerInput("audio.firstBeat", "First Beat")
     @ObservationIgnored private(set) var harmonicSpectrumOutput: StreamOutput!
     @ObservationIgnored private(set) var percussiveSpectrumOutput: StreamOutput!
+    @ObservationIgnored private(set) var stemSpectrumOutputs: [StreamOutput] = []
+    /// Whether a stem output is mapped, set when the scene is built: the separator runs only then.
+    @ObservationIgnored var stemsMapped = false
     /// This frame's analysis. Render thread.
     @ObservationIgnored var features = AudioFeatures()
     /// Smoothed loudness and activity, for the Intensity output. Render thread.
@@ -82,6 +87,7 @@ final class AudioInRuntime {
         spectrum = old?.spectrum ?? makeSpectrum()
         harmonicSpectrum = old?.harmonicSpectrum ?? makeSpectrum()
         percussiveSpectrum = old?.percussiveSpectrum ?? makeSpectrum()
+        stemSpectra = old?.stemSpectra ?? StemSeparator.Stem.allCases.map { _ in makeSpectrum() }
         clock = old?.clock ?? BeatClock()
         self.continuing = old == nil ? continuing : nil
         continuingSameSource = continuing?.capture === capture
@@ -100,6 +106,9 @@ final class AudioInRuntime {
             out("hat", "Hat") { $0.hat },
             out("harmonic", "Harmonic") { $0.harmonic },
             out("percussive", "Percussive") { $0.percussive },
+        ]
+        outputs += StemSeparator.Stem.allCases.map { stem in out("\(stem.key)Stem", "\(stem.name) Stem") { $0.stems[stem.rawValue] } }
+        outputs += [
             // How hard the music is going right now: loudness, bass and hit activity, smoothed
             // over about 1.5 seconds, so it rises into drops and falls away in breakdowns.
             OutputSignal("audio.intensity", "Intensity", device: d) { [unowned self] f in
@@ -130,9 +139,15 @@ final class AudioInRuntime {
         syncOutput = StreamOutput(StreamOutput.syncKey, "Sync", device: d, kind: .clock)
         harmonicSpectrumOutput = spectrumOut(StreamOutput.harmonicSpectrumKey, harmonicSpectrum)
         percussiveSpectrumOutput = spectrumOut(StreamOutput.percussiveSpectrumKey, percussiveSpectrum)
+        stemSpectrumOutputs = zip(StreamOutput.stemSpectrumKeys, stemSpectra).map { spectrumOut($0, $1) }
     }
 
-    var streamOutputs: [StreamOutput] { [spectrumOutput, audioOutput, harmonicSpectrumOutput, percussiveSpectrumOutput, syncOutput] }
+    var streamOutputs: [StreamOutput] {
+        [spectrumOutput, audioOutput, harmonicSpectrumOutput, percussiveSpectrumOutput] + stemSpectrumOutputs + [syncOutput]
+    }
+
+    /// Keys of the stem outputs, levels and spectra, whose mapping starts the separator.
+    static let stemKeys = Set(StemSeparator.Stem.allCases.map { "audio.\($0.key)Stem" } + StreamOutput.stemSpectrumKeys)
 
     /// A trigger output that fires each time the beat count crosses a multiple of `beats`.
     private func every(_ beats: Double, _ name: String, _ label: String) -> OutputSignal {
@@ -156,11 +171,15 @@ final class AudioInRuntime {
             continuing = nil
         }
         let dt = f.dt
-        analyzer.process(ring: capture.ring, dt: dt, settings: bank)
+        if stemsMapped { capture.stems.demand(gate: bank.live("gate")) }
+        analyzer.process(ring: capture.ring, stems: stemsMapped ? capture.stems : nil, dt: dt, settings: bank)
         features = analyzer.features
         spectrum.upload(analyzer.spectrum.bins)
         harmonicSpectrum.upload(analyzer.harmonicSpectrum.bins)
         percussiveSpectrum.upload(analyzer.percussiveSpectrum.bins)
+        if stemsMapped {
+            for (t, s) in zip(stemSpectra, analyzer.stemSpectra) { t.upload(s.bins) }
+        }
 
         if firstBeatTrigger.take() { clock.firstBeat(at: firstBeatTrigger.lastFired) }
         clock.latencyMs = Double(bank.live("latency"))
