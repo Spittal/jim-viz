@@ -173,7 +173,8 @@ compile at runtime.
 ```sh
 scripts/run.sh [--release] [--output fullscreen]  # repo shaders, your library
 scripts/check.sh [/tmp/snaps]   # headless self-check on a scratch copy of your library
-scripts/bundle.sh               # build/JimViz.app
+scripts/bundle.sh [1.2.3]       # build/JimViz.app
+scripts/release.sh 1.2.3 [--publish]  # check, bundle, build/JimViz-1.2.3.dmg; --publish tags and releases
 scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
 ```
 

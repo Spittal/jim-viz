@@ -1936,9 +1936,11 @@ enum SelfCheck {
         }
         CVPixelBufferUnlockBaseAddress(buffer, [])
 
-        adaptor.append(buffer, withPresentationTime: CMTime.zero)
-        adaptor.append(buffer, withPresentationTime: CMTime(value: 5, timescale: 60))
-        adaptor.append(buffer, withPresentationTime: CMTime(value: 10, timescale: 60))
+        for frame in [0, 5, 10] {
+            // Appending while the encoder is busy throws.
+            while !writerInput.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 60))
+        }
         writerInput.markAsFinished()
         let sema = DispatchSemaphore(value: 0)
         writer.finishWriting { sema.signal() }

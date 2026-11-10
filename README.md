@@ -1,5 +1,5 @@
 # jim-viz
 
-Reactive, generative low-poly 3D visuals for DJ sets, native on macOS (Swift + Metal). Build a chain of inputs, modulators, a generator and effects, map signals like the kick or an LFO onto any knob, and send it fullscreen to a projector.
+<img src="Resources/AppIcon.png" width="128" alt="jim-viz icon">
 
-Run it with `scripts/run.sh` (only the Command Line Tools are needed, no Xcode).
+Reactive, generative low-poly 3D visuals for DJ sets, native on macOS (Swift + Metal). Build a chain of inputs, modulators, a generator and effects, map signals like the kick or an LFO onto any knob, and send it fullscreen to a projector.
