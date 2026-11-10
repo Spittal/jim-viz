@@ -97,13 +97,10 @@ final class StreamOutput: Identifiable {
     static let syncKey = "audio.sync"
     /// A lens's ST map, which goes into the Camera's Lens input (`StreamInput.cameraLensKey`).
     static let stmapKey = "lens.stmap"
-    static let harmonicSpectrumKey = "audio.harmonicSpectrum"
-    static let percussiveSpectrumKey = "audio.percussiveSpectrum"
     /// The separated stems' spectra, in `StemSeparator.Stem` order: `audio.drumsSpectrum`…
     static let stemSpectrumKeys = StemSeparator.Stem.allCases.map { "audio.\($0.key)Spectrum" }
     /// Audio In's spectrum outputs and their names.
-    static let spectrumNames = [spectrumKey: "Spectrum", harmonicSpectrumKey: "Harmonic Spectrum",
-                                percussiveSpectrumKey: "Percussive Spectrum"]
+    static let spectrumNames = [spectrumKey: "Spectrum"]
         .merging(zip(stemSpectrumKeys, StemSeparator.Stem.allCases.map { "\($0.name) Spectrum" })) { a, _ in a }
 
     /// A stream output's kind from its key alone, for when its device isn't in the scene.

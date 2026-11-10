@@ -3,10 +3,10 @@ import Foundation
 import QuartzCore
 
 /// Splits one capture's audio into drums, bass, vocals and other with a `StemSeparator`, on its
-/// own thread, as the audio arrives. One per `AudioCapture`, so scenes listening to the same
-/// source share it.
+/// own thread, as the audio arrives, and finds the kick, snare and hat hits in the drum stem
+/// (`DrumHits`). One per `AudioCapture`, so scenes listening to the same source share it.
 ///
-/// It runs only while a scene's stem outputs are mapped: each frame that scene's Audio In calls
+/// It runs while a scene's Audio In is being rendered: each frame that Audio In calls
 /// `demand`; a second without one stops the thread and clears the stems. The model loads on
 /// first use, on this thread. The stems go into `rings` at 44.1 kHz, which the render thread
 /// analyses like the input; they lag the audio by the separator's 5.8 ms plus the resampler's.
@@ -16,7 +16,8 @@ import QuartzCore
 ///   So while the input is below the gate the networks are paused, keeping their memory of the
 ///   music, and the stems are silent.
 /// - With no memory at all (just started, or reset), the stems leak for the first 1.5 s of
-///   audio. `isSettled` is false until then, and the analyzer holds the stems at zero.
+///   audio. `status.settled` is false until then: the analyzer holds the stems at zero, and no hits
+///   are counted.
 final class LiveStems {
     /// Drums, bass, vocals, other (`StemSeparator.Stem` order).
     let rings: [SampleRing]
@@ -28,7 +29,9 @@ final class LiveStems {
     private var lastDemand: CFTimeInterval = 0
     private var running = false
     private var gate: Float = 0
+    private var sensitivity: Float = 0.5
     private var settled = false
+    private var hitCounts = SIMD3<Int32>()
 
     // Stems queue only.
     private var timer: DispatchSourceTimer?
@@ -45,6 +48,7 @@ final class LiveStems {
     private static let quietHopsToPause = Int(0.05 * StemSeparator.sampleRate) / StemSeparator.hop
     private static let hopsToSettle = Int(1.5 * StemSeparator.sampleRate) / StemSeparator.hop
     private var stems = [Float](repeating: 0, count: 4 * StemSeparator.hop)
+    private var drumHits = DrumHits()
 
     init(ring: SampleRing) {
         self.ring = ring
@@ -55,12 +59,13 @@ final class LiveStems {
         }
     }
 
-    /// Render thread, each frame a scene's stem outputs are mapped. `gate` is Audio In's gate
-    /// in dB: input below it counts as silence.
-    func demand(gate: Float) {
+    /// Render thread, each frame a scene's Audio In is rendered, with its knobs: `gate` in dB
+    /// (input below it counts as silence) and the hits' `sensitivity`.
+    func demand(gate: Float, sensitivity: Float) {
         lock.lock()
         lastDemand = CACurrentMediaTime()
         self.gate = pow(10, gate / 20)
+        self.sensitivity = sensitivity
         let start = !running
         running = true
         lock.unlock()
@@ -70,8 +75,9 @@ final class LiveStems {
     /// Whether the separator is running: a scene has demanded it within the last second.
     var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return running }
 
-    /// Whether the networks have heard enough audio for the stems to be trusted.
-    var isSettled: Bool { lock.lock(); defer { lock.unlock() }; return settled }
+    /// Whether the networks have heard enough audio for the stems to be trusted, and how many
+    /// kicks, snares and hats have been found so far (a count that rose is a hit).
+    var status: (settled: Bool, hits: SIMD3<Int32>) { lock.lock(); defer { lock.unlock() }; return (settled, hitCounts) }
 
     /// Separates whatever audio has arrived, now, on the calling thread's behalf. For offline
     /// renders, which write audio faster than real time.
@@ -106,6 +112,7 @@ final class LiveStems {
         filled = 0
         quietHops = 0
         heardHops = 0
+        drumHits = DrumHits()
         lock.lock(); settled = false; lock.unlock()
     }
 
@@ -140,7 +147,7 @@ final class LiveStems {
         let n = StemSeparator.hop
         var peak: Float = 0
         vDSP_maxmgv(hop, 1, &peak, vDSP_Length(n))
-        lock.lock(); let gate = gate; lock.unlock()
+        lock.lock(); let gate = gate, sensitivity = sensitivity; lock.unlock()
         quietHops = peak < gate ? quietHops + 1 : 0
         if quietHops > Self.quietHopsToPause {
             for i in stems.indices { stems[i] = 0 }
@@ -149,7 +156,10 @@ final class LiveStems {
                 stems.withUnsafeMutableBufferPointer { s in separator!.step(h.baseAddress!, s.baseAddress!) }
             }
             heardHops += 1
+            // The drum stem is the first of the four.
+            let hits = stems.withUnsafeBufferPointer { drumHits.feed($0.baseAddress!, sensitivity: sensitivity) }
             if heardHops == Self.hopsToSettle { lock.lock(); settled = true; lock.unlock() }
+            if heardHops > Self.hopsToSettle, hits != .zero { lock.lock(); hitCounts &+= hits; lock.unlock() }
         }
         for (i, r) in rings.enumerated() {
             r.write(frames: n, hostTime: time) { stems[i * n + $0] }

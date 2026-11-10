@@ -46,9 +46,9 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 
 | Kind | Example outputs | Consumed by |
 |---|---|---|
-| value (0–1) | Audio In · Kick, Audio In · Percussive, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
+| value (0–1) | Audio In · Kick, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
-| spectrum | Audio In · Spectrum, Harmonic Spectrum, Percussive Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins) | `// @spectrum name Label` inputs |
+| spectrum | Audio In · Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | nothing yet |
 | clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
@@ -112,6 +112,8 @@ are bugs.
   - Don't make the render thread wait on SwiftUI or `@Observable` state.
 - **Do expensive work only when something consumes it.** For example, the depth model runs
   only while Webcam · Depth is mapped somewhere.
+  - The exception is the stem separator, which runs whenever a scene's Audio In is rendered:
+    Kick, Snare and Hat are found in its drum stem, and Audio In's lamps and Intensity use them.
 - **Keep per-frame allocations and CPU↔GPU syncs out of the hot path.** Use rotating or
   triple-buffered textures, as the spectrum and palette already do.
 - **Release builds use `-Ounchecked`.** Measure (ms per frame, fps) when adding anything heavy.

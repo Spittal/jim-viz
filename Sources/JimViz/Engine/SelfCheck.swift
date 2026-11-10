@@ -54,6 +54,7 @@ enum SelfCheck {
         let ring = SampleRing(capacity: 16384)
         ring.setSampleRate(rate)
         let analyzer = AudioAnalyzer()
+        let stems = LiveStems(ring: ring)
         let tempo = BeatTracker()
         if let i = CommandLine.arguments.firstIndex(of: "--bpm-range"), i + 1 < CommandLine.arguments.count {
             let parts = CommandLine.arguments[i + 1].split(separator: "-").compactMap { Double($0) }
@@ -71,7 +72,6 @@ enum SelfCheck {
         var detected: [String: [Double]] = ["kick": [], "snare": [], "hat": []]
         var prev = AudioFeatures()
         var sums = (bass: Float(0), mid: Float(0), high: Float(0)), count = 0
-        var splitLog: [(t: Double, harmonic: Float, percussive: Float)] = []
         var pos = 0
         while pos < frames {
             let n = min(chunk, frames - pos)
@@ -87,10 +87,11 @@ enum SelfCheck {
             trackSeconds += CACurrentMediaTime() - clock
             if dumpPath != nil, tempo.frames != framesBefore { activations += [tempo.activation.beat, tempo.activation.downbeat] }
             pos += n
-            analyzer.process(ring: ring, stems: nil, dt: 1 / 60, settings: nil)
+            stems.demand(gate: -50, sensitivity: 0.5)
+            stems.catchUp()
+            analyzer.process(ring: ring, stems: stems, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             let t = Double(pos) / rate
-            splitLog.append((t, f.harmonic, f.percussive))
             if let rd = tempo.estimate.reading(at: t) { beatAt.append((t, rd.beat)) }
             if pos / chunk % 120 == 0 {
                 let st = tempo.estimate
@@ -120,16 +121,6 @@ enum SelfCheck {
             }
         }
         var ok = true
-        // The split: how the Percussive level stands just after hits, against the rest.
-        let hitTimes = (truth["kick"] ?? []) + (truth["snare"] ?? []) + (truth["hat"] ?? [])
-        if !hitTimes.isEmpty {
-            func near(_ t: Double) -> Bool { hitTimes.contains { t >= $0 && t < $0 + 0.05 } }
-            let at = splitLog.filter { near($0.t) }, off = splitLog.filter { !near($0.t) }
-            func mean(_ xs: [Float]) -> Float { xs.isEmpty ? 0 : xs.reduce(0, +) / Float(xs.count) }
-            print(String(format: "split: percussive %.2f within 50 ms of hits, %.2f elsewhere · harmonic %.2f / %.2f",
-                         mean(at.map(\.percussive)), mean(off.map(\.percussive)),
-                         mean(at.map(\.harmonic)), mean(off.map(\.harmonic))))
-        }
         // Phase check: at each true kick (once the estimate is usable), the beat should be whole.
         if let kicks = truth["kick"], !beatAt.isEmpty {
             var errs: [Double] = []
@@ -159,9 +150,13 @@ enum SelfCheck {
             print(String(format: "tempo %.2f vs expected %.1f: %@", finalTempo, expected, good ? "ok" : "FAIL"))
             if !good { ok = false }
         }
+        // The separator reports no hits until it has heard 1.5 s of audio, so score from there.
+        // `--kick-precision 0.6`: how many of the kicks found must be real (0.9 unless given).
+        let minKickPrecision = CommandLine.arguments.firstIndex(of: "--kick-precision").flatMap { Double(CommandLine.arguments[$0 + 1]) } ?? 0.9
+        let settledBy = 1.6
         for name in ["kick", "snare", "hat"] {
             let d = detected[name]!
-            guard let t = truth[name] else {
+            guard let t = truth[name]?.filter({ $0 >= settledBy }) else {
                 let gaps = zip(d.dropFirst(), d).map { $0 - $1 }.filter { $0 > 0.2 && $0 < 1.5 }.sorted()
                 let median = gaps.isEmpty ? 0 : gaps[gaps.count / 2]
                 let duration = Double(frames) / rate
@@ -184,7 +179,7 @@ enum SelfCheck {
                          name, hits, t.count, d.count - hits, recall * 100, precision * 100, lag))
             let falses = d.indices.filter { !used.contains($0) }.prefix(8).map { String(format: "%.2f", d[$0]) }
             if !falses.isEmpty { print("  false at: \(falses.joined(separator: " "))") }
-            if name == "kick" && (recall < 0.9 || precision < 0.9) { ok = false }
+            if name == "kick" && (recall < 0.9 || precision < minKickPrecision) { ok = false }
         }
         return ok ? 0 : 1
     }
@@ -199,7 +194,8 @@ enum SelfCheck {
         var kicks = 0
         var lastKick: Float = 0
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
-            analyzer.process(ring: capture.ring, stems: nil, dt: 1 / 60, settings: nil)
+            capture.stems.demand(gate: -50, sensitivity: 0.5)
+            analyzer.process(ring: capture.ring, stems: capture.stems, dt: 1 / 60, settings: nil)
             let f = analyzer.features
             if f.kick > lastKick + 0.5 { kicks += 1 }
             lastKick = f.kick
@@ -581,7 +577,7 @@ enum SelfCheck {
         guard let scene = engine.current, scene.generator != nil else { return "scene did not load" }
         guard scene.streamBindings["generator.pal"]?.key == "palette.colors",
               scene.streamBindings["generator.spec"]?.key == "audio.spectrum",
-              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out", "audio.harmonicSpectrum", "audio.percussiveSpectrum"]
+              scene.streamOutputs.map(\.key) == ["audio.spectrum", "audio.out"]
                 + StreamOutput.stemSpectrumKeys + ["audio.sync", "palette.colors"] else {
             return "palette and spectrum not mapped in: \(scene.streamBindings.mapValues(\.key))"
         }
@@ -2220,12 +2216,6 @@ enum SelfCheck {
             print("ok   video transport (in/out knobs unpacked, loops between in and out, jump lands inside, starts unmapped)")
         }
 
-        if let problem = checkSplit(engine: engine) {
-            print("FAIL split: \(problem)"); failures += 1
-        } else {
-            print("ok   split (tone harmonic, clicks percussive, outputs start unmapped, typed)")
-        }
-
         if let problem = checkStreams(engine: engine) {
             print("FAIL streams: \(problem)"); failures += 1
         } else {
@@ -2234,7 +2224,7 @@ enum SelfCheck {
 
         let (stemsProblem, stemsSummary) = checkStems(engine: engine)
         if let stemsProblem { print("FAIL stems: \(stemsProblem)"); failures += 1 }
-        else { print("ok   stems (outputs typed, start unmapped, separator only while mapped; \(stemsSummary))") }
+        else { print("ok   stems (outputs typed, start unmapped; kick, snare and hat told apart; \(stemsSummary))") }
 
         let (modelProblem, modelSummary) = checkDepthModel(engine: engine)
         if let modelProblem { print("FAIL depth model: \(modelProblem)"); failures += 1 }
@@ -2352,78 +2342,8 @@ enum SelfCheck {
 }
 
 extension SelfCheck {
-    /// The harmonic/percussive split: a steady tone goes to Harmonic and clicks to Percussive,
-    /// on the frame they arrive. Audio In's split outputs start unmapped. (That hits are found in
-    /// the percussive part, so pads don't fire them, is scored by `check.sh` on a pad track.)
-    static func checkSplit(engine: Engine) -> String? {
-        let rate = 48000.0, frame = 800, clickEvery = 24000, clickLength = 240
-        let ring = SampleRing(capacity: 16384)
-        ring.setSampleRate(rate)
-        let analyzer = AudioAnalyzer()
-        var rng = SystemRandomNumberGenerator()
-        var pos = 0
-        let toneBin = Int((440 / (rate / Double(AudioAnalyzer.fftSize))).rounded())
-        let highBins = (AudioAnalyzer.fftSize * 2000 / 48000)..<(AudioAnalyzer.fftSize / 2)
-        var toneShares: [Float] = [], clickShares: [Float] = []
-        for _ in 0..<180 {
-            ring.write(frames: frame, hostTime: Double(pos) / rate) { k in
-                let i = pos + k
-                let tone = 0.3 * sin(2 * Float.pi * 440 * Float(i) / Float(rate))
-                let click = i >= 12000 && (i - 12000) % clickEvery < clickLength ? Float.random(in: -0.8...0.8, using: &rng) : 0
-                return tone + click
-            }
-            pos += frame
-            analyzer.process(ring: ring, stems: nil, dt: 1 / 60, settings: nil)
-            guard pos > 24000 else { continue }
-            let h = analyzer.split.harmonic, p = analyzer.split.percussive
-            let sinceClick = (pos - 12000) % clickEvery
-            if sinceClick >= 9600 && sinceClick < 20000 {
-                // Steady stretch: the tone's bin is harmonic.
-                toneShares.append(h[toneBin] / max(h[toneBin] + p[toneBin], 1e-12))
-            } else if sinceClick >= clickLength && sinceClick < frame + clickLength {
-                // First frame with the whole click in the window: the noise above 2 kHz is percussive.
-                let hs = highBins.reduce(Float(0)) { $0 + h[$1] }, ps = highBins.reduce(Float(0)) { $0 + p[$1] }
-                clickShares.append(ps / max(hs + ps, 1e-12))
-            }
-        }
-        guard !toneShares.isEmpty, !clickShares.isEmpty else { return "test signal produced no measurements" }
-        guard let tone = toneShares.min(), tone > 0.9 else { return "steady tone not harmonic: \(toneShares.min() ?? 0)" }
-        guard let click = clickShares.min(), click > 0.8 else { return "clicks not percussive on arrival: \(clickShares.min() ?? 0)" }
-
-        // In a scene: the outputs exist, start unmapped, and are typed.
-        let url = fixtureA!
-        engine.load(url, animated: false)
-        defer { engine.load(url, animated: false) }
-        guard let scene = engine.current else { return "scene did not load" }
-        let splitKeys: Set = ["audio.harmonic", "audio.percussive", StreamOutput.harmonicSpectrumKey, StreamOutput.percussiveSpectrumKey]
-        let streamKeys = scene.streamOutputs.map(\.key)
-        guard scene.outputs.contains(where: { $0.key == "audio.harmonic" }), scene.outputs.contains(where: { $0.key == "audio.percussive" }),
-              streamKeys.contains(StreamOutput.harmonicSpectrumKey), streamKeys.contains(StreamOutput.percussiveSpectrumKey) else {
-            return "Audio In is missing split outputs"
-        }
-        guard !scene.mappings.contains(where: { splitKeys.contains($0.spec.source) }) else {
-            return "split outputs mapped in \(url.lastPathComponent)"
-        }
-        let count = scene.mappings.count
-        engine.addMapping(source: StreamOutput.percussiveSpectrumKey, target: "camera.fov")
-        guard engine.current?.mappings.count == count else { return "Percussive Spectrum mapped onto a knob" }
-        engine.addMapping(source: "audio.percussive", target: "camera.fov")
-        guard let mapped = engine.current, mapped.mappings.contains(where: { $0.spec.source == "audio.percussive" && $0.problem == nil }) else {
-            return "Percussive didn't map onto a knob"
-        }
-        mapped.audioIn?.capture.ring.reset()
-        let audioBefore = engine.offlineAudio
-        engine.offlineAudio = (samples: (0..<48000).map { i in i % 24000 < 240 ? Float.random(in: -0.8...0.8) : 0.3 * sin(2 * Float.pi * 440 * Float(i) / 48000) }, rate: 48000)
-        defer { engine.offlineAudio = audioBefore }
-        _ = engine.renderOffscreen(mapped, frames: 40, snapshot: nil)
-        guard let a = mapped.audioIn?.analyzer, a.harmonicSpectrum.bins.max()! > 0, a.percussiveSpectrum.bins.max()! > 0 else {
-            return "split spectra stayed empty"
-        }
-        return nil
-    }
-
-    /// Audio In's stems. Their outputs are typed and start unmapped, and the separator runs only
-    /// while one is mapped. The separator reproduces the reference
+    /// Audio In's stems and the hits found in them. The stem outputs are typed and start
+    /// unmapped. The hit detector tells a kick, a snare and a hat apart. The separator reproduces the reference
     /// implementation (StemgenRT's PyTorch source as numpy, matched to ONNX Runtime)
     /// on a synthetic signal, and in a scene the stems drive the levels and spectra. Returns
     /// (problem, summary).
@@ -2431,21 +2351,57 @@ extension SelfCheck {
         let url = fixtureA!
         engine.load(url, animated: false)
         defer { engine.load(url, animated: false) }
-        guard let scene = engine.current, let audioIn = scene.audioIn else { return ("scene did not load", "") }
+        guard let scene = engine.current, scene.audioIn != nil else { return ("scene did not load", "") }
         let levelKeys = StemSeparator.Stem.allCases.map { "audio.\($0.key)Stem" }
         guard levelKeys.allSatisfy({ k in scene.outputs.contains { $0.key == k } }),
               StreamOutput.stemSpectrumKeys.allSatisfy({ k in scene.streamOutputs.contains { $0.key == k && $0.kind == .spectrum } }) else {
             return ("Audio In is missing stem outputs", "")
         }
-        guard !scene.mappings.contains(where: { AudioInRuntime.stemKeys.contains($0.spec.source) }), !audioIn.stemsMapped else {
+        let stemKeys = Set(levelKeys + StreamOutput.stemSpectrumKeys)
+        guard !scene.mappings.contains(where: { stemKeys.contains($0.spec.source) }),
+              !scene.streamBindings.values.contains(where: { stemKeys.contains($0.key) }) else {
             return ("stems mapped in \(url.lastPathComponent)", "")
         }
-        _ = engine.renderOffscreen(scene, frames: 5, snapshot: nil)
-        guard !audioIn.capture.stems.isRunning else { return ("separator runs with no stem mapped", "") }
         let count = scene.mappings.count
         engine.addMapping(source: "audio.drumsSpectrum", target: "camera.fov")
         engine.addMapping(source: "audio.drumsStem", target: "generator.spec")
         guard engine.current?.mappings.count == count else { return ("a stem mapped across kinds", "") }
+
+        // The hit detector on its own: a 60 Hz thump, a burst of tones from 1.7 to 4.7 kHz and a
+        // burst from 9 to 14.5 kHz, half a second apart, played twice. Once it has heard each
+        // drum (the first round), the second round is one kick, one snare and one hat.
+        var drumHits = DrumHits()
+        var found: [(drum: Int, hop: Int)] = []
+        let hopsPerHit = Int(0.5 * StemSeparator.sampleRate) / StemSeparator.hop
+        var hop = [Float](repeating: 0, count: StemSeparator.hop)
+        var hitSeconds = 0.0
+        for k in 0..<7 * hopsPerHit {
+            for j in hop.indices {
+                let i = k * StemSeparator.hop + j
+                let since = Double(i % (hopsPerHit * StemSeparator.hop)) / StemSeparator.sampleRate
+                func tones(from: Double, step: Double) -> Double {
+                    var sum = 0.0
+                    for m in 0..<12 {
+                        let hz = from + Double(m) * step
+                        sum += sin(2 * Double.pi * hz * since + Double(m) * 1.7)
+                    }
+                    return sum / 12
+                }
+                switch (k / hopsPerHit + 2) % 3 {
+                case _ where k < hopsPerHit: hop[j] = 0
+                case 0: hop[j] = Float(0.8 * sin(2 * .pi * 60 * since) * min(since / 0.005, 1) * exp(-since * 12))
+                case 1: hop[j] = Float(0.5 * tones(from: 1700, step: 270) * exp(-since * 25))
+                default: hop[j] = Float(0.1 * tones(from: 9000, step: 500) * exp(-since * 60))
+                }
+            }
+            let before = CACurrentMediaTime()
+            let hits = drumHits.feed(hop, sensitivity: 0.5)
+            hitSeconds += CACurrentMediaTime() - before
+            for d in 0..<DrumHits.count where hits[d] == 1 && k >= 4 * hopsPerHit { found.append((d, k)) }
+        }
+        guard found.map(\.drum) == [0, 1, 2], found.enumerated().allSatisfy({ $1.hop >= ($0 + 4) * hopsPerHit && $1.hop < ($0 + 4) * hopsPerHit + 8 }) else {
+            return ("kick, snare and hat bursts were heard as \(found)", "")
+        }
 
         // A sub bass, a tone, and a noise burst every 250 ms, at 44.1 kHz.
         func signal(_ i: Int, rate: Double) -> Float {
@@ -2485,7 +2441,7 @@ extension SelfCheck {
         while Date().timeIntervalSince(began) < 1.5 {
             ring.write(frames: 480, hostTime: CACurrentMediaTime()) { signal(written + $0, rate: 48000) }
             written += 480
-            liveStems.demand(gate: -50)
+            liveStems.demand(gate: -50, sensitivity: 0.5)
             Thread.sleep(forTimeInterval: 0.01)
         }
         var latest = [Float](repeating: 0, count: 4096)
@@ -2507,30 +2463,28 @@ extension SelfCheck {
             for _ in 0..<Int(seconds * 100) {
                 gapRing.write(frames: 480, hostTime: CACurrentMediaTime()) { silent ? 0 : signal(fed + $0, rate: 48000) }
                 fed += 480
-                gapStems.demand(gate: -50)
+                gapStems.demand(gate: -50, sensitivity: 0.5)
                 gapStems.catchUp()
             }
         }
         feed(seconds: 0.02, silent: false)  // the first read only marks where the audio starts
         feed(seconds: 1, silent: true)
         feed(seconds: 1.3, silent: false)
-        guard !gapStems.isSettled else { return ("separator settled after 1.3 s of audio", "") }
+        guard !gapStems.status.settled else { return ("separator settled after 1.3 s of audio", "") }
         feed(seconds: 1.7, silent: false)
-        guard gapStems.isSettled else { return ("separator not settled after 3 s of audio", "") }
+        guard gapStems.status.settled else { return ("separator not settled after 3 s of audio", "") }
         feed(seconds: 2, silent: true)
         gapStems.rings[1].copyLatest(into: &latest, count: latest.count)
         guard latest.allSatisfy({ $0 == 0 }) else { return ("stems not silent during silence", "") }
         feed(seconds: 0.5, silent: false)
         gapStems.rings[1].copyLatest(into: &latest, count: latest.count)
-        guard gapStems.isSettled, latest.contains(where: { $0 != 0 }) else { return ("stems didn't resume after silence", "") }
+        guard gapStems.status.settled, latest.contains(where: { $0 != 0 }) else { return ("stems didn't resume after silence", "") }
 
         // In a scene, through the live path at 48 kHz: Drums Stem onto a knob, Bass Spectrum
         // into the generator. The separator starts, and the levels and spectra move.
         engine.addMapping(source: "audio.drumsStem", target: "camera.fov")
         engine.setStreamInput("generator.spec", StreamOutput.stemSpectrumKeys[1])
-        guard let mapped = engine.current, let live = mapped.audioIn, live.stemsMapped else {
-            return ("mapping a stem didn't start the separator", "")
-        }
+        guard let mapped = engine.current, let live = mapped.audioIn else { return ("scene lost its Audio In", "") }
         let audioBefore = engine.offlineAudio
         engine.offlineAudio = (samples: (0..<48000).map { signal($0, rate: 48000) }, rate: 48000)
         defer { engine.offlineAudio = audioBefore }
@@ -2543,8 +2497,8 @@ extension SelfCheck {
         }
         engine.removeMappings(target: "camera.fov")
         engine.setStreamInput("generator.spec", StreamOutput.spectrumKey)
-        guard engine.current?.audioIn?.stemsMapped == false else { return ("separator still wanted after unmapping", "") }
-        return (nil, String(format: "matches the reference, %.2f ms per 2.9 ms hop in this build, live thread starts and stops, pauses through silence", ms))
+        return (nil, String(format: "matches the reference, %.2f ms per 2.9 ms hop in this build plus %.3f ms for the hits, live thread starts and stops, pauses through silence",
+                             ms, hitSeconds * 1000 / Double(7 * hopsPerHit)))
     }
 
     /// Speed knobs flagged `rate` hand the shader their integrated value, so turning one never
@@ -2810,7 +2764,7 @@ extension Engine {
                 ring?.write(frames: n, hostTime: offlineTime) { k in samples[(audioPos + k) % samples.count] }
                 audioPos += n
                 // The separator's thread can't keep up with frames rendered faster than real time.
-                if scene.audioIn?.stemsMapped == true { scene.audioIn?.capture.stems.catchUp() }
+                scene.audioIn?.capture.stems.catchUp()
             }
             scene.modulate(signals)
             var f = FrameUniforms()

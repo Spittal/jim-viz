@@ -1402,11 +1402,8 @@ final class Engine {
                                 lens: lens, effects: effects, palettes: palettes, outputs: outputs, mappings: mappings,
                                 banksByPath: banks)
         // The depth model runs only for video sources whose Depth goes somewhere.
-        let bound = Set(streamBindings.values.map(\.key))
-        for source in scene.videoSources { source.depthMapped = bound.contains(source.depthVideo.key) }
-        // So does the stem separator for Audio In's stems.
-        let stems = AudioInRuntime.stemKeys
-        audioIn?.stemsMapped = mappings.contains { stems.contains($0.spec.source) } || !bound.isDisjoint(with: stems)
+        let boundVideo = Set(streamBindings.values.map(\.key))
+        for source in scene.videoSources { source.depthMapped = boundVideo.contains(source.depthVideo.key) }
         return scene
     }
 

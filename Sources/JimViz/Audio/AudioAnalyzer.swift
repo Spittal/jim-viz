@@ -8,13 +8,10 @@ struct AudioFeatures {
     var mid: Float = 0
     var high: Float = 0
     var level: Float = 0
-    /// Onset envelopes: jump to 1 on a detected hit, then decay.
+    /// Hit envelopes: jump to 1 on a hit found in the drum stem, then decay.
     var kick: Float = 0
     var snare: Float = 0
     var hat: Float = 0
-    /// Levels of the harmonic (sustained, tonal) and percussive (hits, noise) parts.
-    var harmonic: Float = 0
-    var percussive: Float = 0
     /// Levels of the separated stems, in `StemSeparator.Stem` order, each relative to the whole
     /// mix's recent peak (1 only when the stem is the mix); 0 while not separating.
     var stems = SIMD4<Float>()
@@ -42,7 +39,8 @@ enum AudioParams {
     static let beatNames = Set(beat.map(\.name))
 }
 
-/// FFT analysis, run on the render thread once per frame on the latest audio window.
+/// FFT analysis, run on the render thread once per frame on the latest audio window, and on the
+/// separated stems'. The hits come from the stems thread, which finds them in the drum stem.
 ///
 /// Levels are auto-gained in dB: each band tracks its recent peak (which falls slowly), and
 /// the output is 1 at that peak and 0 at `range` dB below it. Quiet breakdowns and loud drops
@@ -59,20 +57,12 @@ final class AudioAnalyzer {
     private var imag: [Float]
     private var power: [Float]
     private var stemPower: [Float]
-    private var lastWritten = 0
 
     private(set) var features = AudioFeatures()
-    /// True when this frame analysed new audio.
-    private(set) var fresh = false
-    /// Log-spaced spectra, 0...1, for shaders: the whole signal, and its harmonic and
-    /// percussive parts.
+    /// The whole signal's log-spaced spectrum, 0...1, for shaders.
     private(set) var spectrum = LogSpectrum()
-    private(set) var harmonicSpectrum = LogSpectrum()
-    private(set) var percussiveSpectrum = LogSpectrum()
     /// The separated stems' spectra, in `StemSeparator.Stem` order.
     private(set) var stemSpectra = [LogSpectrum](repeating: LogSpectrum(), count: 4)
-    /// This frame's power spectrum split into harmonic and percussive parts.
-    private(set) var split = HarmonicPercussive(bins: fftSize / 2)
     private var uiLock = os_unfair_lock()
     private var uiFeatures = AudioFeatures()
     private var uiSpectrum = [Float](repeating: 0, count: spectrumBins)
@@ -83,16 +73,16 @@ final class AudioAnalyzer {
         return (uiFeatures, uiSpectrum)
     }
 
-    // Auto-gain and envelope state per band: bass, mid, high, level, harmonic, percussive, then
-    // the four stems, whose auto-gain is shared: the whole mix's peak (`peaks[6]`).
-    private var peaks: [Float] = Array(repeating: -40, count: 7)
-    private var envelopes: [Float] = Array(repeating: 0, count: 10)
-    private var onsetDt: Float = 0
-    private var onsets: [OnsetDetector] = [
-        OnsetDetector(refractory: 0.11, decay: 0.16),  // kick
-        OnsetDetector(refractory: 0.09, decay: 0.12),  // snare/clap
-        OnsetDetector(refractory: 0.05, decay: 0.06),  // hats
-    ]
+    // Auto-gain and envelope state per band: bass, mid, high, level, then the four stems, whose
+    // auto-gain is shared: the whole mix's peak (`peaks[4]`).
+    private var peaks: [Float] = Array(repeating: -40, count: 5)
+    private var envelopes: [Float] = Array(repeating: 0, count: 8)
+    // Kick, snare and hat: their envelopes, how fast each falls (seconds), and the stems
+    // thread's hit counts as last seen, with whose they were.
+    private var hits = SIMD3<Float>()
+    private static let hitDecay = SIMD3<Float>(0.16, 0.12, 0.06)
+    private var seenHits = SIMD3<Int32>()
+    private var seenStems: ObjectIdentifier?
 
     init() {
         let n = Self.fftSize
@@ -108,34 +98,27 @@ final class AudioAnalyzer {
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
 
-    /// Picks up another analyzer's auto-gain, envelopes and onset state, so a scene's Audio In
+    /// Picks up another analyzer's auto-gain, envelopes and hits, so a scene's Audio In
     /// continues where the previous scene's left off instead of re-learning levels. Render thread.
     func continueState(from other: AudioAnalyzer) {
         peaks = other.peaks
         envelopes = other.envelopes
         spectrum = other.spectrum
-        harmonicSpectrum = other.harmonicSpectrum
-        percussiveSpectrum = other.percussiveSpectrum
         stemSpectra = other.stemSpectra
-        split = other.split
-        onsets = other.onsets
-        onsetDt = other.onsetDt
+        hits = other.hits
+        seenHits = other.seenHits
+        seenStems = other.seenStems
         features = other.features
-        lastWritten = other.lastWritten
     }
 
-    /// Analyzes the latest window, and the stems' if `stems` is separating. `settings` holds
-    /// live values of `AudioParams`.
-    func process(ring: SampleRing, stems: LiveStems?, dt: Float, settings: ParamBank?) {
+    /// Analyzes the latest window and the stems'. `settings` holds live values of `AudioParams`.
+    func process(ring: SampleRing, stems: LiveStems, dt: Float, settings: ParamBank?) {
         let range = settings?.live("range") ?? 30
         let release = settings?.live("release") ?? 0.12
-        let sensitivity = settings?.live("sensitivity") ?? 0.5
         let gate = settings?.live("gate") ?? -50
 
         let n = Self.fftSize
-        let written = ring.copyLatest(into: &samples, count: n)
-        let fresh = written != lastWritten
-        lastWritten = written
+        ring.copyLatest(into: &samples, count: n)
         let rate = Float(ring.sampleRate)
 
         // Time-domain level.
@@ -173,45 +156,35 @@ final class AudioAnalyzer {
         f.high = envelope(2, autoGain(2, bandDb(4000, 16000)))
         f.level = envelope(3, autoGain(3, levelDb))
 
-        // Onsets listen to the percussive part only, in their own narrower bands, so pads,
-        // bass notes and chord changes don't fire them. Only feed new audio, so frames without
-        // a new block don't register as a level drop and rise.
-        if fresh { split.process(power: power, written: written) }
-        let onsetBands: [(Float, Float)] = [(35, 120), (1500, 5000), (8000, 16000)]
-        onsetDt += dt
-        for (i, band) in onsetBands.enumerated() {
-            let db = bandDb(band.0, band.1, of: split.percussive)
-            if fresh { onsets[i].feed(db: db, active: active, sensitivity: sensitivity, dt: onsetDt) }
-            onsets[i].advance(dt: dt)
+        // A hit is a count that rose on the stems thread since last frame. It reads 1 this
+        // frame and falls from the next.
+        let (settled, counts) = stems.status
+        if seenStems == ObjectIdentifier(stems) {
+            for i in 0..<DrumHits.count where counts[i] != seenHits[i] { hits[i] = 1 }
         }
-        if fresh { onsetDt = 0 }
-        self.fresh = fresh
-        f.kick = onsets[0].envelope
-        f.snare = onsets[1].envelope
-        f.hat = onsets[2].envelope
+        seenStems = ObjectIdentifier(stems)
+        seenHits = counts
+        f.kick = hits[0]
+        f.snare = hits[1]
+        f.hat = hits[2]
+        for i in 0..<DrumHits.count { hits[i] *= exp(-dt / Self.hitDecay[i]) }
 
         let spectrumRange = range + 12
-        f.harmonic = envelope(4, autoGain(4, bandDb(20, 16000, of: split.harmonic)))
-        f.percussive = envelope(5, autoGain(5, bandDb(20, 16000, of: split.percussive)))
-        harmonicSpectrum.update(split.harmonic, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
-        percussiveSpectrum.update(split.percussive, binHz: binHz, dt: dt, range: spectrumRange, release: release, active: active)
 
         // The stems' levels are measured against the mix's peak, not their own, over a narrower
         // range. Against its own peak a stem that isn't playing has its bleed (some 40 dB down)
         // gained up into view, and one that is playing sits pinned near 1. So a stem reads 1
         // only when it is the whole mix. Zero until the separator has settled.
-        peaks[6] = max(bandDb(20, 16000), peaks[6] - decayPerSec * dt, gate + range)
-        if let stems {
-            let stemBinHz = Float(StemSeparator.sampleRate) / Float(n)
-            let stemRange = range * 0.6
-            let heard = active && stems.isSettled
-            for (i, r) in stems.rings.enumerated() {
-                r.copyLatest(into: &samples, count: n)
-                powerSpectrum(of: &samples, into: &stemPower)
-                let db = bandDb(20, 16000, of: stemPower, binHz: stemBinHz)
-                f.stems[i] = envelope(6 + i, heard ? min(max((db - (peaks[6] - stemRange)) / stemRange, 0), 1) : 0)
-                stemSpectra[i].update(stemPower, binHz: stemBinHz, dt: dt, range: spectrumRange, release: release, active: heard)
-            }
+        peaks[4] = max(bandDb(20, 16000), peaks[4] - decayPerSec * dt, gate + range)
+        let stemBinHz = Float(StemSeparator.sampleRate) / Float(n)
+        let stemRange = range * 0.6
+        let heard = active && settled
+        for (i, r) in stems.rings.enumerated() {
+            r.copyLatest(into: &samples, count: n)
+            powerSpectrum(of: &samples, into: &stemPower)
+            let db = bandDb(20, 16000, of: stemPower, binHz: stemBinHz)
+            f.stems[i] = envelope(4 + i, heard ? min(max((db - (peaks[4] - stemRange)) / stemRange, 0), 1) : 0)
+            stemSpectra[i].update(stemPower, binHz: stemBinHz, dt: dt, range: spectrumRange, release: release, active: heard)
         }
         features = f
 
@@ -269,48 +242,5 @@ struct LogSpectrum {
             if v >= bins[i] || release <= 0 { bins[i] = v }
             else { bins[i] += (v - bins[i]) * (1 - exp(-dt / max(release, 0.01))) }
         }
-    }
-}
-
-/// Detects hits in one band. Works on energy relative to the band's recent peak, so a hit
-/// has to be loud for its band: a quiet bass note rising out of silence doesn't count as a kick.
-struct OnsetDetector {
-    let refractory: Float
-    let decay: Float
-    private(set) var envelope: Float = 0
-    private var peakDb: Float = -70
-    private var lastEnergy: Float = 0
-    private var mean: Float = 0
-    private var variance: Float = 0
-    private var sinceHit: Float = 10
-
-    init(refractory: Float, decay: Float) {
-        self.refractory = refractory
-        self.decay = decay
-    }
-
-    mutating func feed(db: Float, active: Bool, sensitivity: Float, dt: Float) {
-        peakDb = max(db, peakDb - 1.5 * dt, -70)
-        let energy = pow(10, (db - peakDb) / 10)
-        let flux = max(0, energy - lastEnergy)
-        lastEnergy = energy
-        // Adaptive threshold: mean + k·σ of recent flux, never below a floor.
-        // Higher sensitivity lowers both.
-        let k = 2.5 - 1.5 * sensitivity
-        let floor = 0.35 - 0.25 * sensitivity
-        let threshold = max(mean + k * variance.squareRoot(), floor)
-        if active, flux > threshold, sinceHit > refractory {
-            envelope = 1
-            sinceHit = 0
-        }
-        let a: Float = 0.05
-        let d = flux - mean
-        mean += a * d
-        variance = (1 - a) * (variance + a * d * d)
-    }
-
-    mutating func advance(dt: Float) {
-        sinceHit += dt
-        envelope *= exp(-dt / decay)
     }
 }

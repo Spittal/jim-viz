@@ -1,8 +1,8 @@
 // Face: a planar head on a neck, a few dozen flat planes like an artist's planes-of-the-head
 // study, with a mouth that sings. It looks toward the front (+x); in the Sphere layout every
 // copy looks at the centre instead. detail cuts every plane finer for the Surface knobs to bend
-// (0 leaves the bare planes). open drops the jaw and parts the lips (map Audio In's Harmonic or
-// Level here); jaw is how much of that is the jaw dropping rather than just the lips parting.
+// (0 leaves the bare planes). open drops the jaw and parts the lips (map Audio In's Vocals Stem
+// or Level here); jaw is how much of that is the jaw dropping rather than just the lips parting.
 // vowel shapes the mouth: -1 a rounded, pushed-out "oo", 0 an "ah", 1 a wide "ee". mouthDark
 // darkens the inside of the mouth.
 // @mesh face
