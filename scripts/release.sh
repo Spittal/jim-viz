@@ -20,8 +20,8 @@ if (( publish )); then
   [[ $(git branch --show-current) == main ]] || { echo "Not on main."; exit 1 }
   [[ -z $(git status --porcelain) ]] || { echo "Uncommitted changes: commit or stash them first."; exit 1 }
   gh auth status >/dev/null || { echo "Log in first: gh auth login"; exit 1 }
+  if git rev-parse -q --verify refs/tags/$tag >/dev/null; then echo "Tag $tag already exists."; exit 1; fi
 fi
-if git rev-parse -q --verify refs/tags/$tag >/dev/null; then echo "Tag $tag already exists."; exit 1; fi
 [[ $(uname -m) == arm64 ]] || { echo "Releases are built on Apple Silicon."; exit 1 }
 
 echo "=== Self-check"

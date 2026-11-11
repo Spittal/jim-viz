@@ -1,0 +1,56 @@
+# Checks and builds every push to main and every pull request: the self-check, the release
+# bundle, the bundle's own smoke test and the disk image, all through scripts/release.sh
+# (the same script that makes a release, without --publish). The disk image is kept as an
+# artifact. Publishing a release stays a local step: scripts/release.sh 1.2.3 --publish.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # tags and history: the version and build number come from them
+
+      - name: Toolchain
+        run: swift --version && sw_vers
+
+      - name: Cache the depth model
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Application Support/jim-viz/Models
+          key: depth-model-${{ hashFiles('scripts/fetch-depth-model.sh') }}
+
+      - name: Cache the Swift build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-${{ runner.os }}-${{ hashFiles('Package.swift') }}-${{ github.sha }}
+          restore-keys: swift-${{ runner.os }}-${{ hashFiles('Package.swift') }}-
+
+      - name: Check, bundle and build the disk image
+        run: |
+          version=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0)
+          scripts/release.sh "${version#v}"
+
+      - name: Upload the disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: JimViz-${{ github.sha }}
+          path: build/JimViz-*.dmg
+          if-no-files-found: error
+          retention-days: 14

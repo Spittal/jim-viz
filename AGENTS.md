@@ -183,6 +183,9 @@ scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
     tool starting unmapped.
   - Snapshots can differ between runs because the camera orbit accumulates across the
     check's renders, so compare colours and geometry, not exact pixels.
+- **CI (`.github/workflows/ci.yml`)** runs `scripts/release.sh <latest tag's version>` on
+  every push to main and pull request, and keeps the disk image as an artifact. It never
+  publishes; releases are made locally with `--publish`.
 - **Hot reload covers shaders and scene/preset JSON only.** New Swift code needs a relaunch.
 - **Screenshots of the running app:** find the window ID (the owner name is `jim-viz`),
   then `screencapture -x -o -l <id>`.
