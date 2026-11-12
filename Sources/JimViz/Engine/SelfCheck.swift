@@ -1052,7 +1052,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "globe", "drive", "street"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -1065,7 +1065,7 @@ enum SelfCheck {
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
-                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "snap", "globe": "ocean",
+                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
                                      "drive": "lane", "street": "footprint"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
@@ -1145,12 +1145,15 @@ enum SelfCheck {
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
                 w.reset(); l.reset()
             }
-            if geo == "dancer" {
-                guard let w = gen.bank["limbWidth"], w.def.min == 0, let l = gen.bank["limbLength"], l.def.min == 0,
-                      let h = gen.bank["headSize"], h.def.min == 0 else { return "dancer limbWidth/limbLength/headSize min should be 0" }
-                w.setBase(0); l.setBase(0); h.setBase(0)
+            if geo == "dancer" || geo == "shrek" {
+                let sizes = ["limbWidth", "limbLength", "headSize"] + (geo == "shrek" ? ["belly", "earSize"] : [])
+                let knobs = sizes.compactMap { gen.bank[$0] }
+                guard knobs.count == sizes.count, knobs.allSatisfy({ $0.def.min == 0 }) else {
+                    return "\(geo) \(sizes.joined(separator: "/")) min should be 0"
+                }
+                knobs.forEach { $0.setBase(0) }
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
-                w.reset(); l.reset(); h.reset()
+                knobs.forEach { $0.reset() }
             }
             if geo == "torus" {
                 guard let t = gen.bank["thickness"], t.def.min == 0 else { return "torus thickness min should be 0" }
@@ -1318,17 +1321,17 @@ enum SelfCheck {
         return nil
     }
 
-    /// Dancer, on a scene built in memory (a static camera on the front): its Sync input starts
+    /// A dancing figure (Dancer, Shrek), on a scene built in memory (a static camera on the front): its Sync input starts
     /// unmapped, the routine draws a figure standing on the floor all the way through, it moves
     /// at tempo and holds still at tempo 0, and with Audio In · Sync mapped its tempo follows the
     /// beat instead of the seconds.
-    private static func checkDancer(engine: Engine, snapshotDir: URL?) -> String? {
+    private static func checkDancer(engine: Engine, geo: String, snapshotDir: URL?) -> String? {
         func scene(_ params: [String: Float], synced: Bool = false) -> RenderScene? {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0]
-            let file = SceneFile(name: "dancer", inputs: synced ? [InputSpec(type: "audio", device: "system")] : [], modulators: [],
+            let file = SceneFile(name: geo, inputs: synced ? [InputSpec(type: "audio", device: "system")] : [], modulators: [],
                                  camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
                                  palettes: [],
-                                 generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: base.merging(params) { $1 })],
+                                 generators: [GeneratorSlot(id: nil, type: geo, preset: nil, params: base.merging(params) { $1 })],
                                  effects: [],
                                  mappings: synced ? [MappingSpec(source: "audio.sync", target: "generator.sync")] : [])
             return engine.build(file, reuse: nil)
@@ -1341,7 +1344,7 @@ enum SelfCheck {
         // The whole routine, a beat at a time (a rate knob's phase is in seconds at 120 BPM).
         for beat in stride(from: 0.0, to: 32, by: snapshotDir == nil ? 1 : 0.5) {
             tempo.phase = beat / 2
-            let name = String(format: "dancer-%04.1f.png", beat)
+            let name = String(format: "\(geo)-%04.1f.png", beat)
             _ = engine.renderOffscreen(still, frames: 1, snapshot: snapshotDir?.appendingPathComponent(name))
             let c = engine.coverage(engine.renderer.history)
             guard c.fraction > 0.005, c.fraction < 0.4 else { return "beat \(beat) drew \(c.fraction) of the frame" }
@@ -1386,8 +1389,8 @@ enum SelfCheck {
         _ = engine.renderOffscreen(synced, frames: 60, snapshot: nil)
         guard abs((syncedTempo.phase - doubled.phase) - (clock.beat - doubled.beat)) < 0.05 else { return "synced, tempo 2 isn't double time" }
         // A value can't go into Sync, and Sync can't go onto a knob.
-        var wrong = SceneFile(name: "dancer", inputs: [InputSpec(type: "audio", device: "system")], modulators: [], camera: nil, palettes: [],
-                              generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil, params: [:])], effects: [], mappings: [])
+        var wrong = SceneFile(name: geo, inputs: [InputSpec(type: "audio", device: "system")], modulators: [], camera: nil, palettes: [],
+                              generators: [GeneratorSlot(id: nil, type: geo, preset: nil, params: [:])], effects: [], mappings: [])
         wrong.mappings = [MappingSpec(source: "audio.pulse", target: "generator.sync"),
                           MappingSpec(source: "audio.sync", target: "generator.tempo")]
         guard let bad = engine.build(wrong, reuse: nil), bad.mappings.allSatisfy({ $0.problem != nil }),
@@ -2306,10 +2309,12 @@ enum SelfCheck {
         } else {
             print("ok   street (starts unmapped, buildings both sides, every style draws, walks both ways, one instance per lot)")
         }
-        if let problem = checkDancer(engine: engine, snapshotDir: snapshotDir) {
-            print("FAIL dancer: \(problem)"); failures += 1
-        } else {
-            print("ok   dancer (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the beat when synced)")
+        for geo in ["dancer", "shrek"] {
+            if let problem = checkDancer(engine: engine, geo: geo, snapshotDir: snapshotDir) {
+                print("FAIL \(geo): \(problem)"); failures += 1
+            } else {
+                print("ok   \(geo) (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the beat when synced)")
+            }
         }
         if let problem = checkInstancing(engine: engine) {
             print("FAIL instancing: \(problem)"); failures += 1

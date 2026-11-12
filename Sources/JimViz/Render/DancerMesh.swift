@@ -24,18 +24,24 @@ extension MeshBuilder {
                 (0.48, thigh), (0.46, shin), (0.2, foot), (0.48, thigh), (0.46, shin), (0.2, foot)]
     }()
 
+    mutating func dancer(sides n: Int) {
+        figure(MeshBuilder.dancerBones.map { ($0.length, $0.profile.map { SIMD4($0, 0) }) }, sides: n)
+    }
+
+    /// A figure of rigid bones, each a `sides`-sided shard through its profile's rings: (t along
+    /// the bone, half-width sideways, half-depth front to back, how far the ring sits forward).
     /// Each ring is turned half a side from the one before, so the faces between them are
     /// triangles that zigzag round the bone, like a cut crystal.
-    /// shape: x = bone 0...12, y = t along it, zw = the vertex's offset across it (sideways,
+    /// shape: x = the bone, y = t along it, zw = the vertex's offset across it (sideways,
     /// front to back). position and faceNormal are in the straight bone's own frame (along,
     /// sideways, front to back), so the shader can pose them.
-    mutating func dancer(sides n: Int) {
-        for (bone, (length, profile)) in MeshBuilder.dancerBones.enumerated() {
+    mutating func figure(_ bones: [(length: Float, profile: [SIMD4<Float>])], sides n: Int) {
+        for (bone, (length, profile)) in bones.enumerated() {
             func vert(_ ring: Int, _ k: Int) -> (SIMD3<Float>, SIMD3<Float>, SIMD4<Float>) {
                 let r = profile[ring]
                 // Starts at the front, so an odd-sided bone is still the same left and right.
                 let a = .pi / 2 + (Float(k) + Float(ring % 2) * 0.5) / Float(n) * 2 * .pi
-                let off = SIMD2<Float>(cos(a) * r.y, sin(a) * r.z)
+                let off = SIMD2<Float>(cos(a) * r.y, sin(a) * r.z + r.w)
                 let normal: SIMD3<Float> = r.y == 0 ? [ring == 0 ? -1 : 1, 0, 0] : [0, cos(a), sin(a)]
                 return ([r.x * length, off.x, off.y], normal, [Float(bone), r.x, off.x, off.y])
             }
