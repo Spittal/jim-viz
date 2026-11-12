@@ -98,7 +98,7 @@ struct InputSpec: Codable, Equatable {
 }
 
 struct CameraSlot: Codable, Equatable {
-    /// Camera tool: a `CameraRig` raw value (`orbit`, `static`, `fly`, `vertigo`, `cutter`, `lissajous`).
+    /// Camera tool: a `CameraRig` raw value (`orbit`, `static`, `fly`, `cutter`, `lissajous`).
     var type: String
     /// Preset it was loaded from, for display.
     var preset: String?

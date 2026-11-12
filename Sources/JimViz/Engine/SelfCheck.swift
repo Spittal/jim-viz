@@ -1467,51 +1467,6 @@ enum SelfCheck {
         return nil
     }
 
-    /// The Composite effect, on a scene built in memory: its Layer starts unmapped and passes the
-    /// picture through; mapped to a video, each mode blends it in, and amount fades it.
-    private static func checkComposite(engine: Engine) -> String? {
-        func scene(_ mode: Float, amount: Float = 1, mapped: Bool = true, enabled: Bool = true) -> RenderScene? {
-            let file = SceneFile(name: "composite", inputs: [InputSpec(type: "video", id: "layer")], modulators: [],
-                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 6, "y": 0, "z": 0, "fov": 55]),
-                                 palettes: [],
-                                 generators: [GeneratorSlot(id: nil, type: "cube", preset: nil, params: ["bgGlow": 2, "noiseAmount": 0])],
-                                 effects: [EffectSpec(effect: "composite", id: "composite", enabled: enabled,
-                                                      params: ["mode": mode, "amount": amount])],
-                                 mappings: mapped ? [MappingSpec(source: "video.layer.video", target: "post.composite.layer")] : [])
-            return engine.build(file, reuse: nil)
-        }
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 64, height: 36, mipmapped: false)
-        d.usage = .shaderRead
-        guard let grey = engine.device.makeTexture(descriptor: d) else { return "no test texture" }
-        grey.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0,
-                     withBytes: [UInt8](repeating: 128, count: 64 * 36 * 4), bytesPerRow: 64 * 4)
-        func render(_ s: RenderScene?) -> SIMD3<Float>? {
-            guard let s else { return nil }
-            s.videos.first?.feed.inject(grey)
-            _ = engine.renderOffscreen(s, frames: 3, snapshot: nil)
-            return engine.averageColor(engine.renderer.history)
-        }
-        func sum(_ c: SIMD3<Float>) -> Float { c.x + c.y + c.z }
-
-        guard let unmapped = scene(0, mapped: false), unmapped.streamBindings.isEmpty,
-              unmapped.effects.first?.inputs.map(\.kind) == [.video] else { return "Layer should be one unmapped video input" }
-        guard let base = render(scene(0, mapped: false, enabled: false)), let through = render(unmapped) else { return "scene didn't build" }
-        guard simd_length(base - through) < 0.002 else { return "unmapped Layer changed the picture: \(base) → \(through)" }
-
-        guard let s = scene(0), let layerTex = s.videos.first?.processed, let comp = render(s) else { return "comp didn't build" }
-        let layer = engine.averageColor(layerTex)
-        guard sum(layer) > 0.3 else { return "layer video is black: \(layer)" }
-        guard simd_length(comp - layer) < 0.02 else { return "Comp isn't the layer: \(comp) vs \(layer)" }
-        guard let add = render(scene(1)), simd_length(add - (base + layer)) < 0.03 else { return "Add isn't picture + layer" }
-        // The layer is brighter than almost all the picture, so the difference is about layer − picture.
-        guard let diff = render(scene(2)), simd_length(diff - (layer - base)) < 0.04, sum(diff) < sum(comp) - 0.05 else {
-            return "Difference isn't |picture − layer|"
-        }
-        guard let burn = render(scene(3)), sum(burn) < sum(base) else { return "Burn didn't darken" }
-        guard let off = render(scene(1, amount: 0)), simd_length(off - base) < 0.002 else { return "amount 0 still blends" }
-        return nil
-    }
-
     /// Edits a scene's chain in memory and checks the result. Nothing is saved.
     private static func checkComposition(engine: Engine) -> String? {
         guard let decoded = try? JSONDecoder().decode(SceneFile.self, from: Data(#"{"name":"x"}"#.utf8)),
@@ -2320,11 +2275,6 @@ enum SelfCheck {
             print("FAIL instancing: \(problem)"); failures += 1
         } else {
             print("ok   instancing (Grid and Cube layouts, Brownian motion, Intersection blend modes, start unmapped)")
-        }
-        if let problem = checkComposite(engine: engine) {
-            print("FAIL composite: \(problem)"); failures += 1
-        } else {
-            print("ok   composite (Layer starts unmapped and passes through; Comp, Add, Difference, Burn, amount)")
         }
         if let problem = checkComposition(engine: engine) {
             print("FAIL composition: \(problem)"); failures += 1

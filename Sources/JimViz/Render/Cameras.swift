@@ -16,7 +16,6 @@ enum CameraRig: String, CaseIterable {
     case orbit
     case still = "static"
     case fly
-    case vertigo
     case cutter
     case lissajous
 
@@ -25,7 +24,6 @@ enum CameraRig: String, CaseIterable {
         case .orbit: return "Orbit Camera"
         case .still: return "Static Camera"
         case .fly: return "Fly-through Camera"
-        case .vertigo: return "Dolly Zoom Camera"
         case .cutter: return "Cutter Camera"
         case .lissajous: return "Lissajous Camera"
         }
@@ -36,7 +34,6 @@ enum CameraRig: String, CaseIterable {
         case .orbit: return "rotate.3d"
         case .still: return "camera"
         case .fly: return "airplane"
-        case .vertigo: return "arrow.up.left.and.arrow.down.right"
         case .cutter: return "scissors"
         case .lissajous: return "infinity"
         }
@@ -96,20 +93,6 @@ enum CameraRig: String, CaseIterable {
                 p("yaw", 0, -180, 180, "Look"),
                 p("fov", 70, 10, 150, "Look"),
             ] + wobble
-        case .vertigo:
-            return [
-                // The field of view; the distance follows so the target keeps the same size on screen.
-                p("fov", 50, 5, 150, "Zoom"),
-                p("sweep", 0, 0, 70, "Zoom"),
-                p("sweepSpeed", 0.25, 0, 4, "Zoom"),
-                // Width of the view at the target, in world units.
-                p("frame", 4, 0.5, 20, "Zoom"),
-                p("angle", 0, -180, 180, "Position"),
-                p("elevation", 10, -89, 89, "Position"),
-                p("orbitSpeed", 0, -3, 3, "Position"),
-            ] + look + [
-                p("roll", 0, -180, 180, "Lens"),
-            ] + wobble
         case .cutter:
             return [
                 // Automatic cuts per second; 0 cuts only on its Cut trigger.
@@ -151,7 +134,7 @@ enum CameraRig: String, CaseIterable {
 final class CameraMotion {
     let rig: CameraRig
 
-    /// Orbit angle in radians (orbit, vertigo), or path phase in turns (lissajous).
+    /// Orbit angle in radians (orbit), or path phase in turns (lissajous).
     var orbit: Float = 0
     /// Degrees of accumulated roll.
     var roll: Float = 0
@@ -159,7 +142,6 @@ final class CameraMotion {
     var shake: Float = 0
     var bob: Float = 0
     var weave: Float = 0
-    var sweep: Float = 0
     /// Fly-through distance travelled.
     var travel: Float = 0
 
@@ -189,7 +171,6 @@ final class CameraMotion {
 
     /// Outputs, 0...1, set by `advance`.
     private(set) var phaseOutput: Float = 0
-    private(set) var zoomOutput: Float = 0
 
     /// Picks up where another scene's camera is, so switching scenes doesn't jump the orbit.
     init(_ rig: CameraRig, continuing old: CameraMotion? = nil) {
@@ -243,16 +224,6 @@ final class CameraMotion {
             // Bank against the weave's sideways velocity.
             let bank = -cos(w) * min(amount, 1) * v("bank") * 45
             return CameraPose(eye: eye + jitter, target: eye + forward, roll: bank, fov: v("fov"))
-
-        case .vertigo:
-            sweep += v("sweepSpeed") * dt
-            orbit += v("orbitSpeed") * dt
-            let fov = min(max(v("fov") + sin(sweep * 2 * .pi) * v("sweep"), 5), 160)
-            zoomOutput = (fov - 5) / 155
-            let dist = v("frame") / (2 * tan(fov * .pi / 360))
-            let angle = orbit + v("angle") * .pi / 180, elev = v("elevation") * .pi / 180
-            let eye = look + SIMD3(cos(angle) * cos(elev), sin(elev), sin(angle) * cos(elev)) * dist
-            return CameraPose(eye: eye + jitter, target: look, roll: v("roll"), fov: fov)
 
         case .cutter:
             sinceCut += dt
@@ -322,7 +293,6 @@ final class CameraMotion {
         case .orbit: return [OutputSignal("camera.angle", "Orbit Angle", device: "Camera") { _ in self.phaseOutput }]
         case .still: return []
         case .fly: return [OutputSignal("camera.progress", "Progress", device: "Camera") { _ in self.phaseOutput }]
-        case .vertigo: return [OutputSignal("camera.zoom", "Zoom", device: "Camera") { _ in self.zoomOutput }]
         case .cutter: return [
             OutputSignal.trigger("camera.onCut", "On Cut", device: "Camera") { _ in
                 defer { self.didCut = false }

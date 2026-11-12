@@ -46,7 +46,6 @@ enum Tools {
         case (.effect, "kaleido"): return "Kaleidoscope"
         case (.effect, "palettemap"): return "Palette Map"
         case (.effect, "chroma"): return "Chromatic"
-        case (.effect, "spectraltear"): return "Spectral Tear"
         default: return humanize(name)
         }
     }
@@ -77,6 +76,10 @@ enum Tools {
             case "hand": return "hand.raised"
             case "dancer": return "figure.dance"
             case "street": return "building.2"
+            case "drive": return "car.side"
+            case "face": return "face.dashed"
+            case "globe": return "globe"
+            case "shrek": return "ear"
             default: return "cube.transparent"
             }
         case .effect:
@@ -92,12 +95,10 @@ enum Tools {
             case "film": return "film"
             case "mirror": return "arrow.left.and.right.square"
             case "slices": return "rectangle.split.3x1"
-            case "composite": return "square.2.layers.3d"
             case "datamosh": return "square.on.square.dashed"
             case "echo": return "square.3.layers.3d.down.right"
             case "edges": return "pencil.and.outline"
             case "polar": return "scope"
-            case "spectraltear": return "chart.bar.xaxis"
             default: return "sparkles"
             }
         }
