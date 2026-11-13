@@ -3,7 +3,7 @@ import Metal
 import AppKit
 import AVFoundation
 
-/// `JimViz --check [--snapshot dir]` compiles every shader, loads every scene, renders a few
+/// `jim-viz --check [--snapshot dir]` compiles every shader, loads every scene, renders a few
 /// frames of each offscreen, and exits non-zero on any error. Optionally writes PNG snapshots.
 enum SelfCheck {
     static func runIfRequested() {
@@ -225,7 +225,7 @@ enum SelfCheck {
         do { try empty.write(to: emptyURL) } catch { return "could not write the test scene" }
         engine.store.markSeen(emptyURL)
         engine.refreshSceneList()
-        engine.pasteboard = NSPasteboard(name: NSPasteboard.Name("jimviz.selfcheck"))
+        engine.pasteboard = NSPasteboard(name: NSPasteboard.Name("jim-viz.selfcheck"))
         defer {
             engine.pasteboard = .general
             engine.load(url, animated: false)
@@ -2871,7 +2871,7 @@ extension SelfCheck {
     /// between them; Jump lands between them; and its Jump starts unmapped. Plays a short
     /// generated clip through AVPlayer in real time, so it takes a few seconds.
     static func checkVideoTransport(engine: Engine) -> String? {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("jimviz-selfcheck-video", isDirectory: true)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("jim-viz-selfcheck-video", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let clip = dir.appendingPathComponent("clip.mov")
         defer { try? FileManager.default.removeItem(at: dir) }

@@ -392,7 +392,7 @@ struct WebcamDevice: View {
         case .off, .starting: return "Starting camera…"
         case .running: return ""
         case .notFound: return "Camera not connected"
-        case .denied: return "No camera access. Allow jim-viz in System Settings › Privacy & Security › Camera."
+        case .denied: return "No camera access. Allow Jim Viz in System Settings › Privacy & Security › Camera."
         case .failed(let why): return why
         }
     }

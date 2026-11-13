@@ -1,4 +1,4 @@
-// Shared by every shader. jim-viz prepends this file, then a generated `Params` struct
+// Shared by every shader. Jim Viz prepends this file, then a generated `Params` struct
 // built from the shader's `// @param` lines, then the shader itself.
 //
 // Declare knobs at the top of a shader like this:

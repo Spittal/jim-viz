@@ -175,7 +175,7 @@ final class OutputController: NSObject, NSWindowDelegate {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
                              styleMask: [.titled, .closable, .resizable, .miniaturizable],
                              backing: .buffered, defer: false)
-            w.title = "jim-viz Output"
+            w.title = "Jim Viz Output"
             w.contentAspectRatio = NSSize(width: 16, height: 9)
             w.isReleasedWhenClosed = false
             w.backgroundColor = .black
@@ -232,7 +232,7 @@ final class OutputController: NSObject, NSWindowDelegate {
         if keepAwake, sleepActivity == nil {
             sleepActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled, .userInitiated],
-                reason: "jim-viz is showing visuals fullscreen")
+                reason: "Jim Viz is showing visuals fullscreen")
         } else if !keepAwake, let activity = sleepActivity {
             ProcessInfo.processInfo.endActivity(activity)
             sleepActivity = nil

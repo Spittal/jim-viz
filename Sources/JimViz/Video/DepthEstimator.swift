@@ -22,7 +22,7 @@ final class DepthEstimator {
     }
 
     private let metal: MTLDevice
-    private let queue = DispatchQueue(label: "jimviz.depth", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "jim-viz.depth", qos: .userInitiated)
     private let lock = NSLock()
     private var frame: Frame?
     private var busy = false

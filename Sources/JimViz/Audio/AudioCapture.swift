@@ -102,7 +102,7 @@ final class AudioCapture {
         }
     }
 
-    /// Every input device with input channels, except jim-viz's own aggregate devices.
+    /// Every input device with input channels, except Jim Viz's own aggregate devices.
     static func inputDevices() -> [InputDevice] {
         AudioObjectID.allDevices.compactMap { dev in
             guard dev.channelCount(scope: kAudioObjectPropertyScopeInput) > 0,
@@ -164,15 +164,15 @@ final class AudioCapture {
             if silentSince == nil { silentSince = now }
             if now - silentSince! > 3 {
                 let hint: String
-                let permission = "allow jim-viz (or the terminal running it) in System Settings › Privacy & Security › Screen & System Audio Recording"
+                let permission = "allow Jim Viz (or the terminal running it) in System Settings › Privacy & Security › Screen & System Audio Recording"
                 if stale {
                     hint = "No audio arriving"
                 } else if source == .rekordbox,
                           AudioObjectID.audioProcesses.contains(where: {
                               $0.processBundleID?.lowercased().hasPrefix(Self.rekordboxBundlePrefix) == true && $0.processIsRunningOutput }) {
-                    hint = "Rekordbox is playing but jim-viz hears silence: \(permission)"
+                    hint = "Rekordbox is playing but Jim Viz hears silence: \(permission)"
                 } else if case .input = source {
-                    hint = "Silent. If the input has signal, allow microphone access for jim-viz"
+                    hint = "Silent. If the input has signal, allow microphone access for Jim Viz"
                 } else {
                     hint = "Silent. If audio is playing, \(permission)"
                 }
@@ -235,7 +235,7 @@ final class AudioCapture {
 
     /// Creates the tap and a private aggregate device to read it. Returns the tap's channel count.
     private func startTap(_ desc: CATapDescription, clockDeviceUID: String?) throws -> Int {
-        desc.name = "jim-viz"
+        desc.name = "Jim Viz"
         desc.isPrivate = true
         desc.muteBehavior = .unmuted
         var tap = AudioObjectID(kAudioObjectUnknown)
@@ -250,7 +250,7 @@ final class AudioCapture {
 
         let mainUID = clockDeviceUID ?? AudioObjectID.defaultOutputDevice?.deviceUID ?? ""
         let description: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "jim-viz tap",
+            kAudioAggregateDeviceNameKey: "Jim Viz Tap",
             kAudioAggregateDeviceUIDKey: "jim-viz-tap-\(UUID().uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey: mainUID,
             kAudioAggregateDeviceIsPrivateKey: true,

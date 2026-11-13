@@ -11,7 +11,7 @@ struct JimVizApp: App {
     }
 
     var body: some Scene {
-        Window("jim-viz", id: "main") {
+        Window("Jim Viz", id: "main") {
             ContentView()
                 .environment(engine)
                 .frame(minWidth: 980, minHeight: 620)

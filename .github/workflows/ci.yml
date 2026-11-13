@@ -50,7 +50,7 @@ jobs:
       - name: Upload the disk image
         uses: actions/upload-artifact@v4
         with:
-          name: JimViz-${{ github.sha }}
-          path: build/JimViz-*.dmg
+          name: jim-viz-${{ github.sha }}
+          path: build/jim-viz-*.dmg
           if-no-files-found: error
           retention-days: 14

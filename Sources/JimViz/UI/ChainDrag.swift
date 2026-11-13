@@ -32,9 +32,9 @@ enum ChainDrag: Equatable {
 
     var token: String {
         switch self {
-        case .device(let k, let tool, let preset): return "jimviz.device:\(k.rawValue):\(tool):\(preset ?? "")"
-        case .move(let id): return "jimviz.move:\(id)"
-        case .output(let key): return "jimviz.output:\(key)"
+        case .device(let k, let tool, let preset): return "jim-viz.device:\(k.rawValue):\(tool):\(preset ?? "")"
+        case .move(let id): return "jim-viz.move:\(id)"
+        case .output(let key): return "jim-viz.output:\(key)"
         }
     }
 }

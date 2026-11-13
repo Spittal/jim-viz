@@ -106,7 +106,7 @@ final class WebcamFeed: VideoSourceFeed {
 
     @ObservationIgnored private let metal: MTLDevice
     @ObservationIgnored private var session: AVCaptureSession?
-    @ObservationIgnored private let queue = DispatchQueue(label: "jimviz.webcam", qos: .userInteractive)
+    @ObservationIgnored private let queue = DispatchQueue(label: "jim-viz.webcam", qos: .userInteractive)
     @ObservationIgnored private var cache: CVMetalTextureCache?
     @ObservationIgnored private let lock = NSLock()
     @ObservationIgnored private var frame: VideoFrame?

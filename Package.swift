@@ -2,8 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "JimViz",
+    name: "jim-viz",
     platforms: [.macOS("14.2")],
+    products: [.executable(name: "jim-viz", targets: ["JimViz"])],
     targets: [
         .executableTarget(
             name: "JimViz",

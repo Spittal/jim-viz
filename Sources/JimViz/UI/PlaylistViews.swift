@@ -9,14 +9,14 @@ enum PlaylistDrag {
 
     var token: String {
         switch self {
-        case .scene(let slug): return "jimviz.scene:\(slug)"
-        case .entry(let i): return "jimviz.entry:\(i)"
+        case .scene(let slug): return "jim-viz.scene:\(slug)"
+        case .entry(let i): return "jim-viz.entry:\(i)"
         }
     }
 
     init?(token: String) {
-        if token.hasPrefix("jimviz.scene:") { self = .scene(String(token.dropFirst(13))) }
-        else if token.hasPrefix("jimviz.entry:"), let i = Int(token.dropFirst(13)) { self = .entry(i) }
+        if token.hasPrefix("jim-viz.scene:") { self = .scene(String(token.dropFirst(14))) }
+        else if token.hasPrefix("jim-viz.entry:"), let i = Int(token.dropFirst(14)) { self = .entry(i) }
         else { return nil }
     }
 

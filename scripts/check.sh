@@ -21,11 +21,11 @@ scratch=${scratch:A}  # /var is a symlink; the checks compare file URLs
 trap "rm -rf $scratch" EXIT
 for d in Scenes Presets Playlists; do if [[ -d "$src/$d" ]]; then cp -R "$src/$d" $scratch/; fi; done
 for d in Videos Pictures; do if [[ -d "$src/$d" ]]; then ln -s "$src/$d" $scratch/$d; fi; done
-JIMVIZ_CONTENT="$PWD/Content" JIMVIZ_LIBRARY=$scratch .build/debug/JimViz $args
+JIMVIZ_CONTENT="$PWD/Content" JIMVIZ_LIBRARY=$scratch .build/debug/jim-viz $args
 echo "--- onset detection and beat tracking"
 # The bare track is only drums and a plucked sine bass, which the stem separator can't tell
 # apart: it puts the lot in the drum stem, so some bass notes count as kicks. Under the pad
 # (below) there is music to separate, and the kicks must be clean.
-JIMVIZ_CONTENT="$PWD/Content" .build/debug/JimViz --analyze $track --truth $truth --expect-bpm 124 --kick-precision 0.6
+JIMVIZ_CONTENT="$PWD/Content" .build/debug/jim-viz --analyze $track --truth $truth --expect-bpm 124 --kick-precision 0.6
 echo "--- onset detection and beat tracking under a pad"
-JIMVIZ_CONTENT="$PWD/Content" .build/debug/JimViz --analyze $padded --truth $truth --expect-bpm 124
+JIMVIZ_CONTENT="$PWD/Content" .build/debug/jim-viz --analyze $padded --truth $truth --expect-bpm 124

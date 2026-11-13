@@ -61,7 +61,7 @@ struct ContentView: View {
                     .disabled(engine.mapSource == nil && engine.current?.learningMIDI == nil && !engine.playlists.mapMode)
             }
         }
-        .navigationTitle(engine.current?.name ?? "jim-viz")
+        .navigationTitle(engine.current?.name ?? "Jim Viz")
         .navigationSubtitle(engine.isDirty ? "Edited" : "")
         .onAppear { engine.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in engine.undoManager = um }

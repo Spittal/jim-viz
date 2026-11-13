@@ -1,6 +1,6 @@
 import Foundation
 
-/// Locates jim-viz's two folders and watches them for changes.
+/// Locates Jim Viz's two folders and watches them for changes.
 ///
 /// - `library`: the user's scenes, presets, playlists, videos and pictures, in
 ///   `~/Library/Application Support/jim-viz`. Not in git. Created empty on first launch.

@@ -4,7 +4,7 @@ Research for two changes: splitting the Clock into a **Beat Detection** input, a
 **Rekordbox** input with deck state (which tracks are loaded, how far in they are, when songs
 change) that the Sequencer/timeline milestone can build on.
 
-Setup assumed: one Mac running Rekordbox 7.2.19 (Performance mode) and jim-viz, a DDJ-FLX4 over
+Setup assumed: one Mac running Rekordbox 7.2.19 (Performance mode) and Jim Viz, a DDJ-FLX4 over
 USB, no CDJs, no network.
 
 ## What exists today
