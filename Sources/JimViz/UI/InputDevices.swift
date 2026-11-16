@@ -24,7 +24,7 @@ struct LFODevice: View {
     }
 }
 
-/// A modulator in the Modulation section: an LFO, a Math or a Macro.
+/// A modulator in the Modulation section: an LFO, a Math, a Macro or a Toggle.
 struct ModulatorDevice: View {
     let mod: ModulatorRuntime
     var accent: Color? = nil
@@ -34,6 +34,35 @@ struct ModulatorDevice: View {
         case .lfo: LFODevice(mod: mod, accent: accent)
         case .math: MathDevice(mod: mod, accent: accent)
         case .macro: MacroDevice(mod: mod, accent: accent)
+        case .toggle: ToggleDevice(mod: mod, accent: accent)
+        }
+    }
+}
+
+/// A Toggle, in the Modulation section: two knobs, A and B, with a lamp over the one its Out
+/// (in the inspector) is reading. Each fire of its Toggle trigger input (in its IO column)
+/// flips it to the other.
+struct ToggleDevice: View {
+    @Environment(Engine.self) private var engine
+    @Bindable var mod: ModulatorRuntime
+    var accent: Color? = nil
+
+    var body: some View {
+        DevicePanel(title: mod.id, icon: Tools.icon(.modulation, mod.type.rawValue), subtitle: mod.presetLabel, isOn: $mod.enabled, accent: accent,
+                    select: "mod.\(mod.id)", onClose: { engine.removeModulator(id: mod.id) }) {
+            HStack(alignment: .top, spacing: 6) {
+                ForEach(mod.bank.params) { p in
+                    VStack(spacing: 4) {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+                            let lit = mod.enabled && mod.isOnB == (p.def.name == "b")
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(lit ? Theme.accent : Theme.knobTrack)
+                                .frame(width: 22, height: 5)
+                        }
+                        Knob(param: p, targetPath: "mod.\(mod.id).\(p.def.name)")
+                    }
+                }
+            }
         }
     }
 }

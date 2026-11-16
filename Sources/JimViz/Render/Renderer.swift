@@ -237,7 +237,7 @@ final class RenderScene {
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
     /// Every trigger input in the chain, in chain order: Audio In · First Beat, Videos' Jump,
-    /// LFOs' Reset, the Cutter's Cut.
+    /// LFOs' Reset, Toggles' Toggle, the Cutter's Cut.
     let triggerInputs: [TriggerInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
     let streamBindings: [String: StreamOutput]
@@ -306,7 +306,7 @@ final class RenderScene {
         let boundKeys = Set(streamBindings.values.map(\.key))
         boundPalettes = palettes.filter { boundKeys.contains($0.outputKey) }
         triggerInputs = (audioIn.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
-            + modulators.compactMap(\.resetTrigger) + (cameraMotion?.triggerInputs ?? [])
+            + modulators.compactMap(\.trigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.lens = lens
         cameraLens = streamBindings[StreamInput.cameraLensKey]

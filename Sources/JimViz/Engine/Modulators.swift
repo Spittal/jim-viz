@@ -88,6 +88,14 @@ enum MacroParams {
     static let defs: [ParamDef] = names.map { ParamDef(name: $0, defaultValue: 0, min: 0, max: 1, isInt: false) }
 }
 
+/// Knobs of the Toggle tool: the two values its output flips between. Both are mappable knobs.
+enum ToggleParams {
+    static let defs: [ParamDef] = [
+        ParamDef(name: "a", defaultValue: 0, min: 0, max: 1, isInt: false),
+        ParamDef(name: "b", defaultValue: 1, min: 0, max: 1, isInt: false),
+    ]
+}
+
 /// The modulator tools.
 enum ModulatorType: String {
     /// A low-frequency oscillator: bipolar, free running or synced to Audio In's beat. Its Reset
@@ -97,12 +105,16 @@ enum ModulatorType: String {
     case math
     /// Three knobs, each an output: one knob controls many.
     case macro
+    /// Outputs one of two values, `a` or `b`, and flips to the other each time its Toggle
+    /// trigger input fires: a pulse, or a MIDI button going to 127.
+    case toggle
 
     var defs: [ParamDef] {
         switch self {
         case .lfo: return LFOParams.defs
         case .math: return MathParams.defs
         case .macro: return MacroParams.defs
+        case .toggle: return ToggleParams.defs
         }
     }
 
@@ -111,11 +123,12 @@ enum ModulatorType: String {
         case .lfo: return "LFO"
         case .math: return "Math"
         case .macro: return "Macro"
+        case .toggle: return "Toggle"
         }
     }
 }
 
-/// A modulator device in the chain: an LFO, a Math or a Macro. Several can sit side by side.
+/// A modulator device in the chain: an LFO, a Math, a Macro or a Toggle. Several can sit side by side.
 @Observable
 final class ModulatorRuntime: Identifiable {
     let id: String
@@ -125,8 +138,8 @@ final class ModulatorRuntime: Identifiable {
     /// Whether Audio In · Sync is mapped into its `mod.<id>.sync` input.
     private(set) var isSynced = false
     let bank: ParamBank
-    /// Its outputs. LFO and Math have one, `mod.<id>.out`: bipolar (-1...1) for an LFO, 0...1
-    /// for Math. A Macro has one per knob, `mod.<id>.macro1`… (0...1).
+    /// Its outputs. LFO, Math and Toggle have one, `mod.<id>.out`: bipolar (-1...1) for an LFO,
+    /// 0...1 for the others. A Macro has one per knob, `mod.<id>.macro1`… (0...1).
     @ObservationIgnored private(set) var outputs: [OutputSignal] = []
     /// The first output, which LFO and Math scopes draw.
     var output: OutputSignal { outputs[0] }
@@ -138,8 +151,11 @@ final class ModulatorRuntime: Identifiable {
     @ObservationIgnored private var freePhase: Double = 0
     /// Synced: the beat its cycles count from, moved by Reset.
     @ObservationIgnored private var syncOrigin: Double = 0
-    /// LFOs: `mod.<id>.reset`, which restarts the cycle each time it fires.
-    @ObservationIgnored let resetTrigger: TriggerInput?
+    /// Its trigger input: an LFO's `mod.<id>.reset`, which restarts the cycle each time it
+    /// fires, or a Toggle's `mod.<id>.toggle`, which flips it. Math and Macro have none.
+    @ObservationIgnored let trigger: TriggerInput?
+    /// Toggle: whether it's on `b` rather than `a`. Written on the render thread, read by the UI.
+    @ObservationIgnored private(set) var isOnB = false
     /// Normalized phase (0...1) of the current cycle, read by UI WaveScope.
     @ObservationIgnored var currentPhase: Float = 0
 
@@ -147,7 +163,11 @@ final class ModulatorRuntime: Identifiable {
         self.id = id; self.type = type; self.presetLabel = presetLabel
         rEnabled = enabled; self.enabled = enabled
         self.bank = bank
-        resetTrigger = type == .lfo ? TriggerInput("mod.\(id).reset", "Reset") : nil
+        switch type {
+        case .lfo: trigger = TriggerInput("mod.\(id).reset", "Reset")
+        case .toggle: trigger = TriggerInput("mod.\(id).toggle", "Toggle")
+        case .math, .macro: trigger = nil
+        }
         switch type {
         case .lfo:
             outputs = [OutputSignal("mod.\(id).out", "Out", device: id, isBipolar: true) { [unowned self] f in self.lfoValue(f) }]
@@ -157,7 +177,18 @@ final class ModulatorRuntime: Identifiable {
             outputs = MacroParams.names.enumerated().map { i, name in
                 OutputSignal("mod.\(id).\(name)", "Macro \(i + 1)", device: id) { [unowned self] _ in self.macroValue(name) }
             }
+        case .toggle:
+            outputs = [OutputSignal("mod.\(id).out", "Out", device: id) { [unowned self] _ in self.toggleValue() }]
         }
+    }
+
+    /// Render thread. Flips on each fire, then reads the chosen knob as of the previous frame.
+    /// Paused, it outputs 0 and ignores fires.
+    private func toggleValue() -> Float {
+        let fired = trigger?.take() == true
+        guard rEnabled else { return 0 }
+        if fired { isOnB.toggle() }
+        return bank.live(isOnB ? "b" : "a")
     }
 
     /// Render thread. The knob's value as of the previous frame (so mappings onto it count).
@@ -171,11 +202,13 @@ final class ModulatorRuntime: Identifiable {
         isSynced = clock != nil
     }
 
-    /// Continues a free-running phase from the device this one replaces after a chain edit.
+    /// Continues a free-running phase, or a Toggle's side, from the device this one replaces
+    /// after a chain edit.
     func continuePhase(from old: ModulatorRuntime) {
         freePhase = old.freePhase
         syncOrigin = old.syncOrigin
         currentPhase = old.currentPhase
+        isOnB = old.isOnB
     }
 
     /// Render thread. Reads `a` and `b` as of the previous frame, like every modulator, so a
@@ -193,7 +226,7 @@ final class ModulatorRuntime: Identifiable {
         }
         let shape = Int(bank.live("shape"))
         let phase = Double(bank.live("phase"))
-        if resetTrigger?.take() == true {
+        if trigger?.take() == true {
             freePhase = 0
             syncOrigin = syncClock?.beat ?? 0
         }

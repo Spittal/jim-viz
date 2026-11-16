@@ -24,7 +24,7 @@ struct SceneFile: Codable, Equatable {
     /// Signal sources, in chain order: at most one `audio`, any number of the rest.
     /// Without Audio In, audio signals read 0 and there's no beat.
     var inputs: [InputSpec]
-    /// LFOs and Maths. Any number.
+    /// LFOs, Maths, Macros and Toggles. Any number.
     var modulators: [ModulatorSpec]
     var camera: CameraSlot?
     /// The camera effect: a lens whose ST map the Camera's Lens input can take.

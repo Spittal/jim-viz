@@ -162,7 +162,7 @@ struct StreamInput: Identifiable, Hashable {
 }
 
 /// A trigger input a tool declares: the Cutter camera's `camera.cut`, a Video's
-/// `video.<id>.jump`, an LFO's `mod.<id>.reset`. Something happens each time it fires.
+/// `video.<id>.jump`, an LFO's `mod.<id>.reset`, a Toggle's `mod.<id>.toggle`. Something happens each time it fires.
 ///
 /// Mapped outputs fire it: a trigger output on its event, a value output each time it rises
 /// past ½ (it has to fall below ¼ before it can fire again). Clicking its pad fires it by hand.
@@ -180,13 +180,14 @@ final class TriggerInput: Identifiable {
     init(_ key: String, _ label: String) { self.key = key; self.label = label }
 
     /// Whether a key names a trigger input, from the key alone, for when its device isn't in
-    /// the scene: `camera.cut`, `audio.firstBeat`, `mod.<id>.reset`, `video.<id>.jump`.
+    /// the scene: `camera.cut`, `audio.firstBeat`, `mod.<id>.reset`, `mod.<id>.toggle`,
+    /// `video.<id>.jump`.
     static func isKey(_ key: String) -> Bool {
         let parts = key.split(separator: ".")
         switch (parts.first, parts.count) {
         case ("camera", 2): return parts[1] == "cut"
         case ("audio", 2): return parts[1] == "firstBeat"
-        case ("mod", 3): return parts[2] == "reset"
+        case ("mod", 3): return parts[2] == "reset" || parts[2] == "toggle"
         case ("video", 3): return parts[2] == "jump"
         default: return false
         }

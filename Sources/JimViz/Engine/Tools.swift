@@ -61,7 +61,13 @@ enum Tools {
             case "picture": return "photo"
             default: return "waveform"
             }
-        case .modulation: return name == "math" ? "function" : name == "macro" ? "dial.medium" : "waveform.path"
+        case .modulation:
+            switch name {
+            case "math": return "function"
+            case "macro": return "dial.medium"
+            case "toggle": return "switch.2"
+            default: return "waveform.path"
+            }
         case .camera: return CameraRig(rawValue: name)?.icon ?? "camera.viewfinder"
         case .lens: return "camera.aperture"
         case .palette: return "paintpalette"
@@ -138,7 +144,8 @@ enum Tools {
         }
         return [tool(.input, "audio"), tool(.input, "midi"), tool(.input, "webcam"),
                 tool(.input, "video"), tool(.input, "picture"),
-                tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro")]
+                tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro"),
+                tool(.modulation, "toggle")]
             + CameraRig.allCases.map { tool(.camera, $0.rawValue) } + store.availableLenses().map { tool(.lens, $0) }
             + [tool(.palette, "palette")]
             + store.generatorTypes().map { tool(.generator, $0.name, category: $0.category) }

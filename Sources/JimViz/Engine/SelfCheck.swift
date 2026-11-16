@@ -2159,6 +2159,12 @@ enum SelfCheck {
             print("ok   macro (starts unmapped, three outputs follow their knobs, one knob drives several, remap by menu and click keeps settings, paused outputs 0)")
         }
 
+        if let problem = checkToggle(engine: engine) {
+            print("FAIL toggle: \(problem)"); failures += 1
+        } else {
+            print("ok   toggle (starts unmapped, Toggle trigger input, a value rising past ½ flips A and B, holds while high, side survives a chain edit, paused outputs 0)")
+        }
+
         if let problem = checkCameras(engine: engine) {
             print("FAIL cameras: \(problem)"); failures += 1
         } else {
@@ -2568,6 +2574,77 @@ extension SelfCheck {
         var bad = file
         bad.modulators = [ModulatorSpec(type: "wobbler", id: "w")]
         guard engine.build(bad, reuse: nil) == nil, engine.errors["modulator"] != nil else { return "unknown modulator built" }
+        return nil
+    }
+
+    /// The Toggle modulator: added unmapped, with a Toggle trigger input rather than knobs for
+    /// it; its output reads `a`, and flips between `a` and `b` each time a value mapped onto
+    /// Toggle rises past ½ (a pulse, a MIDI button at 127), not while it stays high.
+    static func checkToggle(engine: Engine) -> String? {
+        let url = engine.store.scenesDir.appendingPathComponent("selfcheck-toggle.json")
+        let file = SceneFile(name: "Self-check Toggle", inputs: [],
+                             modulators: [ModulatorSpec(type: "macro", id: "macro")],
+                             camera: nil, palettes: [], generators: [], effects: [], mappings: [])
+        do { try file.write(to: url) } catch { return "could not write the test scene" }
+        engine.store.markSeen(url)
+        engine.refreshSceneList()
+        let back = engine.currentURL
+        defer {
+            if let back { engine.load(back, animated: false) }
+            try? FileManager.default.removeItem(at: url)
+            engine.refreshSceneList()
+        }
+        engine.load(url, animated: false)
+        engine.apply(.modulation, "toggle")
+        guard let s0 = engine.current, let t0 = s0.modulators.first(where: { $0.id == "toggle" }), t0.type == .toggle else {
+            return "toggle not added"
+        }
+        guard s0.mappings.isEmpty else { return "toggle started mapped" }
+        guard t0.bank.params.map(\.def.name) == ["a", "b"], s0.triggerInputs.map(\.key) == ["mod.toggle.toggle"],
+              TriggerInput.isKey("mod.toggle.toggle"), engine.kind(of: "mod.toggle.toggle") == .trigger else {
+            return "toggle should have a and b knobs and a Toggle trigger input"
+        }
+        guard !s0.streamInputs.contains(where: { $0.key == "mod.toggle.sync" }) else { return "toggle has a sync input" }
+        guard s0.outputs.first(where: { $0.key == "mod.toggle.out" })?.isBipolar == false else { return "no unipolar toggle output" }
+        guard Tools.label(.modulation, "toggle") == "Toggle" else { return "toggle label" }
+
+        engine.addMapping(source: "mod.macro.macro1", target: "mod.toggle.toggle")
+        guard let s = engine.current, let toggle = s.modulators.first(where: { $0.id == "toggle" }),
+              let macro = s.modulators.first(where: { $0.id == "macro" }),
+              let out = s.outputs.first(where: { $0.key == "mod.toggle.out" }),
+              s.mappings.count == 1, s.mappings[0].kind == .trigger, s.mappings[0].isActive else { return "value → Toggle mapping inactive" }
+        toggle.bank["a"]!.setBase(0.2); toggle.bank["b"]!.setBase(0.7)
+        var f = SignalFrame()
+        f.dt = 1 / 60
+        /// Sets the button (the macro knob) and lets it travel: knob, output, trigger, toggle.
+        func press(_ v: Float) -> Float {
+            macro.bank["macro1"]!.setBase(v)
+            for _ in 0..<4 { s.modulate(f) }
+            return out.value
+        }
+        guard abs(press(0) - 0.2) < 1e-4, !toggle.isOnB else { return "toggle doesn't start on a (\(out.value))" }
+        guard abs(press(1) - 0.7) < 1e-4, toggle.isOnB else { return "a press didn't flip to b (\(out.value))" }
+        guard abs(press(1) - 0.7) < 1e-4 else { return "flipped again while held" }
+        guard abs(press(0) - 0.7) < 1e-4 else { return "the release flipped it" }
+        // It follows its knob while it sits on that side.
+        toggle.bank["b"]!.setBase(0.9)
+        guard abs(press(0) - 0.9) < 1e-4 else { return "output didn't follow b" }
+        guard abs(press(1) - 0.2) < 1e-4, !toggle.isOnB else { return "a second press didn't flip back to a (\(out.value))" }
+        _ = press(0)
+        guard abs(press(1) - 0.9) < 1e-4 else { return "a third press didn't flip to b" }
+
+        // A chain edit rebuilds the device; it stays on the side it was on.
+        engine.apply(.modulation, "lfo")
+        guard let s2 = engine.current, let t2 = s2.modulators.first(where: { $0.id == "toggle" }), t2 !== toggle, t2.isOnB,
+              let out2 = s2.outputs.first(where: { $0.key == "mod.toggle.out" }) else { return "toggle lost its side on a chain edit" }
+        // Paused, it outputs 0 and ignores fires.
+        t2.enabled = false
+        t2.trigger?.fire()
+        s2.modulate(f)
+        guard out2.value == 0 else { return "paused toggle still outputs" }
+        t2.enabled = true
+        s2.modulate(f)
+        guard t2.isOnB, abs(out2.value - 0.9) < 1e-4 else { return "paused toggle flipped" }
         return nil
     }
 

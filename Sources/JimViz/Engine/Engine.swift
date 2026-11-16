@@ -1099,7 +1099,7 @@ final class Engine {
                                bank: bank, pipeline: pipeline, stmap: reuse?.lens?.stmap ?? renderer.makeSTMapTexture())
         }
 
-        // Modulation: LFOs, Maths and Macros.
+        // Modulation: LFOs, Maths, Macros and Toggles.
         var modulators: [ModulatorRuntime] = []
         errors["modulator"] = nil
         for spec in file.modulators where !modulators.contains(where: { $0.id == spec.id }) {
@@ -1276,7 +1276,7 @@ final class Engine {
         for t in cameraMotion?.triggerInputs ?? [] { triggers[t.key] = (t, "Camera · \(t.label)") }
         for case .audio(let a) in inputs { triggers[a.firstBeatTrigger.key] = (a.firstBeatTrigger, "Audio In · \(a.firstBeatTrigger.label)") }
         for case .video(let v) in inputs { triggers[v.jumpTrigger.key] = (v.jumpTrigger, "\(v.displayName) · \(v.jumpTrigger.label)") }
-        for mod in modulators { if let t = mod.resetTrigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
+        for mod in modulators { if let t = mod.trigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
 
         /// Why a source isn't available, when its device isn't in the chain.
         func missing(_ source: String) -> String {
