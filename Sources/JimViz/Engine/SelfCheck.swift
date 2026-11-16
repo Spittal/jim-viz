@@ -1058,7 +1058,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "ridges"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -1072,7 +1072,7 @@ enum SelfCheck {
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
                                      "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
-                                     "drive": "lane", "street": "footprint"]
+                                     "drive": "lane", "street": "footprint", "ridges": "history"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -1121,9 +1121,10 @@ enum SelfCheck {
                 scale.reset()
             }
 
-            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive and Street have
-            // no Motion group: their road scrolls instead of their mesh turning.
-            if geo == "drive" || geo == "street" { continue }
+            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive, Street and
+            // Ridges have no Motion group: the road scrolls and the spectrum travels instead of
+            // the mesh turning.
+            if ["drive", "street", "ridges"].contains(geo) { continue }
             guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
                 return "\(geo) missing spin or tumble"
             }
@@ -1267,6 +1268,90 @@ enum SelfCheck {
         return nil
     }
 
+    /// Ridges, a Low Poly generator: starts unmapped and draws flat lines; with Audio In's
+    /// Spectrum mapped in the lines rise, and with history the back lines show an older spectrum
+    /// than the front. A spectrum's texture keeps its past in rows, a step apart.
+    private static func checkRidges(engine: Engine, snapshotDir: URL?) -> String? {
+        // The texture's rows: now on top, each upload's step moving the rest down.
+        let n = AudioAnalyzer.spectrumBins
+        let textures = engine.renderer.makeSpectrumTextures()
+        func row(_ k: Int) -> Float {
+            var px = [Float](repeating: 0, count: n)
+            textures.current.getBytes(&px, bytesPerRow: n * 4, from: MTLRegionMake2D(0, k, n, 1), mipmapLevel: 0)
+            return px.allSatisfy({ $0 == px[0] }) ? px[0] : .nan
+        }
+        let step = SpectrumTextures.step
+        textures.upload([Float](repeating: 1, count: n), dt: step * 1.2)
+        textures.upload([Float](repeating: 2, count: n), dt: step * 1.2)
+        guard (0..<3).map(row) == [2, 1, 0] else { return "history rows \((0..<3).map(row)), expected 2, 1, 0" }
+        // A long frame fills the rows it skipped with the spectrum as it was.
+        textures.upload([Float](repeating: 3, count: n), dt: step * 3.2)
+        guard (0..<6).map(row) == [3, 2, 2, 2, 1, 0] else { return "history rows after a long frame \((0..<6).map(row))" }
+
+        let file = SceneFile(name: "ridges", inputs: [InputSpec(type: "audio", device: "system")], modulators: [],
+                             camera: CameraSlot(type: "static", preset: nil, params: ["x": 9, "y": 0, "z": 0, "fov": 50]),
+                             palettes: [PaletteSlot(colors: ["#000000", "#FFFFFF"])],
+                             generators: [GeneratorSlot(id: nil, type: "ridges", preset: nil, params: [:])],
+                             effects: [], mappings: [MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal")])
+        guard let scene = engine.build(file, reuse: nil), let gen = scene.generator else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.mesh == .ridges, gen.vertexCount == 40 * 64 * 6 else { return "mesh has \(gen.vertexCount) vertices" }
+        guard scene.streamBindings.keys.sorted() == ["generator.pal"] else { return "connected itself" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+
+        // Unmapped: flat lines, so the same picture whatever the audio does.
+        _ = engine.renderOffscreen(scene, frames: 30, snapshot: snapshotDir?.appendingPathComponent("ridges-flat.png"))
+        let flat = engine.coverage(engine.renderer.history)
+        guard flat.fraction > 0.01, flat.fraction < 0.3, abs(flat.centroid.x - 0.5) < 0.05, abs(flat.centroid.y - 0.5) < 0.1 else {
+            return "flat lines drew \(flat.fraction) of the frame, centred at \(flat.centroid)"
+        }
+        // The curtains show with fill, and hide with drop at 0.
+        gen.bank["fill"]!.setBase(1)
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: nil)
+        let filled = engine.coverage(engine.renderer.history).fraction
+        gen.bank["drop"]!.setBase(0)
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: nil)
+        let gone = engine.coverage(engine.renderer.history).fraction
+        guard filled > flat.fraction * 2, gone == 0 else { return "curtains drew \(filled) filled, \(gone) with no drop" }
+        gen.bank["fill"]!.reset(); gen.bank["drop"]!.reset()
+        // Noise roughens the lines without a spectrum.
+        gen.bank["noiseAmount"]!.setBase(1)
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: snapshotDir?.appendingPathComponent("ridges-noise.png"))
+        let rough = engine.coverage(engine.renderer.history).fraction
+        guard abs(rough - flat.fraction) > flat.fraction * 0.02 else { return "noise didn't roughen the lines" }
+        gen.bank["noiseAmount"]!.reset()
+
+        // Mapped, with the check's track playing: the lines rise, and the texture holds the past.
+        guard engine.offlineAudio != nil else { return nil }
+        var mapped = file
+        mapped.mappings = [MappingSpec(source: StreamOutput.paletteKey, target: "generator.pal"),
+                           MappingSpec(source: StreamOutput.spectrumKey, target: "generator.spec")]
+        guard let live = engine.build(mapped, reuse: nil), let audio = live.audioIn, let liveGen = live.generator else {
+            return "didn't build with a spectrum"
+        }
+        var ms = 0.0
+        func raised(history: Float) -> Float {
+            liveGen.bank["history"]!.setBase(history)
+            ms = engine.renderOffscreen(live, frames: 90, snapshot: snapshotDir?.appendingPathComponent("ridges-\(Int(history * 10)).png"))
+            return engine.coverage(engine.renderer.history).fraction
+        }
+        let now = raised(history: 0), travelling = raised(history: 1.5)
+        let moved = flat.fraction * 0.02
+        guard abs(now - flat.fraction) > moved, abs(travelling - flat.fraction) > moved, now != travelling else {
+            return "lines didn't rise with the spectrum: flat \(flat.fraction), now \(now), with history \(travelling)"
+        }
+        var top = [Float](repeating: 0, count: n), past = top
+        let tex = audio.spectrum.current
+        tex.getBytes(&top, bytesPerRow: n * 4, from: MTLRegionMake2D(0, 0, n, 1), mipmapLevel: 0)
+        tex.getBytes(&past, bytesPerRow: n * 4, from: MTLRegionMake2D(0, 30, n, 1), mipmapLevel: 0)
+        guard tex.height == SpectrumTextures.rows, top == audio.analyzer.spectrum.bins, past.max()! > 0, past != top else {
+            return "the spectrum's texture doesn't hold its past"
+        }
+        print(String(format: "     ridges %.2f ms/frame GPU, %d vertices", ms, gen.vertexCount))
+        return nil
+    }
+
     /// Street, a Low Poly generator: starts unmapped, and on a scene built in memory (a camera
     /// looking down the street, a palette) draws buildings both sides of the frame, draws one
     /// instance per lot plus the street, rebuilds its mesh when segments or detail change, draws
@@ -1283,7 +1368,9 @@ enum SelfCheck {
         }
         guard gen.mesh == .street, gen.vertexCount > 0 else { return "built an empty mesh" }
         guard scene.mappings.isEmpty, scene.streamBindings.isEmpty else { return "connected itself" }
-        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum, .video, .video] else {
+            return "inputs should be Palette, Spectrum, Walls and Road"
+        }
         let meshKnobs = gen.bank.params.filter(\.def.rebuildsMesh)
         guard meshKnobs.map(\.def.name).sorted() == ["detail", "segments"] else { return "mesh knobs mismatch" }
         for knob in meshKnobs {
@@ -1316,6 +1403,7 @@ enum SelfCheck {
             guard engine.coverage(engine.renderer.history).fraction > 0.3 else { return "style \(style) drew nothing" }
         }
         gen.bank["style"]?.reset(); gen.bank["variety"]?.reset()
+        if let err = checkStreetVideo(engine: engine, file: coloured, snapshotDir: snapshotDir) { return err }
         // Backwards, bent, hilly, shattered and wired: still draws.
         for (name, value) in [("speed", -6), ("curves", 3), ("hills", 3), ("explode", 2), ("wire", 1), ("strafe", 1), ("rise", 1)] as [(String, Float)] {
             gen.bank[name]?.setBase(value)
@@ -1324,6 +1412,41 @@ enum SelfCheck {
         guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn walking backwards" }
         if let err = engine.errorSummary { return err }
         print(String(format: "     street %.2f ms/frame GPU, %d vertices × %d instances", ms, gen.vertexCount, 1 + 2 * lots))
+        return nil
+    }
+
+    /// Street's video inputs: a red test frame mapped into Walls reddens the picture, and so
+    /// does one mapped into Road; with its knob at 0 neither shows.
+    private static func checkStreetVideo(engine: Engine, file: SceneFile, snapshotDir: URL?) -> String? {
+        var file = file
+        file.inputs = [InputSpec(type: "webcam", id: "webcam")]
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 64, height: 36, mipmapped: false)
+        d.usage = .shaderRead
+        guard let red = engine.device.makeTexture(descriptor: d) else { return "no test texture" }
+        let px = (0..<64 * 36 * 4).map { UInt8($0 % 4 >= 2 ? 255 : 0) }
+        red.replace(region: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0, withBytes: px, bytesPerRow: 64 * 4)
+
+        // How red the picture is: red over the other two.
+        func redness(_ target: String?, _ knob: (String, Float)?, _ snapshot: String?) -> Float? {
+            var f = file
+            if let target { f.mappings = (f.mappings ?? []) + [MappingSpec(source: "webcam.webcam.video", target: target)] }
+            guard let scene = engine.build(f, reuse: nil), let gen = scene.generator, let cam = scene.webcams.first else { return nil }
+            cam.feed.inject(red)
+            if let knob { gen.bank[knob.0]?.setBase(knob.1) }
+            _ = engine.renderOffscreen(scene, frames: 3, snapshot: snapshot.flatMap { snapshotDir?.appendingPathComponent($0) })
+            let c = engine.averageColor(engine.renderer.history)
+            return c.x - (c.y + c.z) / 2
+        }
+        guard let plain = redness(nil, nil, nil),
+              let walls = redness("generator.wallVideo", nil, "street-video-walls.png"),
+              let wallsOff = redness("generator.wallVideo", ("wallTex", 0), nil),
+              let road = redness("generator.roadVideo", nil, "street-video-road.png"),
+              let roadOff = redness("generator.roadVideo", ("roadTex", 0), nil) else { return "didn't build with a webcam" }
+        guard walls > plain + 0.05 else { return "Walls video didn't show: \(plain) → \(walls)" }
+        guard road > plain + 0.02 else { return "Road video didn't show: \(plain) → \(road)" }
+        guard abs(wallsOff - plain) < 0.01, abs(roadOff - plain) < 0.01 else {
+            return "video shows with its knob at 0: \(plain), \(wallsOff), \(roadOff)"
+        }
         return nil
     }
 
@@ -2270,6 +2393,11 @@ enum SelfCheck {
             print("FAIL drive: \(problem)"); failures += 1
         } else {
             print("ok   drive (starts unmapped, road, car, palms, sun and mountains drawn, mesh knobs rebuild)")
+        }
+        if let problem = checkRidges(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL ridges: \(problem)"); failures += 1
+        } else {
+            print("ok   ridges (starts unmapped and flat, curtains fill and drop, lines rise with the spectrum, spectrum textures keep their past)")
         }
         if let problem = checkStreet(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL street: \(problem)"); failures += 1

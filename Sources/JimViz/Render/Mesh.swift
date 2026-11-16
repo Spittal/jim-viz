@@ -21,7 +21,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, shrek, globe
+    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, shrek, globe, ridges
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -38,6 +38,7 @@ enum MeshShape: String, CaseIterable {
         case .face: return ["detail"]
         case .dancer, .shrek: return ["sides"]
         case .globe: return ["detail", "facets"]
+        case .ridges: return ["lines", "segments"]
         }
     }
 
@@ -92,6 +93,7 @@ struct MeshBuilder {
         case .face: return [min(max(i("detail"), 0), 4)]
         case .dancer, .shrek: return [min(max(i("sides"), 3), 16)]
         case .globe: return [min(max(i("detail"), 0), WorldMap.tolerances.count - 1), min(max(i("facets"), 0), 5)]
+        case .ridges: return [min(max(i("lines"), 1), 128), min(max(i("segments"), 2), 256)]
         }
     }
 
@@ -111,6 +113,7 @@ struct MeshBuilder {
         case .dancer: b.dancer(sides: t[0])
         case .shrek: b.shrek(sides: t[0])
         case .globe: b.globe(detail: t[0], facets: t[1])
+        case .ridges: b.ridges(lines: t[0], segments: t[1])
         }
         return b.vertices
     }
@@ -269,6 +272,25 @@ struct MeshBuilder {
             }
         }
     }
+    /// Ridges: `lines` curtains one behind the other, each `segments` quads across. A curtain's
+    /// top edge is its ridge, which the shader raises and draws as a line; the rest hangs below
+    /// and hides the ridges behind. The shader places them (width, rise, recede, drop).
+    /// shape: x = across the line 0...1, y = which line 0...1 from the front, z = 1 on the ridge
+    /// and 0 at the curtain's foot, w = x at the other end of this quad's ridge.
+    private mutating func ridges(lines: Int, segments: Int) {
+        let front = SIMD3<Float>(1, 0, 0)
+        for k in 0..<lines {
+            let line = lines > 1 ? Float(k) / Float(lines - 1) : 0
+            func p(_ u: Float, _ top: Float) -> SIMD3<Float> { [(0.5 - line) * 2, (line - 0.5) * 5 + (top - 1) * 1.5, (0.5 - u) * 6] }
+            for j in 0..<segments {
+                let u0 = Float(j) / Float(segments), u1 = Float(j + 1) / Float(segments)
+                func s(_ u: Float, _ top: Float) -> SIMD4<Float> { [u, line, top, u == u0 ? u1 : u0] }
+                tri(p(u0, 1), p(u1, 1), p(u0, 0), front, front, front, shape: (s(u0, 1), s(u1, 1), s(u0, 0)))
+                tri(p(u1, 1), p(u1, 0), p(u0, 0), front, front, front, shape: (s(u1, 1), s(u1, 0), s(u0, 0)))
+            }
+        }
+    }
+
     /// Phalanx lengths (proximal, middle, distal) of the thumb, index, middle, ring and pinky.
     /// Must match `handLen` in Shaders/generators/lowpoly/hand.metal.
     static let handLengths: [SIMD3<Float>] = [

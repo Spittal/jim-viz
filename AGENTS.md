@@ -48,7 +48,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 |---|---|---|
 | value (0–1) | Audio In · Kick, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
-| spectrum | Audio In · Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins) | `// @spectrum name Label` inputs |
+| spectrum | Audio In · Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins, with their last four seconds) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | nothing yet |
 | clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |

@@ -75,7 +75,7 @@ final class VideoFeed: VideoSourceFeed {
     @ObservationIgnored private var range: ClosedRange<Double> = 0...1
     /// Where playback is, 0...1 of the length, for the transport bar.
     @ObservationIgnored private(set) var position: Float = 0
-    /// Length in seconds, once known.
+    /// Length in seconds, once known: see `playableLength`.
     @ObservationIgnored private var length: Double = 0
     /// Counts seeks, so only the latest one's completion clears `seeking`. Plain fields read
     /// without the lock from the seek's completion; a stale read only delays the next loop.
@@ -137,6 +137,10 @@ final class VideoFeed: VideoSourceFeed {
         p.actionAtItemEnd = .none
         p.isMuted = true
         player = p
+        Task { [weak self] in
+            guard let seconds = try? await Self.playableLength(of: asset) else { return }
+            self?.lock.withLock { self?.length = seconds }
+        }
 
         if let obs = endObserver { NotificationCenter.default.removeObserver(obs) }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: nil) { [weak self] _ in
@@ -144,6 +148,22 @@ final class VideoFeed: VideoSourceFeed {
             self?.seekToIn()
             self?.lock.unlock()
         }
+    }
+
+    /// How long the video's pictures run, in seconds: where its last frame ends. Not the
+    /// asset's duration, which AVFoundation reports as double for fragmented MP4s (as yt-dlp
+    /// writes), leaving the second half of the timeline with no frames.
+    private static func playableLength(of asset: AVURLAsset) async throws -> Double {
+        let duration = try await asset.load(.duration).seconds
+        guard let track = try await asset.loadTracks(withMediaType: .video).first,
+              track.canProvideSampleCursors,
+              let cursor = track.makeSampleCursorAtLastSampleInDecodeOrder() else { return duration }
+        // The last frame shown is among the last few decoded: frames are reordered.
+        var end = cursor.presentationTimeStamp + cursor.currentSampleDuration
+        for _ in 0..<32 where cursor.stepInDecodeOrder(byCount: -1) == -1 {
+            end = max(end, cursor.presentationTimeStamp + cursor.currentSampleDuration)
+        }
+        return min(duration, end.seconds)
     }
 
     func play() {
@@ -165,7 +185,6 @@ final class VideoFeed: VideoSourceFeed {
         defer { lock.unlock() }
 
         if let output = videoOutput, let p = player, wanted {
-            if length <= 0, let dur = p.currentItem?.duration, dur.isNumeric, dur.seconds > 0 { length = dur.seconds }
             if length > 0 {
                 let t = p.currentTime().seconds
                 position = Float(t / length)

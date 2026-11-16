@@ -478,16 +478,16 @@ final class Renderer {
         makeReprojectPipeline()
     }
 
-    /// Textures for an Audio In's spectrum, silent to start. Call on main, when it is built.
+    /// Textures for an Audio In's spectrum and its history, silent to start. Call on main, when it is built.
     func makeSpectrumTextures() -> SpectrumTextures {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: AudioAnalyzer.spectrumBins,
-                                                         height: 1, mipmapped: false)
+                                                         height: SpectrumTextures.rows, mipmapped: false)
         d.usage = .shaderRead
-        let zeros = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins)
+        let zeros = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins * SpectrumTextures.rows)
         let textures = (0..<4).map { _ in
             let t = device.makeTexture(descriptor: d)!
-            zeros.withUnsafeBytes { t.replace(region: MTLRegionMake2D(0, 0, zeros.count, 1), mipmapLevel: 0,
-                                              withBytes: $0.baseAddress!, bytesPerRow: zeros.count * 4) }
+            zeros.withUnsafeBytes { t.replace(region: MTLRegionMake2D(0, 0, d.width, d.height), mipmapLevel: 0,
+                                              withBytes: $0.baseAddress!, bytesPerRow: d.width * 4) }
             return t
         }
         return SpectrumTextures(textures)

@@ -18,7 +18,8 @@
 // hasInput(f, n) says whether the input at texture(n) is connected. Unconnected video and
 // spectrum read 0; an unconnected palette is a grey ramp, black to white.
 //
-// The spectrum is 128 log-spaced bins from 30 Hz (u=0) to 16 kHz (u=1), values 0..1.
+// The spectrum is 128 log-spaced bins from 30 Hz (u=0) to 16 kHz (u=1), values 0..1. It keeps
+// four seconds of its past: spectrumAt(spec, u, age) reads it as it was `age` seconds ago.
 // Audio levels, hits and the clock reach shaders the same way as anything else: map an
 // output (Audio In · Kick, Audio In · Pulse) onto a knob.
 
@@ -61,9 +62,17 @@ inline float3 paletteClamp(texture2d<float> pal, float t) {
     return pal.sample(linearClamp, float2(saturate(t), 0.5)).rgb;
 }
 
-inline float spectrum(texture2d<float> spec, float u) {
-    return spec.sample(linearClamp, float2(saturate(u), 0.5)).r;
+// A spectrum texture's rows go back in time: row 0 is now, each row below one step older.
+// Must match SpectrumTextures.step in Audio/AudioInRuntime.swift.
+constant float SPECTRUM_ROWS_PER_SECOND = 60;
+
+// The spectrum as it was `age` seconds ago, as far back as the texture goes.
+inline float spectrumAt(texture2d<float> spec, float u, float age) {
+    float row = max(age, 0.0) * SPECTRUM_ROWS_PER_SECOND + 0.5;
+    return spec.sample(linearClamp, float2(saturate(u), row / float(spec.get_height()))).r;
 }
+
+inline float spectrum(texture2d<float> spec, float u) { return spectrumAt(spec, u, 0); }
 
 inline bool hasInput(constant Frame& f, int slot) { return (int(f.inputs) >> slot) & 1; }
 

@@ -3,20 +3,44 @@ import Metal
 import Observation
 
 /// A spectrum's textures, rotated per upload so the CPU never rewrites one the GPU may still
-/// be reading. Made on main when Audio In is built; render thread only after that.
+/// be reading. Each is `AudioAnalyzer.spectrumBins` wide and `rows` tall: row 0 is the spectrum
+/// now, and every row below is one `step` older, so a shader can read the recent past.
+/// Made on main when Audio In is built; render thread only after that.
 final class SpectrumTextures {
+    /// Rows of history, four seconds' worth.
+    static let rows = 240
+    /// Seconds between rows. Must match SPECTRUM_ROWS_PER_SECOND in Shaders/common.metal.
+    static let step: Float = 1.0 / 60
+
     private let textures: [MTLTexture]
     private var index = 0
+    private var history: [Float]
+    private var elapsed: Float = 0
 
-    init(_ textures: [MTLTexture]) { self.textures = textures }
+    init(_ textures: [MTLTexture]) {
+        self.textures = textures
+        history = [Float](repeating: 0, count: AudioAnalyzer.spectrumBins * Self.rows)
+    }
 
     var current: MTLTexture { textures[index] }
 
-    func upload(_ bins: [Float]) {
+    /// `dt` is the time since the last upload: the history moves down a row for every `step` of it.
+    func upload(_ bins: [Float], dt: Float) {
+        let n = AudioAnalyzer.spectrumBins
+        elapsed += max(dt, 0)
+        let shift = min(Int(elapsed / Self.step), Self.rows - 1)
+        elapsed = elapsed.truncatingRemainder(dividingBy: Self.step)
         index = (index + 1) % textures.count
-        bins.withUnsafeBytes { raw in
-            textures[index].replace(region: MTLRegionMake2D(0, 0, bins.count, 1), mipmapLevel: 0,
-                                    withBytes: raw.baseAddress!, bytesPerRow: bins.count * 4)
+        history.withUnsafeMutableBufferPointer { h in
+            let base = h.baseAddress!
+            if shift > 0 {
+                memmove(base + shift * n, base, (Self.rows - shift) * n * MemoryLayout<Float>.stride)
+                // Rows a long frame skipped hold the spectrum as it was.
+                for row in 1..<shift { memcpy(base + row * n, base, n * MemoryLayout<Float>.stride) }
+            }
+            for i in 0..<n { base[i] = bins[i] }
+            textures[index].replace(region: MTLRegionMake2D(0, 0, n, Self.rows), mipmapLevel: 0,
+                                    withBytes: base, bytesPerRow: n * MemoryLayout<Float>.stride)
         }
     }
 }
@@ -159,8 +183,8 @@ final class AudioInRuntime {
         capture.stems.demand(gate: bank.live("gate"), sensitivity: bank.live("sensitivity"))
         analyzer.process(ring: capture.ring, stems: capture.stems, dt: dt, settings: bank)
         features = analyzer.features
-        spectrum.upload(analyzer.spectrum.bins)
-        for (t, s) in zip(stemSpectra, analyzer.stemSpectra) { t.upload(s.bins) }
+        spectrum.upload(analyzer.spectrum.bins, dt: dt)
+        for (t, s) in zip(stemSpectra, analyzer.stemSpectra) { t.upload(s.bins, dt: dt) }
 
         if firstBeatTrigger.take() { clock.firstBeat(at: firstBeatTrigger.lastFired) }
         clock.latencyMs = Double(bank.live("latency"))

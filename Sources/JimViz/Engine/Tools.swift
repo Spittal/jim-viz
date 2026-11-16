@@ -86,6 +86,7 @@ enum Tools {
             case "face": return "face.dashed"
             case "globe": return "globe"
             case "shrek": return "ear"
+            case "ridges": return "waveform.path.ecg"
             default: return "cube.transparent"
             }
         case .effect:

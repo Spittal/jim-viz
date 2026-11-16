@@ -85,6 +85,20 @@
 // @group Spectrum spec
 // @param eq 0 0 3
 
+// Video inputs: map a video output (a Webcam, a Video) into Walls to play it on every
+// building's walls, one whole picture a wall, or into Road to lay it along the road, scrolling
+// past underfoot. wallTex and roadTex are how much shows (at 1 it covers the windows; lane
+// lines and crossings stay on top of the road). wallScale and roadScale zoom the picture.
+// The palette is texture(0), the spectrum texture(1), Walls texture(2) and Road texture(3).
+// @video wallVideo Walls
+// @group Walls wallVideo
+// @param wallTex 0.8 0 1
+// @param wallScale 1 0.25 4
+// @video roadVideo Road
+// @group Road roadVideo
+// @param roadTex 0.8 0 1
+// @param roadScale 1 0.25 4
+
 // Layout must match MeshVertex in Render/Mesh.swift.
 struct MeshVertex {
     float4 position;     // w = per-face random
@@ -121,6 +135,8 @@ struct StreetOut {
     float3 bary;
     float3 local;              // buildings: metres in the lot (along, up, back), before twist;
                                // the street: (distance ahead, across, side)
+    float3 facade;             // buildings: 0...1 along the lot (left to right seen from the
+                               // street), up the height and back from the front
     float faceRand [[flat]];
     float lotRand [[flat]];
     float tone [[flat]];
@@ -208,6 +224,7 @@ vertex StreetOut gen_vertex(uint vid [[vertex_id]],
     o.part = part;
     o.style = style;
     o.local = 0;
+    o.facade = 0;
     o.world = 0;
 
     float3 pos, nrm;
@@ -269,6 +286,7 @@ vertex StreetOut gen_vertex(uint vid [[vertex_id]],
 
             L = float3(v.position.x * W + uOff, (v.position.y * H + v.shape.x * W) * grow, v.position.z * D);
             o.local = L;
+            o.facade = float3(0.5 + side * v.position.x, v.position.y, v.position.z);
             if (v.shape.z != 0) {
                 float2 c = rot2(p.twist * v.shape.z * M_PI_F * 0.5) * float2(L.x - uOff, L.z - D * 0.5);
                 L.x = c.x + uOff;
@@ -320,6 +338,8 @@ inline float boxMask(float2 fq, float2 c, float2 hs, float2 aa) {
 
 fragment float4 gen_fragment(StreetOut in [[stage_in]],
                              texture2d<float> pal [[texture(0)]],
+                             texture2d<float> wallVideo [[texture(2)]],
+                             texture2d<float> roadVideo [[texture(3)]],
                              constant Frame& f [[buffer(0)]],
                              constant Params& p [[buffer(1)]],
                              constant Camera& cam [[buffer(2)]]) {
@@ -381,8 +401,17 @@ fragment float4 gen_fragment(StreetOut in [[stage_in]],
     float3 markColor = paletteClamp(pal, 0.9);
     float onStreet = part <= GROUND ? 1.0 : 0.0;
 
+    // The Road video, the road's width across and scrolling with it, its top the way ahead.
+    float hw = max(st.rw, 1e-3);
+    if (hasInput(f, 3)) {
+        float tile = 2 * hw * float(roadVideo.get_height()) / float(roadVideo.get_width());
+        float2 uv = float2(-lat / (2 * hw), 0.5 - (s + st.T) / tile) / p.roadScale + 0.5;
+        float3 v = roadVideo.sample(linearRepeat, uv).rgb * (0.35 + 0.85 * shade);
+        col = mix(col, v, p.roadTex * (part == ROAD ? 1.0 : 0.0));
+    }
+
     // Dashed lines between lanes.
-    float hw = max(st.rw, 1e-3), lanes = max(round(p.lanes), 1.0);
+    float lanes = max(round(p.lanes), 1.0);
     float laneQ = (lat / hw * 0.5 + 0.5) * lanes, edge = round(laneQ);
     float lineWidth = 0.08 / (2 * hw / lanes);
     float laneLine = 1 - smoothstep(lineWidth, lineWidth + fwidth(laneQ), abs(laneQ - edge));
@@ -442,6 +471,13 @@ fragment float4 gen_fragment(StreetOut in [[stage_in]],
     float glass = mix(coverage, m, near) * hasWindows, lit = mix(coverage * litShare, m * on, near) * hasWindows;
     col = mix(col, palette(pal, 0.04) * 0.45 + paletteClamp(pal, 0.6) * rim * 0.25, glass);
     col = mix(col, lampColor * (0.8 + 0.4 * hash21(c + 5.3 + in.lotRand)), lit);
+
+    // The Walls video, one whole picture on each wall, over the windows.
+    if (hasInput(f, 2)) {
+        float2 uv = (float2(abs(ln.x) > abs(ln.z) ? in.facade.z : in.facade.x, 1 - in.facade.y) - 0.5) / p.wallScale + 0.5;
+        float3 v = wallVideo.sample(linearRepeat, uv).rgb * (0.35 + 0.85 * shade);
+        col = mix(col, v, p.wallTex * hasWindows);
+    }
 
     // Wireframe from barycentrics.
     float e = min(min(in.bary.x, in.bary.y), in.bary.z);

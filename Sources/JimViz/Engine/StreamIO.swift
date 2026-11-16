@@ -5,7 +5,7 @@ import QuartzCore
 /// event (Audio In · On Beat, Camera · On Cut) that fires a trigger input (Cutter · Cut, Video ·
 /// Jump). The others are streams a device produces, each mapped onto one input of the same kind.
 /// - video: a picture, like a webcam's feed.
-/// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1.
+/// - spectrum: Audio In's 128 log-spaced bins, 30 Hz to 16 kHz, values 0...1, and their last four seconds.
 /// - palette: a Palette's gradient, with its inputs applied.
 /// - audio: Audio In's audio stream (Audio Out). Nothing takes it yet.
 /// - clock: Audio In's beat (Sync), for syncing LFOs and shaders' rate knobs.
