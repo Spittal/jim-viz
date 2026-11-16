@@ -1,3 +1,4 @@
+import CoreMIDI
 import Foundation
 import Metal
 import AppKit
@@ -776,6 +777,11 @@ enum SelfCheck {
         guard engine.playlists.position == 1 else { return "bound note didn't step" }
         engine.handleMIDI(note(36, 100))
         guard engine.playlists.position == 1 else { return "held note fired twice" }
+        // A pedal that sends a press and its release together: both arrive in one packet.
+        var events = MIDIEventList()
+        let pulse: [UInt32] = [0x20B0_157F, 0x20B0_1500]
+        _ = MIDIEventListAdd(&events, MemoryLayout<MIDIEventList>.size, MIDIEventListInit(&events, ._1_0), 0, pulse.count, pulse)
+        guard MIDIEngine.channelMessages(in: &events).map(\.d2) == [127, 0] else { return "a packet's second message was dropped" }
         guard engine.playlistWantsMIDI else { return "bound buttons don't want MIDI" }
         engine.selectPlaylist(nil)
         guard !engine.playlistWantsMIDI else { return "MIDI wanted with no playlist open" }

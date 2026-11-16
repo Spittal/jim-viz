@@ -170,17 +170,32 @@ final class MIDIEngine {
     // MARK: - Packet Parsing
 
     private func handleEvents(_ eventListPtr: UnsafePointer<MIDIEventList>, device: String?) {
-        var packet = eventListPtr.pointee.packet
-        for _ in 0..<eventListPtr.pointee.numPackets {
-            let words = Mirror(reflecting: packet.words).children.compactMap { $0.value as? UInt32 }
-            if let firstWord = words.first {
-                let status = UInt8((firstWord >> 16) & 0xFF)
-                let data1 = UInt8((firstWord >> 8) & 0xFF)
-                let data2 = UInt8(firstWord & 0xFF)
-                parseBytes(status: status, d1: data1, d2: data2, time: packet.timeStamp, device: device)
-            }
-            packet = MIDIEventPacketNext(&packet).pointee
+        for message in Self.channelMessages(in: eventListPtr) {
+            parseBytes(status: message.status, d1: message.d1, d2: message.d2, time: message.time, device: device)
         }
+    }
+
+    /// Every MIDI 1.0 channel message in an event list. A packet holds as many messages as
+    /// share its timestamp, one word each, among other message types of one to four words.
+    static func channelMessages(in eventListPtr: UnsafePointer<MIDIEventList>)
+        -> [(status: UInt8, d1: UInt8, d2: UInt8, time: MIDITimeStamp)] {
+        let wordsOffset = MemoryLayout<MIDIEventPacket>.offset(of: \.words)!
+        var messages: [(status: UInt8, d1: UInt8, d2: UInt8, time: MIDITimeStamp)] = []
+        for packet in eventListPtr.unsafeSequence() {
+            let words = UnsafeRawPointer(packet).advanced(by: wordsOffset).assumingMemoryBound(to: UInt32.self)
+            let count = Int(packet.pointee.wordCount)
+            var i = 0
+            while i < count {
+                let word = words[i]
+                let type = word >> 28
+                if type == 0x2 {
+                    messages.append((UInt8((word >> 16) & 0xFF), UInt8((word >> 8) & 0xFF), UInt8(word & 0xFF),
+                                     packet.pointee.timeStamp))
+                }
+                i += [1, 1, 1, 2, 2, 4, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4][Int(type)]
+            }
+        }
+        return messages
     }
 
     private func handlePacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>, device: String?) {
