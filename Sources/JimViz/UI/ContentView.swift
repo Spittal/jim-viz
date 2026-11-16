@@ -91,38 +91,17 @@ private struct SceneList: View {
     @Environment(Engine.self) private var engine
 
     var body: some View {
-        List(selection: Binding(get: { engine.currentURL }, set: { if let u = $0 { engine.selectDevice(nil); engine.load(u) } })) {
-            Section {
-                ForEach(engine.sceneURLs, id: \.self) { url in
-                    SceneRow(url: url).tag(url)
-                        // The list's own drag, which leaves clicks to selection (onDrag on a row doesn't).
-                        .itemProvider { PlaylistDrag.scene(url.deletingPathExtension().lastPathComponent).provider(engine) }
-                }
-            } header: {
-                HStack(spacing: 8) {
-                    Text("Scenes")
-                    Spacer()
-                    Button { NSWorkspace.shared.open(engine.libraryRoot) } label: { Image(systemName: "folder") }
-                        .help("Open Library Folder")
-                    Button { engine.createNewScene() } label: { Image(systemName: "plus") }
-                        .help("New Empty Scene (⌘N)")
-                }
-                .buttonStyle(.plain)
-            }
+        SidebarList(tab: .scenes, urls: engine.sceneURLs, selected: engine.currentURL,
+                    select: { engine.selectDevice(nil); engine.load($0) }, rename: { engine.renamingScene = $0 },
+                    newHelp: "New Empty Scene (⌘N)", new: { engine.createNewScene() }) { url in
+            SceneRow(url: url)
+        } menu: { url in
+            Button("Rename") { engine.renamingScene = url }
+            Button("Duplicate") { engine.duplicateScene(url) }
+            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            Divider()
+            Button("Delete…", role: .destructive) { engine.scenePendingDeletion = url }
         }
-        // The list's own menu and double-click action, so row clicks still select (load) scenes.
-        .contextMenu(forSelectionType: URL.self) { urls in
-            if let url = urls.first {
-                Button("Rename") { engine.renamingScene = url }
-                Button("Duplicate") { engine.duplicateScene(url) }
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                Divider()
-                Button("Delete…", role: .destructive) { engine.scenePendingDeletion = url }
-            }
-        } primaryAction: { urls in
-            if let url = urls.first { engine.renamingScene = url }
-        }
-        .listStyle(.sidebar)
     }
 }
 

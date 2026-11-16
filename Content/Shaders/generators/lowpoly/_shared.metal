@@ -38,8 +38,10 @@
 // @param brownian 0 0 4
 // @param brownianSpeed 0.5 0 4 rate
 
-// Look: lightSpin turns the light around the geo; at 0 it stays put.
+// Look: opacity fades the whole geo, background glow included, into what's drawn before it;
+// at 0 it isn't drawn. lightSpin turns the light around the geo; at 0 it stays put.
 // @group Look
+// @param opacity 1 0 1
 // @param wire 0 0 1
 // @param fill 1 0 1
 // @param bands 6 1 16 int

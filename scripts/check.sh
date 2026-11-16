@@ -20,6 +20,7 @@ scratch=$(mktemp -d)
 scratch=${scratch:A}  # /var is a symlink; the checks compare file URLs
 trap "rm -rf $scratch" EXIT
 for d in Scenes Presets Playlists; do if [[ -d "$src/$d" ]]; then cp -R "$src/$d" $scratch/; fi; done
+if [[ -f "$src/Sidebar.json" ]]; then cp "$src/Sidebar.json" $scratch/; fi
 for d in Videos Pictures; do if [[ -d "$src/$d" ]]; then ln -s "$src/$d" $scratch/$d; fi; done
 JIMVIZ_CONTENT="$PWD/Content" JIMVIZ_LIBRARY=$scratch .build/debug/jim-viz $args
 echo "--- onset detection and beat tracking"

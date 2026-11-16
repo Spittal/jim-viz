@@ -29,6 +29,9 @@ final class Engine {
     /// False until launch finishes, and always in the headless self-check.
     @ObservationIgnored private var hardwareReady = false
 
+    /// The Scenes and Playlists lists' order and folders.
+    let sidebar = SidebarState()
+    /// Scene files, in the sidebar's order.
     private(set) var sceneURLs: [URL] = []
     /// Display names from each scene file's `name`, falling back to the file name.
     private(set) var sceneNames: [URL: String] = [:]
@@ -59,7 +62,7 @@ final class Engine {
     @ObservationIgnored var offlineTime: Double = 0
 
     private enum CacheEntry {
-        case generator(CompiledShader, mesh: MTLRenderPipelineState, blend: MTLRenderPipelineState?, background: MTLRenderPipelineState)
+        case generator(CompiledShader, GeneratorPipelines)
         case effect(CompiledShader, MTLRenderPipelineState)
         case lens(CompiledShader, MTLRenderPipelineState)
         case webcam(CompiledShader, MTLRenderPipelineState, depth: MTLRenderPipelineState)
@@ -85,6 +88,7 @@ final class Engine {
             self?.handleMIDI(msg)
         }
 
+        loadSidebar()
         refreshSceneList()
         refreshPlaylists()
         if headless {
@@ -258,7 +262,7 @@ final class Engine {
     var dropKnob: String?
 
     func refreshSceneList() {
-        sceneURLs = store.sceneURLs()
+        sceneURLs = sidebar.ordered(.scenes, store.sceneURLs())
         struct Named: Decodable { let name: String? }
         var names: [URL: String] = [:]
         for url in sceneURLs {
@@ -291,6 +295,7 @@ final class Engine {
             if dest.standardizedFileURL != url.standardizedFileURL { try FileManager.default.removeItem(at: url) }
             errors["rename"] = nil
             renameSceneInPlaylists(from: oldSlug, to: slug)
+            editSidebar(.scenes) { $0.rename(file: oldSlug, to: slug) }
         } catch {
             errors["rename"] = "rename failed: \(error.localizedDescription)"
             return
@@ -570,22 +575,34 @@ final class Engine {
     func removeInput(_ key: String) {
         let name = deviceName(key)
         if selectedDevice == key { selectDevice(nil) }
-        edit("Removed \(name)") { $0.inputs.removeAll { $0.deviceKey == key } }
+        edit("Removed \(name)") { file in
+            file.inputs.removeAll { $0.deviceKey == key }
+            Self.dropMappings(of: key, from: &file)
+        }
     }
 
     func removeCamera() {
         if selectedDevice == "camera" { selectDevice(nil) }
-        edit("Removed Camera") { $0.camera = nil }
+        edit("Removed Camera") { file in
+            file.camera = nil
+            Self.dropMappings(of: "camera", from: &file)
+        }
     }
 
     func removeLens() {
         if selectedDevice == LensRuntime.key { selectDevice(nil) }
-        edit("Removed Lens") { $0.lens = nil }
+        edit("Removed Lens") { file in
+            file.lens = nil
+            Self.dropMappings(of: LensRuntime.key, from: &file)
+        }
     }
 
     func removePalette(key: String) {
         if selectedDevice == key { selectDevice(nil) }
-        edit("Removed \(deviceName(key))") { $0.palettes.removeAll { $0.key == key } }
+        edit("Removed \(deviceName(key))") { file in
+            file.palettes.removeAll { $0.key == key }
+            Self.dropMappings(of: key, from: &file)
+        }
     }
 
     /// Recolours a palette from a preset; its inputs stay as they are.
@@ -600,7 +617,10 @@ final class Engine {
     }
 
     func removeModulator(id: String) {
-        edit("Removed \(id)") { $0.modulators.removeAll { $0.id == id } }
+        edit("Removed \(id)") { file in
+            file.modulators.removeAll { $0.id == id }
+            Self.dropMappings(of: "mod.\(id)", from: &file)
+        }
     }
 
     func replaceGenerator(key: String, tool: String, preset: String?) {
@@ -656,7 +676,10 @@ final class Engine {
 
     func removeGenerator(key: String = "generator") {
         if selectedDevice == key { selectDevice(nil) }
-        edit("Removed generator") { $0.generators.removeAll { $0.key == key } }
+        edit("Removed generator") { file in
+            file.generators.removeAll { $0.key == key }
+            Self.dropMappings(of: key, from: &file)
+        }
     }
 
     func moveGenerator(key: String, by offset: Int) {
@@ -667,7 +690,15 @@ final class Engine {
     }
 
     func removeEffect(id: String) {
-        edit("Removed \(id)") { $0.effects.removeAll { ($0.id ?? $0.effect) == id } }
+        edit("Removed \(id)") { file in
+            file.effects.removeAll { ($0.id ?? $0.effect) == id }
+            Self.dropMappings(of: "post.\(id)", from: &file)
+        }
+    }
+
+    /// A removed tool takes its mappings with it, the ones out of it and the ones into it.
+    private static func dropMappings(of key: String, from file: inout SceneFile) {
+        file.mappings?.removeAll { devicePath($0.source) == key || devicePath($0.target) == key }
     }
 
     func removeSelectedDevice() {
@@ -897,6 +928,7 @@ final class Engine {
             try file.write(to: dest)
             store.markSeen(dest)
             errors["duplicate"] = nil
+            editSidebar(.scenes) { $0.add(file: slugify(name), after: url.deletingPathExtension().lastPathComponent) }
             refreshSceneList()
             load(dest, animated: false)
             info = "Duplicated as \(name)"
@@ -1033,7 +1065,7 @@ final class Engine {
         for slot in file.generators {
             let slotKey = slot.key
             let slotId = slot.id ?? "generator"
-            guard case let .generator(shader, meshPipe, blendPipe, bgPipe)? = compiled(store.generatorShader(slot.type), as: .generator) else {
+            guard case let .generator(shader, pipelines)? = compiled(store.generatorShader(slot.type), as: .generator) else {
                 return nil
             }
             guard let mesh = shader.mesh else {
@@ -1051,7 +1083,7 @@ final class Engine {
             let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil)
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
-                                               mesh: mesh, bank: bank, meshPipeline: meshPipe, blendPipeline: blendPipe, backgroundPipeline: bgPipe,
+                                               mesh: mesh, bank: bank, pipelines: pipelines,
                                                inputs: shader.inputs, device: renderer.device,
                                                reusing: old?.type == slot.type ? old : nil))
         }
@@ -1215,8 +1247,8 @@ final class Engine {
         }
         outputs += modulators.flatMap(\.outputs)
 
-        // Mappings. Ones whose source or target device isn't in the scene wait, inactive,
-        // until it is, so removing and re-adding a device keeps its mappings.
+        // Mappings. Removing a tool removes its mappings, so one whose source or target isn't
+        // in the scene comes from the file, and shows inactive with its problem.
         var banks: [String: ParamBank] = [:]
         for input in inputs {
             switch input {
@@ -1231,7 +1263,6 @@ final class Engine {
         if let lens { banks[LensRuntime.key] = lens.bank }
         for pal in palettes { banks[pal.key] = pal.bank }
         for gen in generators { banks[gen.key] = gen.bank }
-        if let first = generators.first, banks["generator"] == nil { banks["generator"] = first.bank }
         for fx in effects { banks["post.\(fx.id)"] = fx.bank }
         for m in modulators { banks["mod.\(m.id)"] = m.bank }
         for bank in banks.values {
@@ -1264,9 +1295,6 @@ final class Engine {
         for gen in generators {
             for v in gen.inputs {
                 streamInputs["\(gen.key).\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)
-                if gen.key != "generator" && gen === generators.first {
-                    streamInputs["generator.\(v.name)"] = ("\(gen.label ?? "Generator") · \(v.label)", v.kind)
-                }
             }
         }
         for fx in effects { for v in fx.inputs { streamInputs["post.\(fx.id).\(v.name)"] = ("\(fx.id) · \(v.label)", v.kind) } }
@@ -1275,7 +1303,7 @@ final class Engine {
         var triggers: [String: (input: TriggerInput, label: String)] = [:]
         for t in cameraMotion?.triggerInputs ?? [] { triggers[t.key] = (t, "Camera · \(t.label)") }
         for case .audio(let a) in inputs { triggers[a.firstBeatTrigger.key] = (a.firstBeatTrigger, "Audio In · \(a.firstBeatTrigger.label)") }
-        for case .video(let v) in inputs { triggers[v.jumpTrigger.key] = (v.jumpTrigger, "\(v.displayName) · \(v.jumpTrigger.label)") }
+        for case .video(let v) in inputs { for t in v.triggerInputs { triggers[t.key] = (t, "\(v.displayName) · \(t.label)") } }
         for mod in modulators { if let t = mod.trigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
 
         /// Why a source isn't available, when its device isn't in the chain.
@@ -1448,8 +1476,7 @@ final class Engine {
             let entry: CacheEntry
             switch role {
             case .generator:
-                let p = try renderer.makeGeneratorPipelines(shader)
-                entry = .generator(shader, mesh: p.mesh, blend: p.blend, background: p.background)
+                entry = .generator(shader, try renderer.makeGeneratorPipelines(shader))
             case .effect:
                 entry = .effect(shader, try renderer.makeFullscreenPipeline(shader, fragment: "effect"))
             case .lens:
@@ -1547,6 +1574,7 @@ final class Engine {
                 // Preset names show in device headers.
                 if url.path.contains("/Presets/") { rebuild = true; refreshTools() }
                 if url.path.contains("/Playlists/") { playlistsChanged = true }
+                if url.path == store.sidebarURL.standardizedFileURL.path { loadSidebar(); playlistsChanged = true }
             }
         }
         refreshSceneList()

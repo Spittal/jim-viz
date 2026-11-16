@@ -52,7 +52,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | nothing yet |
 | clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
-| trigger | Audio In · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump, LFO · Reset, Audio In · First Beat |
+| trigger | Audio In · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump/Restart, LFO · Reset, Audio In · First Beat |
 | stmap | Lens · ST Map (Nuke convention: s, t in red, green; t bottom to top) | Camera · Lens, which reprojects the rendered picture before the effects |
 
 - A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%
@@ -87,8 +87,8 @@ Inputs (Audio In, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens → Pa
   feels familiar.
 - **Model the working area on Ableton Live:**
   - dense dark-grey device panels with knobs;
-  - a browser that lists **tools** with their **presets** underneath (a preset's values are
-    copied in);
+  - a browser that lists **tools** with their **presets** underneath, folded until opened
+    (a preset's values are copied in);
   - drag and drop into the chain;
   - double-click a device header to fold it.
 - **Selecting a device** highlights it, and the right-hand inspector shows its outputs,
@@ -156,6 +156,8 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
 - **Library: `~/Library/Application Support/jim-viz`** holds the user's `Scenes`,
   `Presets`, `Playlists`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
   in git, and the app creates the folders empty on first launch.
+  - `Sidebar.json` there keeps the order and folders of the Scenes and Playlists lists.
+    Folders only organise the lists; the files stay flat in `Scenes` and `Playlists`.
   - `JIMVIZ_LIBRARY` overrides it.
 - **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking, StemgenRT's for stem separation), which are code and ship
   with the app.

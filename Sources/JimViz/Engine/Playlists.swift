@@ -20,6 +20,7 @@ enum SidebarTab: String, CaseIterable {
 @Observable
 final class PlaylistState {
     var tab: SidebarTab = .scenes
+    /// Playlist files, in the sidebar's order.
     private(set) var urls: [URL] = []
     /// Display names from each file's `name`, falling back to the file name.
     private(set) var names: [URL: String] = [:]
@@ -86,7 +87,7 @@ extension Engine {
     // MARK: Playlist files
 
     func refreshPlaylists() {
-        let list = store.playlistURLs()
+        let list = sidebar.ordered(.playlists, store.playlistURLs())
         struct Named: Decodable { let name: String? }
         var names: [URL: String] = [:]
         for url in list {
@@ -149,6 +150,7 @@ extension Engine {
         let dest = uniquePlaylistURL("\(file.name) Copy")
         file.name = dest.name
         writePlaylist(file, to: dest.url)
+        editSidebar(.playlists) { $0.add(file: dest.url.deletingPathExtension().lastPathComponent, after: url.deletingPathExtension().lastPathComponent) }
         refreshPlaylists()
         selectPlaylist(dest.url)
     }
@@ -165,6 +167,7 @@ extension Engine {
         let wasSelected = playlists.selectedURL == url
         let position = playlists.position
         if wasSelected { playlists.selectedURL = dest.url; playlists.file = file; playlists.position = position }
+        editSidebar(.playlists) { $0.rename(file: url.deletingPathExtension().lastPathComponent, to: dest.url.deletingPathExtension().lastPathComponent) }
         refreshPlaylists()
         info = "Renamed playlist to \(name)"
     }

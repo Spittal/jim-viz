@@ -71,7 +71,9 @@
 // Look: wallTone picks the walls' place on the palette, toneVar how far each building strays
 // from it. wire draws every edge; bands steps the shading; fog fades the distance into the sky;
 // bgGlow is the sky. explode shatters the whole street along its faces.
+// opacity fades the whole geo, background included, into what's drawn before it.
 // @group Look
+// @param opacity 1 0 1
 // @param wallTone 0.4 0 1
 // @param toneVar 0.25 0 1
 // @param wire 0 0 1

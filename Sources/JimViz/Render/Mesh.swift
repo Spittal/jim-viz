@@ -21,7 +21,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, shrek, globe, ridges
+    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, shrek, globe, ridges, shoes, instruments
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -36,9 +36,10 @@ enum MeshShape: String, CaseIterable {
         case .street: return ["segments", "detail"]
         case .hand: return ["sides", "segments"]
         case .face: return ["detail"]
-        case .dancer, .shrek: return ["sides"]
+        case .dancer, .shrek, .shoes: return ["sides"]
         case .globe: return ["detail", "facets"]
         case .ridges: return ["lines", "segments"]
+        case .instruments: return ["sides"]
         }
     }
 
@@ -91,9 +92,10 @@ struct MeshBuilder {
         case .street: return [min(max(i("segments"), 8), 512), min(max(i("detail"), 0), 2)]
         case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
         case .face: return [min(max(i("detail"), 0), 4)]
-        case .dancer, .shrek: return [min(max(i("sides"), 3), 16)]
+        case .dancer, .shrek, .shoes: return [min(max(i("sides"), 3), 16)]
         case .globe: return [min(max(i("detail"), 0), WorldMap.tolerances.count - 1), min(max(i("facets"), 0), 5)]
         case .ridges: return [min(max(i("lines"), 1), 128), min(max(i("segments"), 2), 256)]
+        case .instruments: return [min(max(i("sides"), 3), 16)]
         }
     }
 
@@ -114,6 +116,8 @@ struct MeshBuilder {
         case .shrek: b.shrek(sides: t[0])
         case .globe: b.globe(detail: t[0], facets: t[1])
         case .ridges: b.ridges(lines: t[0], segments: t[1])
+        case .shoes: b.shoes(sides: t[0])
+        case .instruments: b.instruments(sides: t[0])
         }
         return b.vertices
     }

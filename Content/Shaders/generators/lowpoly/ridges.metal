@@ -32,7 +32,9 @@
 // Look: line is the lines' thickness, in pixels at 1080p. lineColor and fillColor are where
 // along the palette the lines and curtains take their colour; heat shifts both along it where
 // a line is raised. fill shows the curtains: at 0 they are the colour of the background.
+// opacity fades the whole geo, background included, into what's drawn before it.
 // @group Look
+// @param opacity 1 0 1
 // @param line 2 0 16
 // @param lineColor 1 0 1
 // @param fill 0 0 1

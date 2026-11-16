@@ -265,12 +265,16 @@ enum VideoTransport {
 }
 
 /// A Video input in the scene's Inputs section. Loops a video file between its in and out
-/// points. Its Jump trigger input skips to a random spot between them.
+/// points. Its Jump trigger input skips to a random spot between them; Restart goes back to
+/// the in point.
 final class VideoRuntime: VideoSourceRuntime {
     let file: String?
     let feed: VideoFeed
     /// `video.<id>.jump`: each fire jumps to a random spot between the in and out points.
     let jumpTrigger: TriggerInput
+    /// `video.<id>.restart`: each fire starts again from the in point.
+    let restartTrigger: TriggerInput
+    var triggerInputs: [TriggerInput] { [jumpTrigger, restartTrigger] }
     private var rng: UInt64 = 0x2545_F491_4F6C_DD1D
 
     var displayName: String { file.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose video…" }
@@ -278,15 +282,18 @@ final class VideoRuntime: VideoSourceRuntime {
     init(id: String, file: String?, bank: ParamBank, feed: VideoFeed, gpu: VideoSourceGPU) {
         self.file = file; self.feed = feed
         jumpTrigger = TriggerInput("video.\(id).jump", "Jump")
+        restartTrigger = TriggerInput("video.\(id).restart", "Restart")
         let label = file.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "Video"
         super.init(key: "video.\(id)", id: id, label: label, bank: bank, feed: feed, gpu: gpu)
     }
 
     /// Render thread, once per frame after mappings: hands the feed its in and out points, and
-    /// jumps when Jump fired.
+    /// jumps when Jump fired or starts again when Restart did. Restart wins when both fire.
     func advanceTransport() {
         feed.setRange(in: bank.live("inPoint"), out: bank.live("outPoint"))
-        guard jumpTrigger.take() else { return }
+        let jump = jumpTrigger.take()
+        if restartTrigger.take() { feed.jump(to: 0); return }
+        guard jump else { return }
         rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17
         feed.jump(to: Float(rng >> 40) / Float(1 << 24))
     }

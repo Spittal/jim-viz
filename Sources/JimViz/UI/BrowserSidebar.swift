@@ -9,8 +9,8 @@ struct DeviceBrowser: View {
     @Environment(Engine.self) private var engine
     @State private var search = ""
     @State private var filter: Filter = .all
-    /// Expanded tool ids, comma-separated, kept between launches.
-    @AppStorage("browser.expanded") private var expandedRaw = "camera:orbit,palette:palette"
+    /// Expanded tool ids, comma-separated, kept between launches. Every tool starts folded.
+    @AppStorage("browser.expanded") private var expandedRaw = ""
 
     enum Filter: String, CaseIterable {
         case all = "All", inputs = "Inputs", modulation = "Modulation", generation = "Generation", effects = "Effects"

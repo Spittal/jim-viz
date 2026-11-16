@@ -6,6 +6,22 @@ import simd
 
 // MARK: - Runtime scene objects (built on main, read by the render thread)
 
+/// A generator shader's pipelines.
+struct GeneratorPipelines {
+    /// The mesh at full opacity: depth-tested, the nearest face wins.
+    let mesh: MTLRenderPipelineState
+    /// The mesh below full opacity, in two draws: `depth` writes the nearest faces' depth and no
+    /// colour, then `fade` blends those faces in by the blend colour's alpha (the `opacity` knob).
+    let depth: MTLRenderPipelineState
+    let fade: MTLRenderPipelineState
+    /// From `gen_fragment_blend`, if the shader has one: draws the mesh blended into what's
+    /// already there, for the `intersection` knob's modes past Comp. Fades by the blend colour's
+    /// alpha too.
+    let blend: MTLRenderPipelineState?
+    /// Added onto what's behind, scaled by the blend colour's alpha.
+    let background: MTLRenderPipelineState
+}
+
 final class GeneratorRuntime: Identifiable {
     let id: String
     let key: String
@@ -15,11 +31,7 @@ final class GeneratorRuntime: Identifiable {
     /// From the shader's `// @mesh` line.
     let mesh: MeshShape
     let bank: ParamBank
-    let meshPipeline: MTLRenderPipelineState
-    /// From `gen_fragment_blend`, if the shader has one: draws the mesh blended into what's
-    /// already there, for the `intersection` knob's modes past Comp.
-    let blendPipeline: MTLRenderPipelineState?
-    let backgroundPipeline: MTLRenderPipelineState
+    let pipelines: GeneratorPipelines
     /// Declared with `// @video`, `// @spectrum`, `// @palette` (bound from texture(0) up) and `// @clock`.
     let inputs: [StreamInputDef]
 
@@ -36,11 +48,11 @@ final class GeneratorRuntime: Identifiable {
 
     /// Builds the mesh for the bank's current mesh knobs, or carries on `old`'s when it draws the same mesh.
     init(id: String, key: String, type: String, preset: String?, label: String?, mesh: MeshShape, bank: ParamBank,
-         meshPipeline: MTLRenderPipelineState, blendPipeline: MTLRenderPipelineState?, backgroundPipeline: MTLRenderPipelineState,
+         pipelines: GeneratorPipelines,
          inputs: [StreamInputDef], device: MTLDevice, reusing old: GeneratorRuntime?) {
         self.id = id; self.key = key; self.type = type; self.preset = preset; self.label = label
         self.mesh = mesh; self.bank = bank; self.inputs = inputs
-        self.meshPipeline = meshPipeline; self.blendPipeline = blendPipeline; self.backgroundPipeline = backgroundPipeline
+        self.pipelines = pipelines
         if let old, old.mesh == mesh {
             (vertexBuffer, vertexCount, topology) = (old.vertexBuffer, old.vertexCount, old.topology)
         } else {
@@ -236,7 +248,7 @@ final class RenderScene {
     /// Every stream output (video, spectrum, palette) and stream input in the chain, in chain order.
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
-    /// Every trigger input in the chain, in chain order: Audio In · First Beat, Videos' Jump,
+    /// Every trigger input in the chain, in chain order: Audio In · First Beat, Videos' Jump and Restart,
     /// LFOs' Reset, Toggles' Toggle, the Cutter's Cut.
     let triggerInputs: [TriggerInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
@@ -305,7 +317,7 @@ final class RenderScene {
                                    uniquingKeysWith: { a, _ in a })
         let boundKeys = Set(streamBindings.values.map(\.key))
         boundPalettes = palettes.filter { boundKeys.contains($0.outputKey) }
-        triggerInputs = (audioIn.map { [$0.firstBeatTrigger] } ?? []) + videos.map(\.jumpTrigger)
+        triggerInputs = (audioIn.map { [$0.firstBeatTrigger] } ?? []) + videos.flatMap(\.triggerInputs)
             + modulators.compactMap(\.trigger) + (cameraMotion?.triggerInputs ?? [])
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.lens = lens
@@ -446,6 +458,8 @@ final class Renderer {
     private let depthOff: MTLDepthStencilState
     /// Tests against depth without writing it: Intersection blend modes, which see through.
     private let depthTestOnly: MTLDepthStencilState
+    /// Passes the faces a depth-only draw just laid down, without writing depth.
+    private let depthMatch: MTLDepthStencilState
 
     init(device: MTLDevice) {
         self.device = device
@@ -465,6 +479,10 @@ final class Renderer {
         testOnly.depthCompareFunction = .less
         testOnly.isDepthWriteEnabled = false
         depthTestOnly = device.makeDepthStencilState(descriptor: testOnly)!
+        let match = MTLDepthStencilDescriptor()
+        match.depthCompareFunction = .lessEqual
+        match.isDepthWriteEnabled = false
+        depthMatch = device.makeDepthStencilState(descriptor: match)!
         let bd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
         bd.usage = .shaderRead
         blackTexture = device.makeTexture(descriptor: bd)!
@@ -590,8 +608,7 @@ final class Renderer {
 
     // MARK: Pipeline factories (called on main when shaders compile)
 
-    func makeGeneratorPipelines(_ shader: CompiledShader) throws
-        -> (mesh: MTLRenderPipelineState, blend: MTLRenderPipelineState?, background: MTLRenderPipelineState) {
+    func makeGeneratorPipelines(_ shader: CompiledShader) throws -> GeneratorPipelines {
         let lib = shader.library
         guard let v = lib.makeFunction(name: "gen_vertex"), let f = lib.makeFunction(name: "gen_fragment") else {
             throw ShaderError(file: shader.url.lastPathComponent, message: "needs gen_vertex and gen_fragment functions")
@@ -599,27 +616,38 @@ final class Renderer {
         guard let bv = lib.makeFunction(name: "fx_vertex"), let bf = lib.makeFunction(name: "gen_background") else {
             throw ShaderError(file: shader.url.lastPathComponent, message: "needs a gen_background function")
         }
-        func pipe(_ vf: MTLFunction, _ ff: MTLFunction, blend: Bool = false) throws -> MTLRenderPipelineState {
+        enum Mix { case opaque, depthOnly, fade, add }
+        func pipe(_ vf: MTLFunction, _ ff: MTLFunction, _ mix: Mix) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = vf
             d.fragmentFunction = ff
-            d.colorAttachments[0].pixelFormat = Self.workFormat
+            let c = d.colorAttachments[0]!
+            c.pixelFormat = Self.workFormat
             d.depthAttachmentPixelFormat = .depth32Float
             d.rasterSampleCount = Self.sampleCount
-            if blend {
-                d.colorAttachments[0].isBlendingEnabled = true
-                d.colorAttachments[0].rgbBlendOperation = .add
-                d.colorAttachments[0].sourceRGBBlendFactor = .one
-                d.colorAttachments[0].destinationRGBBlendFactor = .one
-                d.colorAttachments[0].alphaBlendOperation = .add
-                d.colorAttachments[0].sourceAlphaBlendFactor = .zero
-                d.colorAttachments[0].destinationAlphaBlendFactor = .one
+            switch mix {
+            case .opaque: break
+            case .depthOnly: c.writeMask = []
+            case .fade:
+                // Colour and alpha both go from what's there to the face, by the blend colour's alpha.
+                c.isBlendingEnabled = true
+                c.sourceRGBBlendFactor = .blendAlpha
+                c.destinationRGBBlendFactor = .oneMinusBlendAlpha
+                c.sourceAlphaBlendFactor = .blendAlpha
+                c.destinationAlphaBlendFactor = .oneMinusBlendAlpha
+            case .add:
+                c.isBlendingEnabled = true
+                c.sourceRGBBlendFactor = .blendAlpha
+                c.destinationRGBBlendFactor = .one
+                c.sourceAlphaBlendFactor = .zero
+                c.destinationAlphaBlendFactor = .one
             }
             return try device.makeRenderPipelineState(descriptor: d)
         }
         do {
-            let blend = try lib.makeFunction(name: "gen_fragment_blend").map { try pipe(v, $0) }
-            return (try pipe(v, f, blend: false), blend, try pipe(bv, bf, blend: true))
+            return GeneratorPipelines(mesh: try pipe(v, f, .opaque), depth: try pipe(v, f, .depthOnly), fade: try pipe(v, f, .fade),
+                                      blend: try lib.makeFunction(name: "gen_fragment_blend").map { try pipe(v, $0, .fade) },
+                                      background: try pipe(bv, bf, .add))
         } catch {
             throw ShaderError(file: shader.url.lastPathComponent, message: ShaderCompiler.summarize(error))
         }
@@ -790,6 +818,9 @@ final class Renderer {
 
             // 2. Draw generator backgrounds in chain order (behind all meshes).
             for gen in scene.generators where (gen.bank["bgGlow"]?.live ?? 0) > 0 {
+                let opacity = gen.bank["opacity"]?.live ?? 1
+                guard opacity > 0 else { continue }
+                enc.setBlendColor(red: 0, green: 0, blue: 0, alpha: opacity)
                 let sources = scene.generatorSources[gen.key] ?? []
                 f.inputs = bindInputs(enc, gen.inputs, sources: sources, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
@@ -798,7 +829,7 @@ final class Renderer {
                     enc.setVertexBytes($0, length: $1, index: 2)
                 }
                 enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
-                enc.setRenderPipelineState(gen.backgroundPipeline)
+                enc.setRenderPipelineState(gen.pipelines.background)
                 enc.setDepthStencilState(depthOff)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             }
@@ -806,6 +837,10 @@ final class Renderer {
             // 3. Render generator meshes in chain order on the same stage.
             for gen in scene.generators {
                 gen.updateMesh(device: device)
+                // Opacity fades the whole geo into what's behind it. At 0 nothing is drawn.
+                let opacity = gen.bank["opacity"]?.live ?? 1
+                guard opacity > 0 else { continue }
+                enc.setBlendColor(red: 0, green: 0, blue: 0, alpha: opacity)
                 let sources = scene.generatorSources[gen.key] ?? []
                 f.inputs = bindInputs(enc, gen.inputs, sources: sources, from: 0, vertex: true)
                 enc.setFragmentBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 0)
@@ -815,20 +850,26 @@ final class Renderer {
                 }
                 enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
 
-                // Intersection past Comp blends into what's drawn, reading it back per sample.
-                if (gen.bank["intersection"]?.live ?? 0) > 0.5, let blend = gen.blendPipeline {
-                    enc.setRenderPipelineState(blend)
-                    enc.setDepthStencilState(depthTestOnly)
-                } else {
-                    enc.setRenderPipelineState(gen.meshPipeline)
-                    enc.setDepthStencilState(depthOn)
-                }
                 enc.setCullMode(.none)
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)
                 enc.setVertexBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
                 let instances = gen.mesh.instanceCount(gen.bank.live) ?? max(1, Int(gen.bank["instances"]?.live ?? 1))
-                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: gen.vertexCount, instanceCount: instances)
+                func draw(_ pipeline: MTLRenderPipelineState, _ depth: MTLDepthStencilState) {
+                    enc.setRenderPipelineState(pipeline)
+                    enc.setDepthStencilState(depth)
+                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: gen.vertexCount, instanceCount: instances)
+                }
+                if (gen.bank["intersection"]?.live ?? 0) > 0.5, let blend = gen.pipelines.blend {
+                    // Intersection past Comp blends into what's drawn, reading it back per sample.
+                    draw(blend, depthTestOnly)
+                } else if opacity < 1 {
+                    // Depth first, so only the nearest faces fade in and the geo doesn't show its own insides.
+                    draw(gen.pipelines.depth, depthOn)
+                    draw(gen.pipelines.fade, depthMatch)
+                } else {
+                    draw(gen.pipelines.mesh, depthOn)
+                }
             }
             enc.endEncoding()
         }

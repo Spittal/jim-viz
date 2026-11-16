@@ -2,21 +2,29 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What a drag onto the playlist bar carries: a scene from the list, or an entry being moved.
-enum PlaylistDrag {
+/// What a drag within the sidebar lists or onto the playlist bar carries: a scene, playlist
+/// or folder from a list, or a playlist entry being moved.
+enum LibraryDrag {
     case scene(String)
+    case playlist(String)
+    case folder(String)
     case entry(Int)
 
     var token: String {
         switch self {
         case .scene(let slug): return "jim-viz.scene:\(slug)"
+        case .playlist(let slug): return "jim-viz.playlist:\(slug)"
+        case .folder(let name): return "jim-viz.folder:\(name)"
         case .entry(let i): return "jim-viz.entry:\(i)"
         }
     }
 
     init?(token: String) {
-        if token.hasPrefix("jim-viz.scene:") { self = .scene(String(token.dropFirst(14))) }
-        else if token.hasPrefix("jim-viz.entry:"), let i = Int(token.dropFirst(14)) { self = .entry(i) }
+        func rest(_ prefix: String) -> String? { token.hasPrefix(prefix) ? String(token.dropFirst(prefix.count)) : nil }
+        if let slug = rest("jim-viz.scene:") { self = .scene(slug) }
+        else if let slug = rest("jim-viz.playlist:") { self = .playlist(slug) }
+        else if let name = rest("jim-viz.folder:") { self = .folder(name) }
+        else if let i = rest("jim-viz.entry:").flatMap(Int.init) { self = .entry(i) }
         else { return nil }
     }
 
@@ -27,10 +35,10 @@ enum PlaylistDrag {
     }
 
     /// Reads the drag from dropped providers, on main.
-    static func load(_ providers: [NSItemProvider], _ done: @escaping (PlaylistDrag) -> Void) -> Bool {
+    static func load(_ providers: [NSItemProvider], _ done: @escaping (LibraryDrag) -> Void) -> Bool {
         guard let p = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
         _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-            guard let s = obj as? String, let drag = PlaylistDrag(token: s) else { return }
+            guard let s = obj as? String, let drag = LibraryDrag(token: s) else { return }
             DispatchQueue.main.async { done(drag) }
         }
         return true
@@ -46,40 +54,24 @@ extension Engine {
 
 // MARK: - Sidebar
 
-/// The playlists in `<library>/Playlists`. Selecting one opens it in the bottom bar; one
-/// always stays selected.
+/// The playlists in `<library>/Playlists`, in the sidebar's order and folders. Selecting one
+/// opens it in the bottom bar; one always stays selected.
 struct PlaylistList: View {
     @Environment(Engine.self) private var engine
 
     var body: some View {
         let state = engine.playlists
-        List(selection: Binding(get: { state.selectedURL }, set: { if let url = $0 { engine.selectPlaylist(url) } })) {
-            Section {
-                ForEach(state.urls, id: \.self) { url in
-                    PlaylistRow(url: url).tag(url)
-                }
-            } header: {
-                HStack(spacing: 8) {
-                    Text("Playlists")
-                    Spacer()
-                    Button { engine.createPlaylist() } label: { Image(systemName: "plus") }
-                        .help("New Playlist")
-                }
-                .buttonStyle(.plain)
-            }
+        SidebarList(tab: .playlists, urls: state.urls, selected: state.selectedURL,
+                    select: { engine.selectPlaylist($0) }, rename: { state.renaming = $0 },
+                    newHelp: "New Playlist", new: { engine.createPlaylist() }) { url in
+            PlaylistRow(url: url)
+        } menu: { url in
+            Button("Rename") { state.renaming = url }
+            Button("Duplicate") { engine.duplicatePlaylist(url) }
+            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            Divider()
+            Button("Delete…", role: .destructive) { state.pendingDeletion = url }
         }
-        .contextMenu(forSelectionType: URL.self) { urls in
-            if let url = urls.first {
-                Button("Rename") { state.renaming = url }
-                Button("Duplicate") { engine.duplicatePlaylist(url) }
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                Divider()
-                Button("Delete…", role: .destructive) { state.pendingDeletion = url }
-            }
-        } primaryAction: { urls in
-            if let url = urls.first { state.renaming = url }
-        }
-        .listStyle(.sidebar)
         .alert(
             "Delete “\(state.pendingDeletion.map { state.name($0) } ?? "Playlist")”?",
             isPresented: Binding(get: { state.pendingDeletion != nil }, set: { if !$0 { state.pendingDeletion = nil } })
@@ -290,12 +282,13 @@ private struct PlaylistSlot: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { engine.playPlaylistEntry(index) }
-        .onDrag { PlaylistDrag.entry(index).provider(engine) }
+        .onDrag { LibraryDrag.entry(index).provider(engine) }
         .onDrop(of: [.plainText], isTargeted: $dropping) { providers in
-            PlaylistDrag.load(providers) { drag in
+            LibraryDrag.load(providers) { drag in
                 switch drag {
                 case .scene(let slug): engine.insertPlaylistScene(slug, at: index)
                 case .entry(let from): engine.movePlaylistEntry(from: from, to: index)
+                case .playlist, .folder: break
                 }
             }
         }
@@ -398,10 +391,11 @@ private struct AddSceneSlot: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .onDrop(of: [.plainText], isTargeted: $dropping) { providers in
-            PlaylistDrag.load(providers) { drag in
+            LibraryDrag.load(providers) { drag in
                 switch drag {
                 case .scene(let slug): engine.insertPlaylistScene(slug)
                 case .entry(let from): engine.movePlaylistEntry(from: from, to: index)
+                case .playlist, .folder: break
                 }
             }
         }

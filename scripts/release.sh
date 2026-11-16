@@ -4,7 +4,8 @@
 #   scripts/release.sh 1.2.3             # check, bundle, smoke-test, build/jim-viz-1.2.3.dmg
 #   scripts/release.sh 1.2.3 --publish   # the same, then tag v1.2.3, push, GitHub release
 #
-# --publish needs a clean tree on main and `gh` logged in. The app is ad-hoc signed and
+# --publish needs a clean tree on main, a section for the version in CHANGELOG.md (it opens
+# the release notes) and `gh` logged in. The app is ad-hoc signed and
 # not notarized (no Apple developer account), so Gatekeeper warns on first open: the release
 # notes written here tell people how to get past it.
 set -e
@@ -21,6 +22,7 @@ if (( publish )); then
   [[ -z $(git status --porcelain) ]] || { echo "Uncommitted changes: commit or stash them first."; exit 1 }
   gh auth status >/dev/null || { echo "Log in first: gh auth login"; exit 1 }
   if git rev-parse -q --verify refs/tags/$tag >/dev/null; then echo "Tag $tag already exists."; exit 1; fi
+  grep -q "^## $version " CHANGELOG.md || { echo "CHANGELOG.md has no section for $version."; exit 1 }
 fi
 [[ $(uname -m) == arm64 ]] || { echo "Releases are built on Apple Silicon."; exit 1 }
 
@@ -57,7 +59,8 @@ fi
 
 echo "=== Publish"
 notes=$scratch/notes.md
-cat > $notes <<NOTES
+{ echo "## What's new"; awk -v v="$version" '/^## /{on = ($2 == v); next} on' CHANGELOG.md; } > $notes
+cat >> $notes <<NOTES
 ## Install
 
 Needs an Apple Silicon Mac on macOS 14.2 or later.

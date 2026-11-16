@@ -377,19 +377,19 @@ enum SelfCheck {
         s3.modulate(f)
         guard abs(explode.live - expected) < 0.01 else { return "MIDI on another channel moved the knob" }
         engine.removeInput("midi.midi")
-        guard engine.current?.mappings.first(where: { $0.source.hasPrefix("midi.") })?.problem == "Needs its MIDI Input in the chain" else {
-            return "MIDI mapping not paused without its input"
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("midi.") }) == false else {
+            return "MIDI mapping outlived its input"
         }
 
-        // Removing a device keeps its mappings, inactive, until it comes back.
+        // Removing a device removes its mappings, and they don't come back with a new one.
         engine.removeInput("audio")
-        guard let kick = engine.current?.mappings.first(where: { $0.source == "audio.kick" }), !kick.isActive,
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("audio.") }) == false,
               engine.current?.outputs.contains(where: { $0.key.hasPrefix("audio.") }) == false else {
-            return "audio mapping not paused without Audio In"
+            return "audio mapping outlived Audio In"
         }
         engine.apply(.input, "audio")
-        guard engine.current?.mappings.first(where: { $0.source == "audio.kick" })?.isActive == true else {
-            return "audio mapping not restored"
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("audio.") }) == false else {
+            return "a new Audio In took the removed one's mappings"
         }
         engine.apply(.input, "audio")
         guard engine.current?.inputs.map(\.id) == ["audio"] else {
@@ -445,12 +445,14 @@ enum SelfCheck {
             return "LFO still synced after sync mapping removed"
         }
         engine.removeModulator(id: "lfo2")
-        guard engine.current?.mappings.first(where: { $0.source == "mod.lfo2.out" })?.isActive == false else {
-            return "mapping from removed LFO still active"
+        guard engine.current?.mappings.contains(where: { $0.source == "mod.lfo2.out" }) == false else {
+            return "mapping outlived its LFO"
         }
         guard engine.selectedDevice == nil else { return "removed device still selected" }
 
         // Copy and paste into an empty scene: generator targets wait for a generator.
+        engine.addMapping(source: "audio.pulse", target: "camera.fov")
+        engine.addMapping(source: "audio.kick", target: "generator.explode")
         let count = engine.current?.mappings.count ?? 0
         engine.copyMappings()
         engine.load(emptyURL, animated: false)
@@ -606,18 +608,16 @@ enum SelfCheck {
             return "unmapped palette still coloured the scene: \(coloured) → \(grey)"
         }
 
-        // Without Audio In, the spectrum mapping waits and the input is silent.
+        // Removing Audio In removes the spectrum mapping, and the input is silent.
         engine.removeInput("audio")
         guard engine.current?.streamBindings["generator.spec"] == nil,
-              engine.current?.mappings.first(where: { $0.target == "generator.spec" })?.problem == "Needs Audio In in the chain" else {
+              engine.current?.mappings.contains(where: { $0.target == "generator.spec" }) == false else {
             return "spectrum still connected without Audio In"
         }
 
         // Nothing connects itself: a new generator's inputs start unmapped.
         engine.load(url, animated: false)
         engine.removeGenerator()
-        engine.removeMappings(target: "generator.pal")
-        engine.removeMappings(target: "generator.spec")
         engine.apply(.generator, "torus")
         guard engine.current?.streamBindings.filter({ $0.key.hasPrefix("generator.") }).isEmpty == true else { return "new generator connected itself" }
         return nil
@@ -803,6 +803,116 @@ enum SelfCheck {
         return nil
     }
 
+    /// The sidebar lists: a strict file, scenes and playlists in the order they're put in,
+    /// folders that only organise (the files stay put), and the two lists kept apart.
+    private static func checkSidebar(engine: Engine) -> String? {
+        // Strict format: a folder needs all its fields, and a file is listed once.
+        let decoder = JSONDecoder()
+        guard (try? decoder.decode(SidebarFile.self, from: Data(#"{"scenes": [{"name": "x", "items": []}], "playlists": []}"#.utf8))) == nil else {
+            return "folder without `open` decoded"
+        }
+        let url = engine.store.sidebarURL
+        let before = try? Data(contentsOf: url)
+        defer {
+            if let before { try? before.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+            engine.loadSidebar()
+            engine.refreshSceneList()
+            engine.refreshPlaylists()
+        }
+        try? Data(#"{"scenes": ["a", {"name": "f", "open": true, "items": ["a"]}], "playlists": []}"#.utf8).write(to: url)
+        guard (try? SidebarFile.load(url)) == nil else { return "a scene listed twice loaded" }
+        let listed = engine.sidebar.file
+        engine.loadSidebar()
+        guard engine.errors[url.lastPathComponent] != nil, engine.sidebar.file == listed else { return "an invalid file wasn't reported, or replaced the lists" }
+        try? FileManager.default.removeItem(at: url)
+        engine.loadSidebar()
+        engine.refreshSceneList()
+        engine.refreshPlaylists()
+        guard engine.errors[url.lastPathComponent] == nil else { return "error stayed after the file went" }
+
+        // Moving within a list lands before the row dropped on, wherever it came from.
+        var items: [SidebarItem] = ["a", "b", "c"].map(SidebarItem.file)
+        items.move(file: "a", toFolder: nil, at: 2)
+        guard items.files == ["b", "a", "c"] else { return "moving down landed at \(items.files)" }
+        items.move(file: "c", toFolder: nil, at: 0)
+        items.move(file: "b", toFolder: nil)
+        guard items.files == ["c", "a", "b"] else { return "moving up or to the end landed at \(items.files)" }
+        items.addFolder("f")
+        items.move(file: "b", toFolder: "f")
+        items.move(file: "c", toFolder: "f", at: 0)
+        items.move(file: "c", toFolder: "f", at: 2)
+        items.move(file: "a", toFolder: "missing")
+        guard items == [.folder(SidebarFolder(name: "f", open: true, items: ["b", "c"])), .file("a")] else { return "moving into a folder gave \(items)" }
+        items.add(file: "b2", after: "b")
+        items.rename(file: "c", to: "d")
+        items.move(folder: "f", to: 2)
+        guard items == [.file("a"), .folder(SidebarFolder(name: "f", open: true, items: ["b", "b2", "d"]))] else { return "duplicate, rename or folder move gave \(items)" }
+        guard let round = try? decoder.decode([SidebarItem].self, from: JSONEncoder().encode(items)), round == items else { return "items don't survive saving" }
+        items.removeFolder("f")
+        guard items.files == ["a", "b", "b2", "d"], items.folders.isEmpty else { return "removing a folder lost its files" }
+
+        // Scenes: the list follows the order it's put in, and the order is saved.
+        let a = fixtureA.deletingPathExtension().lastPathComponent, b = fixtureB.deletingPathExtension().lastPathComponent
+        engine.editSidebar(.scenes) { $0.move(file: b, toFolder: nil, at: 0) }
+        engine.editSidebar(.scenes) { $0.move(file: a, toFolder: nil, at: 1) }
+        guard Array(engine.sceneURLs.prefix(2)) == [fixtureB, fixtureA] else { return "scenes didn't reorder" }
+        guard let saved = try? SidebarFile.load(url), Array(saved.scenes.files.prefix(2)) == [b, a] else { return "scene order not saved" }
+
+        // A folder holds scenes without moving their files, and starts being named.
+        engine.createSidebarFolder(.scenes)
+        guard engine.sidebar.renamingFolder == "New Folder", engine.sidebar.file.scenes.first?.id == "folder:New Folder" else { return "new folder not at the top, being named" }
+        engine.renameSidebarFolder(.scenes, "New Folder", to: " Set ")
+        guard engine.sidebar.renamingFolder == nil, engine.sidebar.file.scenes.folders == ["Set"] else { return "folder not renamed" }
+        engine.createSidebarFolder(.scenes)
+        engine.renameSidebarFolder(.scenes, "New Folder", to: "Set")
+        guard engine.sidebar.file.scenes.folders == ["Set 2", "Set"] else { return "two folders share a name: \(engine.sidebar.file.scenes.folders)" }
+        engine.editSidebar(.scenes) { $0.removeFolder("Set 2") }
+        engine.editSidebar(.scenes) { $0.move(file: a, toFolder: "Set") }
+        guard engine.sceneURLs.first == fixtureA, FileManager.default.fileExists(atPath: fixtureA.path),
+              engine.playlistSceneURL(a) == fixtureA else { return "a scene in a folder moved on disk or left the list" }
+        engine.editSidebar(.scenes) { $0.setFolder("Set", open: false) }
+        guard (try? SidebarFile.load(url))?.scenes.first == .folder(SidebarFolder(name: "Set", open: false, items: [a])) else { return "folder not saved" }
+
+        // Files that come and go on disk: new ones join at the end, outside folders; gone ones leave.
+        let extra = engine.store.scenesDir.appendingPathComponent("selfcheck-sidebar.json")
+        defer { try? FileManager.default.removeItem(at: extra) }
+        do {
+            try SceneFile(name: "Sidebar", inputs: [], modulators: [], camera: nil, palettes: [], generators: [], effects: [], mappings: []).write(to: extra)
+        } catch { return "could not write: \(error)" }
+        engine.refreshSceneList()
+        guard engine.sceneURLs.last == extra, engine.sidebar.file.scenes.last == .file("selfcheck-sidebar") else { return "a new scene didn't join the end of the list" }
+        engine.editSidebar(.scenes) { $0.move(file: "selfcheck-sidebar", toFolder: "Set") }
+        engine.duplicateScene(extra)
+        let copy = engine.store.scenesDir.appendingPathComponent("sidebar-copy.json")
+        defer { try? FileManager.default.removeItem(at: copy) }
+        guard engine.sidebar.file.scenes.first == .folder(SidebarFolder(name: "Set", open: false, items: [a, "selfcheck-sidebar", "sidebar-copy"])) else {
+            return "a duplicate didn't land after its original: \(engine.sidebar.file.scenes.first.map { "\($0)" } ?? "")"
+        }
+        engine.deleteScene(copy)
+        engine.deleteScene(extra)
+        engine.load(fixtureA, animated: false)
+        guard engine.sidebar.file.scenes.files.first == a, !engine.sidebar.file.scenes.files.contains("selfcheck-sidebar") else { return "a deleted scene stayed listed" }
+
+        // Playlists have their own order and folders.
+        guard engine.sidebar.file.playlists.folders.isEmpty else { return "a scene folder showed up in Playlists" }
+        let lists = ["selfcheck-one", "selfcheck-two"].map { engine.store.playlistsDir.appendingPathComponent("\($0).json") }
+        defer { lists.forEach { try? FileManager.default.removeItem(at: $0) } }
+        for list in lists {
+            do { try PlaylistFile(name: list.lastPathComponent, entries: []).write(to: list) } catch { return "could not write: \(error)" }
+        }
+        engine.refreshPlaylists()
+        engine.createSidebarFolder(.playlists)
+        engine.renameSidebarFolder(.playlists, "New Folder", to: "Gigs")
+        engine.editSidebar(.playlists) { $0.move(file: "selfcheck-two", toFolder: "Gigs") }
+        engine.editSidebar(.playlists) { $0.move(file: "selfcheck-one", toFolder: "Gigs") }
+        guard Array(engine.playlists.urls.prefix(2)) == [lists[1], lists[0]], engine.sidebar.file.scenes.folders == ["Set"] else {
+            return "playlists didn't go into their folder in order, or it showed up in Scenes"
+        }
+        engine.editSidebar(.playlists) { $0.removeFolder("Gigs") }
+        guard engine.sidebar.file.playlists.folders.isEmpty, Array(engine.playlists.urls.prefix(2)) == [lists[1], lists[0]] else { return "removing a playlist folder lost its playlists" }
+        return nil
+    }
+
     /// Audio In's beat: its outputs are typed and start unmapped, and the beat follows the
     /// tracker while it's sure and carries on at the last tempo while it isn't.
     private static func checkBeat(engine: Engine) -> String? {
@@ -828,11 +938,12 @@ enum SelfCheck {
         engine.addMapping(source: StreamOutput.spectrumKey, target: "audio.firstBeat")
         guard engine.current?.mappings.count == count else { return "beat or audio mapped across kinds" }
 
-        // Nothing connects itself: re-adding Audio In brings back its mappings and adds none.
-        let mapped = engine.current?.mappings.count
+        // Nothing connects itself: a new Audio In starts unmapped.
         engine.removeInput("audio")
         engine.apply(.input, "audio")
-        guard engine.current?.mappings.count == mapped else { return "new Audio In connected its beat" }
+        guard engine.current?.mappings.contains(where: { devicePath($0.source) == "audio" || devicePath($0.target) == "audio" }) == false else {
+            return "new Audio In connected its beat"
+        }
 
         // Follows a sure tracker; carries on at the same tempo when it isn't.
         let clock = BeatClock()
@@ -1058,7 +1169,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "ridges"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "ridges", "shoes", "instruments"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -1072,7 +1183,8 @@ enum SelfCheck {
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
                                      "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
-                                     "drive": "lane", "street": "footprint", "ridges": "history"]
+                                     "drive": "lane", "street": "footprint", "ridges": "history", "shoes": "shimmy",
+                                     "instruments": "slide"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -1088,6 +1200,9 @@ enum SelfCheck {
                 if let p = gen.bank[knob], p.base != 0 { return "\(geo) starts with \(knob) \(p.base), expected 0" }
             }
             if geo != "drive", geo != "street", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
+            // Every geo fades with opacity, in Look, starting fully there.
+            guard let opacity = gen.bank["opacity"], opacity.base == 1, opacity.def.min == 0, opacity.def.max == 1,
+                  opacity.def.group == "Look" else { return "\(geo) has no opacity knob at 1 in Look" }
             // Sections: Instances, Shape, Surface, Motion, the generator's own, then input-gated ones in input order.
             let titles = KnobGrid.groups(gen.bank.params, leading: KnobGrid.generatorGroups,
                                          inputs: gen.inputs.map(\.name)).compactMap(\.title)
@@ -1157,6 +1272,16 @@ enum SelfCheck {
                 let knobs = sizes.compactMap { gen.bank[$0] }
                 guard knobs.count == sizes.count, knobs.allSatisfy({ $0.def.min == 0 }) else {
                     return "\(geo) \(sizes.joined(separator: "/")) min should be 0"
+                }
+                knobs.forEach { $0.setBase(0) }
+                _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
+                knobs.forEach { $0.reset() }
+            }
+            if geo == "shoes" {
+                let sizes = ["length", "width", "height", "sole"]
+                let knobs = sizes.compactMap { gen.bank[$0] }
+                guard knobs.count == sizes.count, knobs.allSatisfy({ $0.def.min == 0 }) else {
+                    return "shoes \(sizes.joined(separator: "/")) min should be 0"
                 }
                 knobs.forEach { $0.setBase(0) }
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
@@ -1265,6 +1390,62 @@ enum SelfCheck {
         _ = engine.renderOffscreen(scene, frames: 10, snapshot: snapshotDir?.appendingPathComponent("drive-wild.png"))
         guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn at full tilt" }
         print(String(format: "     drive %.2f ms/frame GPU, %d vertices", ms, gen.vertexCount))
+        return nil
+    }
+
+    /// Instruments, a Low Poly generator, on a scene built in memory (a static camera on the
+    /// front): starts unmapped and unplayed, draws the whole band, each instrument's size takes
+    /// it away, the saxophone is on the left and the trombone on the right, the slide runs out,
+    /// every Play knob draws, and honk does nothing while the Spectrum input is unmapped.
+    private static func checkInstruments(engine: Engine, snapshotDir: URL?) -> String? {
+        let sizes = ["drums", "sax", "trumpet", "trombone"]
+        let play = ["kick", "snare", "toms", "hat", "cymbals", "blow", "fingers", "slide", "swing"]
+        func render(_ params: [String: Float], _ name: String?) -> (fraction: Float, centroid: SIMD2<Float>)? {
+            let base: [String: Float] = ["bgGlow": 0, "fog": 0]
+            let file = SceneFile(name: "instruments", inputs: [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 7, "y": 0.3, "z": 0, "fov": 55]),
+                                 palettes: [],
+                                 generators: [GeneratorSlot(id: nil, type: "instruments", preset: nil, params: base.merging(params) { $1 })],
+                                 effects: [], mappings: [])
+            guard let s = engine.build(file, reuse: nil), let gen = s.generator, gen.mesh == .instruments,
+                  s.mappings.isEmpty, s.streamBindings.isEmpty else { return nil }
+            guard gen.inputs.map(\.kind) == [.palette, .spectrum, .video] else { return nil }
+            if params.isEmpty {
+                guard (sizes + play).allSatisfy({ gen.bank[$0]?.def.min == 0 }), play.allSatisfy({ gen.bank[$0]?.base == 0 }) else { return nil }
+                print("     instruments \(gen.vertexCount) vertices")
+            }
+            _ = engine.renderOffscreen(s, frames: 2, snapshot: name.flatMap { snapshotDir?.appendingPathComponent($0) })
+            return engine.coverage(engine.renderer.history)
+        }
+        func only(_ name: String, _ more: [String: Float] = [:]) -> [String: Float] {
+            Dictionary(uniqueKeysWithValues: sizes.map { ($0, $0 == name ? Float(1) : 0) }).merging(more) { $1 }
+        }
+        guard let band = render([:], "instruments.png") else {
+            return "didn't build, connected itself or starts played: \(engine.errorSummary ?? "")"
+        }
+        guard band.fraction > 0.03, band.fraction < 0.6 else { return "drew \(band.fraction) of the frame" }
+        guard let none = render(only(""), nil), none.fraction == 0 else { return "drew with every instrument at size 0" }
+        var alone: [String: (fraction: Float, centroid: SIMD2<Float>)] = [:]
+        for name in sizes {
+            guard let c = render(only(name), "instruments-\(name).png"), c.fraction > 0.002, c.fraction < band.fraction else {
+                return "\(name) alone didn't draw, or drew the whole band"
+            }
+            alone[name] = c
+        }
+        guard alone["sax"]!.centroid.x < 0.45, alone["trombone"]!.centroid.x > 0.55 else {
+            return "saxophone at \(alone["sax"]!.centroid.x), trombone at \(alone["trombone"]!.centroid.x): expected left and right"
+        }
+        guard let out = render(only("trombone", ["slide": 1]), "instruments-slide.png"),
+              out.fraction > alone["trombone"]!.fraction * 1.1 else { return "slide didn't run out" }
+        let played = Dictionary(uniqueKeysWithValues: play.map { ($0, $0 == "fingers" ? Float(0.5) : 1) })
+        guard let all = render(played, "instruments-played.png"), abs(all.fraction - band.fraction) > 0.002 else {
+            return "the Play knobs didn't move anything"
+        }
+        guard let wild = render(played.merging(["wire": 1, "fill": 0.2, "explode": 0.4, "noiseAmount": 0.3, "sides": 10]) { $1 },
+                                "instruments-wild.png"), wild.fraction > 0.03 else { return "nothing drawn wired and shattered" }
+        guard let silent = render(["honk": 1], nil), abs(silent.fraction - band.fraction) < 1e-4 else {
+            return "honked with the Spectrum unmapped"
+        }
         return nil
     }
 
@@ -1450,7 +1631,7 @@ enum SelfCheck {
         return nil
     }
 
-    /// A dancing figure (Dancer, Shrek), on a scene built in memory (a static camera on the front): its Sync input starts
+    /// A dancing figure (Dancer, Shrek, Shoes), on a scene built in memory (a static camera on the front): its Sync input starts
     /// unmapped, the routine draws a figure standing on the floor all the way through, it moves
     /// at tempo and holds still at tempo 0, and with Audio In · Sync mapped its tempo follows the
     /// beat instead of the seconds.
@@ -1547,7 +1728,7 @@ enum SelfCheck {
                   gen.bank["intersection"]?.def.labels == ["Comp", "Add", "Difference", "Burn"], gen.bank["intersection"]?.base == 0 else {
                 return "\(geo) instancing knobs or defaults wrong"
             }
-            guard gen.blendPipeline != nil else { return "\(geo) has no Intersection blend pipeline" }
+            guard gen.pipelines.blend != nil else { return "\(geo) has no Intersection blend pipeline" }
             guard s.mappings.isEmpty, s.streamBindings.isEmpty else { return "\(geo) connected itself" }
         }
 
@@ -1592,6 +1773,23 @@ enum SelfCheck {
         }
         guard level[1] > level[0] * 1.5, level[2] < level[0] * 0.7, level[3] < level[0] * 0.9 else {
             return "intersection modes don't blend: comp \(level[0]), add \(level[1]), difference \(level[2]), burn \(level[3])"
+        }
+
+        // Opacity: at 0 nothing is drawn, and half way a cube on black is half as bright, in
+        // Comp (only its near faces fade in, not its insides as well) and in Add.
+        for mode: Float in [0, 1] {
+            var bright: [Float] = []
+            for opacity: Float in [1, 0.5, 0] {
+                guard let s = scene("cube", ["opacity": opacity, "intersection": mode]) else { return "opacity scene didn't build" }
+                _ = engine.renderOffscreen(s, frames: 2, snapshot: nil)
+                if let e = engine.errorSummary { return "opacity \(opacity): \(e)" }
+                let c = engine.averageColor(engine.renderer.history)
+                bright.append(c.x + c.y + c.z)
+                if opacity == 0, engine.coverage(engine.renderer.history).fraction > 0 { return "a geo at opacity 0 still draws" }
+            }
+            guard bright[0] > 0, abs(bright[1] / bright[0] - 0.5) < 0.05, bright[2] == 0 else {
+                return "opacity doesn't fade the geo (intersection \(Int(mode))): \(bright)"
+            }
         }
         return nil
     }
@@ -1756,6 +1954,41 @@ enum SelfCheck {
         guard engine.current?.camera == nil else { return "selected camera not removed by removeSelectedDevice" }
         engine.apply(.camera, "orbit")
 
+        // A removed tool takes its mappings with it: none wait for, or move onto, another tool.
+        while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
+        engine.apply(.generator, "sphere")
+        engine.apply(.generator, "plane")
+        engine.apply(.modulation, "lfo")
+        guard let lfo = engine.current?.modulators.last, let second = engine.current?.generators.last,
+              engine.current?.generators.map(\.key) == ["generator", second.key], second.key != "generator" else {
+            return "two generators and an LFO not set up"
+        }
+        let lfoOut = "mod.\(lfo.id).out"
+        func fromLFO() -> [String] { engine.current?.mappings.filter { $0.source == lfoOut }.map(\.target) ?? [] }
+        engine.addMapping(source: lfoOut, target: "generator.spin")
+        guard fromLFO() == ["generator.spin"], engine.current?.generators.last?.bank["spin"]?.isModulated == false else {
+            return "mapping onto the first generator reached the second"
+        }
+        engine.removeGenerator(key: "generator")
+        guard fromLFO().isEmpty, engine.current?.generators.map(\.key) == [second.key],
+              engine.current?.generators.first?.bank["spin"]?.isModulated == false else {
+            return "a removed generator's mapping moved onto the one left"
+        }
+        engine.removeGenerator(key: second.key)
+        engine.apply(.generator, "sphere")
+        guard engine.current?.generators.map(\.key) == ["generator"], fromLFO().isEmpty,
+              engine.current?.generator?.bank["spin"]?.isModulated == false else {
+            return "a new generator took a removed one's mapping"
+        }
+        engine.addMapping(source: lfoOut, target: "generator.spin")
+        engine.addMapping(source: lfoOut, target: "camera.fov")
+        guard fromLFO() == ["generator.spin", "camera.fov"] else { return "LFO not mapped onto the generator and camera" }
+        engine.removeCamera()
+        guard fromLFO() == ["generator.spin"] else { return "removing the camera didn't remove just its mappings" }
+        engine.removeModulator(id: lfo.id)
+        guard fromLFO().isEmpty else { return "mappings outlived their LFO" }
+        engine.apply(.camera, "orbit")
+
         guard engine.isDirty else { return "edits not marked unsaved" }
         guard (try? Data(contentsOf: presetURL)) == presetBefore else { return "a scene edit wrote to a preset file" }
         return nil
@@ -1843,8 +2076,7 @@ enum SelfCheck {
         }
         engine.removeInput("webcam.webcam")
         guard engine.current?.streamBindings.values.contains(where: { $0.kind == .video }) == false,
-              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Webcam in the chain",
-              engine.current?.mappings.first(where: { $0.source == "webcam.webcam.motion" })?.problem == "Needs its Webcam in the chain" else {
+              engine.current?.mappings.contains(where: { $0.source.hasPrefix("webcam.") }) == false else {
             return "removing the webcam left its video or mapping active"
         }
         return nil
@@ -1921,8 +2153,7 @@ enum SelfCheck {
 
         engine.removeInput("video.video")
         guard engine.current?.streamBindings.values.contains(where: { $0.key == "video.video.video" }) == false,
-              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Video in the chain",
-              engine.current?.mappings.first(where: { $0.source == "video.video.motion" })?.problem == "Needs its Video in the chain" else {
+              engine.current?.mappings.contains(where: { $0.source.hasPrefix("video.") }) == false else {
             return "removing video left its video or mapping active"
         }
         return nil
@@ -1989,8 +2220,7 @@ enum SelfCheck {
 
         engine.removeInput("picture.picture")
         guard engine.current?.streamBindings.values.contains(where: { $0.key == "picture.picture.video" }) == false,
-              engine.current?.mappings.first(where: { $0.target == "generator.texVideo" })?.problem == "Needs its Picture in the chain",
-              engine.current?.mappings.first(where: { $0.source == "picture.picture.brightness" })?.problem == "Needs its Picture in the chain" else {
+              engine.current?.mappings.contains(where: { $0.source.hasPrefix("picture.") }) == false else {
             return "removing picture left its video or mapping active"
         }
         return nil
@@ -2309,7 +2539,7 @@ enum SelfCheck {
         if let problem = checkVideoTransport(engine: engine) {
             print("FAIL video transport: \(problem)"); failures += 1
         } else {
-            print("ok   video transport (in/out knobs unpacked, loops between in and out, jump lands inside, starts unmapped)")
+            print("ok   video transport (in/out knobs unpacked, loops between in and out, jump lands inside, restart goes to the in point, starts unmapped)")
         }
 
         if let problem = checkStreams(engine: engine) {
@@ -2360,6 +2590,12 @@ enum SelfCheck {
             print("ok   playlists (strict file, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
         }
 
+        if let problem = checkSidebar(engine: engine) {
+            print("FAIL sidebar: \(problem)"); failures += 1
+        } else {
+            print("ok   sidebar (strict file, scenes and playlists reorder, folders hold, rename and delete without touching files, lists kept apart)")
+        }
+
         if let audio = engine.offlineAudio {
             if let problem = checkBeatTracker(audio) {
                 print("FAIL beat tracker: \(problem)"); failures += 1
@@ -2399,12 +2635,17 @@ enum SelfCheck {
         } else {
             print("ok   ridges (starts unmapped and flat, curtains fill and drop, lines rise with the spectrum, spectrum textures keep their past)")
         }
+        if let problem = checkInstruments(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL instruments: \(problem)"); failures += 1
+        } else {
+            print("ok   instruments (starts unmapped and unplayed, each instrument sizes away, the slide runs out, every Play knob draws)")
+        }
         if let problem = checkStreet(engine: engine, snapshotDir: snapshotDir) {
             print("FAIL street: \(problem)"); failures += 1
         } else {
             print("ok   street (starts unmapped, buildings both sides, every style draws, walks both ways, one instance per lot)")
         }
-        for geo in ["dancer", "shrek"] {
+        for geo in ["dancer", "shrek", "shoes"] {
             if let problem = checkDancer(engine: engine, geo: geo, snapshotDir: snapshotDir) {
                 print("FAIL \(geo): \(problem)"); failures += 1
             } else {
@@ -3079,7 +3320,8 @@ extension SelfCheck {
     }
 
     /// A Video's in and out points are its own knobs, not packed for the shader; playback stays
-    /// between them; Jump lands between them; and its Jump starts unmapped. Plays a short
+    /// between them; Jump lands between them; Restart goes back to the in point; and both
+    /// triggers start unmapped. Plays a short
     /// generated clip through AVPlayer in real time, so it takes a few seconds.
     static func checkVideoTransport(engine: Engine) -> String? {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("jim-viz-selfcheck-video", isDirectory: true)
@@ -3102,7 +3344,8 @@ extension SelfCheck {
         }
         engine.load(url, animated: false)
         guard let scene = engine.current, let video = scene.videos.first else { return "video scene didn't load" }
-        guard scene.mappings.isEmpty, scene.triggerInputs.map(\.key) == ["video.video.jump"] else { return "video's Jump missing or mapped" }
+        guard scene.mappings.isEmpty, scene.triggerInputs.map(\.key) == ["video.video.jump", "video.video.restart"],
+              TriggerInput.isKey("video.video.restart") else { return "video's Jump or Restart missing or mapped" }
         let bank = video.bank
         guard let inP = bank["inPoint"], let outP = bank["outPoint"], bank.packedCount == bank.params.count - 2,
               bank.packedDefs.allSatisfy({ $0.name != "inPoint" && $0.name != "outPoint" }) else {
@@ -3142,6 +3385,13 @@ extension SelfCheck {
         }
         guard landed.allSatisfy({ $0 >= 0.09 && $0 <= 0.91 }) else { return "Jump landed outside the span: \(landed)" }
         guard Set(landed.map { ($0 * 20).rounded() }).count > 1 else { return "Jump always landed in the same place: \(landed)" }
+        // Restart goes back to the in point, from wherever it was, and wins over a Jump.
+        feed.jump(to: 0.6)
+        _ = play(0.35, settle: 0.25)
+        video.jumpTrigger.fire()
+        video.restartTrigger.fire()
+        let restarted = play(0.35, settle: 0.25).first ?? -1
+        guard restarted >= 0.09 && restarted <= 0.2 else { return "Restart didn't go back to the in point 0.1: \(restarted)" }
         return nil
     }
 
@@ -3234,7 +3484,7 @@ extension SelfCheck {
         guard engine.current?.mappings.contains(where: { $0.target == "lens.k1" && $0.problem == nil }) == true else { return "lens knobs can't be mapped" }
         engine.removeLens()
         guard engine.current?.cameraLens == nil,
-              engine.current?.mappings.first(where: { $0.target == StreamInput.cameraLensKey })?.problem == "Needs a Lens in the chain" else {
+              engine.current?.mappings.contains(where: { $0.source.hasPrefix("lens.") || $0.target.hasPrefix("lens.") }) == false else {
             return "Camera still reprojects without a Lens"
         }
 

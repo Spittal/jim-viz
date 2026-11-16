@@ -87,6 +87,8 @@ enum Tools {
             case "globe": return "globe"
             case "shrek": return "ear"
             case "ridges": return "waveform.path.ecg"
+            case "shoes": return "shoe.2"
+            case "instruments": return "music.quarternote.3"
             default: return "cube.transparent"
             }
         case .effect:

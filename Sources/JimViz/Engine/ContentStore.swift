@@ -2,7 +2,8 @@ import Foundation
 
 /// Locates Jim Viz's two folders and watches them for changes.
 ///
-/// - `library`: the user's scenes, presets, playlists, videos and pictures, in
+/// - `library`: the user's scenes, presets, playlists, videos and pictures, and the sidebar's
+///   order and folders, in
 ///   `~/Library/Application Support/jim-viz`. Not in git. Created empty on first launch.
 ///   `JIMVIZ_LIBRARY` overrides it (scripts/check.sh runs on a scratch copy).
 /// - `content`: shaders and maps, which ship with the app. `JIMVIZ_CONTENT` points it at the
@@ -16,6 +17,8 @@ final class ContentStore {
     var playlistsDir: URL { library.appendingPathComponent("Playlists") }
     var videosDir: URL { library.appendingPathComponent("Videos") }
     var picturesDir: URL { library.appendingPathComponent("Pictures") }
+    /// The order and folders of the Scenes and Playlists lists.
+    var sidebarURL: URL { library.appendingPathComponent("Sidebar.json") }
     var shadersDir: URL { content.appendingPathComponent("Shaders") }
     var mapsDir: URL { content.appendingPathComponent("Maps") }
 
@@ -50,6 +53,7 @@ final class ContentStore {
         }
     }
 
+    /// Scene files, by name. `Engine.sceneURLs` has them in the sidebar's order.
     func sceneURLs() -> [URL] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: scenesDir, includingPropertiesForKeys: nil)) ?? []
         return urls.filter { $0.pathExtension == "json" }

@@ -56,7 +56,9 @@
 
 // Look: wire draws every edge; bands steps the shading; fog fades the distance into the
 // horizon; bgGlow is the sky. explode shatters the whole world along its faces.
+// opacity fades the whole geo, background included, into what's drawn before it.
 // @group Look
+// @param opacity 1 0 1
 // @param wire 0 0 1
 // @param bands 5 1 16 int
 // @param light 1.1 0 3
