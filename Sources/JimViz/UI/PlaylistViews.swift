@@ -2,29 +2,22 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What a drag within the sidebar lists or onto the playlist bar carries: a scene, playlist
-/// or folder from a list, or a playlist entry being moved.
+/// What a drag within the Scenes list carries: a scene or a folder.
 enum LibraryDrag {
     case scene(String)
-    case playlist(String)
     case folder(String)
-    case entry(Int)
 
     var token: String {
         switch self {
         case .scene(let slug): return "jim-viz.scene:\(slug)"
-        case .playlist(let slug): return "jim-viz.playlist:\(slug)"
         case .folder(let name): return "jim-viz.folder:\(name)"
-        case .entry(let i): return "jim-viz.entry:\(i)"
         }
     }
 
     init?(token: String) {
         func rest(_ prefix: String) -> String? { token.hasPrefix(prefix) ? String(token.dropFirst(prefix.count)) : nil }
         if let slug = rest("jim-viz.scene:") { self = .scene(slug) }
-        else if let slug = rest("jim-viz.playlist:") { self = .playlist(slug) }
         else if let name = rest("jim-viz.folder:") { self = .folder(name) }
-        else if let i = rest("jim-viz.entry:").flatMap(Int.init) { self = .entry(i) }
         else { return nil }
     }
 
@@ -52,110 +45,33 @@ extension Engine {
     }
 }
 
-// MARK: - Sidebar
-
-/// The playlists in `<library>/Playlists`, in the sidebar's order and folders. Selecting one
-/// opens it in the bottom bar; one always stays selected.
-struct PlaylistList: View {
-    @Environment(Engine.self) private var engine
-
-    var body: some View {
-        let state = engine.playlists
-        SidebarList(tab: .playlists, urls: state.urls, selected: state.selectedURL,
-                    select: { engine.selectPlaylist($0) }, rename: { state.renaming = $0 },
-                    newHelp: "New Playlist", new: { engine.createPlaylist() }) { url in
-            PlaylistRow(url: url)
-        } menu: { url in
-            Button("Rename") { state.renaming = url }
-            Button("Duplicate") { engine.duplicatePlaylist(url) }
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            Divider()
-            Button("Delete…", role: .destructive) { state.pendingDeletion = url }
-        }
-        .alert(
-            "Delete “\(state.pendingDeletion.map { state.name($0) } ?? "Playlist")”?",
-            isPresented: Binding(get: { state.pendingDeletion != nil }, set: { if !$0 { state.pendingDeletion = nil } })
-        ) {
-            Button("Cancel", role: .cancel) { state.pendingDeletion = nil }
-            Button("Delete", role: .destructive) {
-                if let url = state.pendingDeletion { engine.deletePlaylist(url) }
-                state.pendingDeletion = nil
-            }
-        } message: {
-            Text("The file will be removed from the library’s Playlists folder. Its scenes stay.")
-        }
-    }
-}
-
-/// A playlist in the list. Double-click (or right-click → Rename) to rename; Return saves, Esc cancels.
-private struct PlaylistRow: View {
-    @Environment(Engine.self) private var engine
-    let url: URL
-    @State private var draft = ""
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        let state = engine.playlists
-        if state.renaming == url {
-            Label {
-                TextField("Playlist name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .focused($focused)
-                    .onSubmit { engine.renamePlaylist(url, to: draft) }
-                    .onExitCommand { state.renaming = nil }
-                    .onChange(of: focused) { _, on in
-                        if !on, state.renaming == url { engine.renamePlaylist(url, to: draft) }
-                    }
-            } icon: { Image(systemName: "list.bullet.rectangle") }
-            .onAppear { draft = state.name(url); DispatchQueue.main.async { focused = true } }
-        } else {
-            Label(state.name(url), systemImage: "list.bullet.rectangle")
-                .help(url.lastPathComponent)
-        }
-    }
-}
-
 // MARK: - Bottom bar
 
-/// The bottom bar: the open playlist, left to right. Scenes are blocks, the transitions
-/// between them the links, and a last slot adds a scene. The link before that slot is the
-/// transition from the last scene back to the first, as the playlist loops. The triangle
-/// folds it to its header, which keeps the transport. With no playlists it offers to make one.
+/// The bottom bar: the playlist the scene playing is in (its sidebar folder), left to right.
+/// Scenes are blocks and the transitions between them the links; the last link is the
+/// transition from the last scene back to the first, as the playlist loops. The order is the
+/// folder's, set in the sidebar; here you play scenes and set transitions. The triangle folds it
+/// to its header, which keeps the transport. Shown only while the scene playing is in a folder.
 struct PlaylistBar: View {
     @Environment(Engine.self) private var engine
+    let playlist: SidebarFolder
 
     var body: some View {
         let state = engine.playlists
         VStack(spacing: 0) {
             header(state)
             if state.expanded {
-                Group {
-                    if let file = state.file {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 0) {
-                                ForEach(Array(file.entries.enumerated()), id: \.offset) { i, entry in
-                                    PlaylistSlot(index: i, entry: entry)
-                                    TransitionLink(index: i, spec: entry.transition)
-                                }
-                                AddSceneSlot(index: file.entries.count)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(playlist.entries.enumerated()), id: \.offset) { i, entry in
+                            PlaylistSlot(index: i, entry: entry)
+                            TransitionLink(index: i, spec: entry.transition)
                         }
-                        .scrollIndicators(.visible)
-                    } else if state.selectedURL == nil {
-                        HStack(spacing: 10) {
-                            Text("No playlists yet").foregroundStyle(Theme.textDim)
-                            Button("New Playlist") { engine.createPlaylist() }
-                                .controlSize(.small)
-                        }
-                        .font(.system(size: 11))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        // The file didn't load; its error is in the status bar.
-                        Color.clear
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
                 }
+                .scrollIndicators(.visible)
                 .frame(height: 72)
                 .transition(.opacity)
             }
@@ -169,28 +85,26 @@ struct PlaylistBar: View {
             DisclosureGroup(isExpanded: Binding(get: { state.expanded }, set: { if $0 != state.expanded { engine.togglePlaylistBar() } })) {
                 EmptyView()
             } label: {
-                Text(state.selectedURL.map(state.name) ?? "Playlists").font(Theme.titleFont).foregroundStyle(Theme.text)
+                Text(playlist.name).font(Theme.titleFont).foregroundStyle(Theme.text)
                     .contentShape(Rectangle())
                     .onTapGesture { engine.togglePlaylistBar() }
             }
             .fixedSize()
             .help(state.expanded ? "Hide the playlist (⇧⌘Y)" : "Show the playlist (⇧⌘Y)")
-            if let file = state.file, !file.entries.isEmpty {
-                Text(state.position.map { "\($0 + 1) of \(file.entries.count)" } ?? "\(file.entries.count) scenes")
+            if let position = engine.playlistPosition {
+                Text("\(position + 1) of \(playlist.entries.count)")
                     .font(Theme.valueFont).foregroundStyle(Theme.textDim)
             }
             Spacer()
-            if state.selectedURL != nil {
-                TransportButton(action: .previous)
-                TransportButton(action: .next)
-                Toggle(isOn: Binding(get: { state.mapMode }, set: { state.mapMode = $0; engine.learnPlaylistMIDI(nil) })) {
-                    Image(systemName: "keyboard")
-                }
-                .toggleStyle(.button)
-                .tint(Theme.midi)
-                .controlSize(.small)
-                .help("MIDI map: click Previous or Next, then press a pad, key or button on your controller")
+            TransportButton(action: .previous)
+            TransportButton(action: .next)
+            Toggle(isOn: Binding(get: { state.mapMode }, set: { state.mapMode = $0; engine.learnPlaylistMIDI(nil) })) {
+                Image(systemName: "keyboard")
             }
+            .toggleStyle(.button)
+            .tint(Theme.midi)
+            .controlSize(.small)
+            .help("MIDI map: click Previous or Next, then press a pad, key or button on your controller")
         }
         .padding(.horizontal, 10)
         .frame(height: 24)
@@ -239,65 +153,33 @@ private struct TransportButton: View {
     }
 }
 
-private struct SlotBox<Content: View>: View {
-    var highlighted = false
-    var dashed = false
-    var dropping = false
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        content
-            .padding(.horizontal, 10)
-            .frame(width: 140, height: 46)
-            .background(RoundedRectangle(cornerRadius: 4).fill(dashed ? Color.clear : highlighted ? Theme.deviceHeaderSelected : Theme.device))
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(dropping ? Theme.accent : highlighted ? Theme.accent : dashed ? Theme.knobTrack : Theme.deviceBorder,
-                            style: StrokeStyle(lineWidth: dropping || highlighted ? 2 : 1, dash: dashed && !dropping ? [4, 3] : []))
-            }
-    }
-}
-
-/// A scene in the playlist. Click to play it; drag to reorder; drop a scene on it to insert
-/// before it.
+/// A scene in the playlist. Click to play it.
 private struct PlaylistSlot: View {
     @Environment(Engine.self) private var engine
     let index: Int
     let entry: PlaylistEntry
-    @State private var dropping = false
 
     var body: some View {
-        let url = engine.playlistSceneURL(entry.scene)
-        let playing = engine.playlists.position == index
-        SlotBox(highlighted: playing, dropping: dropping) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(index + 1)").font(Theme.valueFont).foregroundStyle(Theme.textDim)
-                Text(url.map(engine.sceneName) ?? entry.scene)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(url == nil ? Theme.error : Theme.text)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let url = engine.sceneURL(entry.scene)
+        let playing = engine.playlistPosition == index
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(index + 1)").font(Theme.valueFont).foregroundStyle(Theme.textDim)
+            Text(url.map(engine.sceneName) ?? entry.scene)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .frame(width: 140, height: 46)
+        .background(RoundedRectangle(cornerRadius: 4).fill(playing ? Theme.deviceHeaderSelected : Theme.device))
+        .overlay {
+            RoundedRectangle(cornerRadius: 4).stroke(playing ? Theme.accent : Theme.deviceBorder, lineWidth: playing ? 2 : 1)
         }
         .contentShape(Rectangle())
         .onTapGesture { engine.playPlaylistEntry(index) }
-        .onDrag { LibraryDrag.entry(index).provider(engine) }
-        .onDrop(of: [.plainText], isTargeted: $dropping) { providers in
-            LibraryDrag.load(providers) { drag in
-                switch drag {
-                case .scene(let slug): engine.insertPlaylistScene(slug, at: index)
-                case .entry(let from): engine.movePlaylistEntry(from: from, to: index)
-                case .playlist, .folder: break
-                }
-            }
-        }
-        .contextMenu {
-            Button("Play") { engine.playPlaylistEntry(index) }
-            Divider()
-            Button("Remove from Playlist", role: .destructive) { engine.removePlaylistEntry(index) }
-        }
-        .help(url == nil ? "“\(entry.scene)” isn't in the library’s Scenes folder" : "Click to play, drag to reorder")
+        .help("Click to play. Reorder it in the sidebar folder.")
     }
 }
 
@@ -360,45 +242,5 @@ private struct TransitionEditor: View {
         .padding(12)
         .frame(width: 300)
         .onChange(of: spec) { _, s in commit(s) }
-    }
-}
-
-/// The empty slot at the end. Pick a scene from its menu, or drop one on it.
-private struct AddSceneSlot: View {
-    @Environment(Engine.self) private var engine
-    let index: Int
-    @State private var dropping = false
-
-    var body: some View {
-        Menu {
-            ForEach(engine.sceneURLs, id: \.self) { url in
-                Button(engine.sceneName(url)) { engine.insertPlaylistScene(url.deletingPathExtension().lastPathComponent) }
-            }
-        } label: {
-            SlotBox(dashed: true, dropping: dropping) {
-                HStack(spacing: 5) {
-                    Image(systemName: "plus")
-                    Text("Select scene")
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down").font(.system(size: 8))
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textDim)
-            }
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .onDrop(of: [.plainText], isTargeted: $dropping) { providers in
-            LibraryDrag.load(providers) { drag in
-                switch drag {
-                case .scene(let slug): engine.insertPlaylistScene(slug)
-                case .entry(let from): engine.movePlaylistEntry(from: from, to: index)
-                case .playlist, .folder: break
-                }
-            }
-        }
-        .help("Add a scene: pick one, or drag one here from the Scenes list")
     }
 }

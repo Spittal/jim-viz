@@ -3,7 +3,7 @@
 # the audio analyzer, and score onset detection and beat tracking against known hit times.
 # Pass a directory to also write a PNG snapshot of each scene: scripts/check.sh /tmp/snaps
 # Runs on a scratch copy of your library (~/Library/Application Support/jim-viz), so your
-# scenes, presets and playlists are checked but never written to.
+# scenes, presets and sidebar folders (playlists) are checked but never written to.
 set -e
 cd "${0:A:h}/.."
 swift build
@@ -19,7 +19,7 @@ src="$HOME/Library/Application Support/jim-viz"
 scratch=$(mktemp -d)
 scratch=${scratch:A}  # /var is a symlink; the checks compare file URLs
 trap "rm -rf $scratch" EXIT
-for d in Scenes Presets Playlists; do if [[ -d "$src/$d" ]]; then cp -R "$src/$d" $scratch/; fi; done
+for d in Scenes Presets; do if [[ -d "$src/$d" ]]; then cp -R "$src/$d" $scratch/; fi; done
 if [[ -f "$src/Sidebar.json" ]]; then cp "$src/Sidebar.json" $scratch/; fi
 for d in Videos Pictures; do if [[ -d "$src/$d" ]]; then ln -s "$src/$d" $scratch/$d; fi; done
 JIMVIZ_CONTENT="$PWD/Content" JIMVIZ_LIBRARY=$scratch .build/debug/jim-viz $args

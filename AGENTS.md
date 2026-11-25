@@ -139,8 +139,8 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
     error (e.g. "JSON invalid" or "invalid shape") rather than silently falling back to a default.
   - Work lost is fine; prioritize clean, simple, unencumbered Swift and Metal code over
     defensive parsing or edge-case handling.
-  - When a format or tool changes, update the files in the library's `Scenes`, `Presets`
-    and `Playlists` directly without adding compatibility shims. They're the user's files and
+  - When a format or tool changes, update the files in the library's `Scenes` and `Presets`,
+    and its `Sidebar.json`, directly without adding compatibility shims. They're the user's files and
     aren't in git, so say which ones you changed.
 - **Never commit or push unless asked.** The remote is `git@github.com:Spittal/jim-viz.git`,
   branch `main`.
@@ -154,10 +154,12 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
 ## Storage
 
 - **Library: `~/Library/Application Support/jim-viz`** holds the user's `Scenes`,
-  `Presets`, `Playlists`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
+  `Presets`, `Videos` and `Pictures`, plus the depth model in `Models`. It's not
   in git, and the app creates the folders empty on first launch.
-  - `Sidebar.json` there keeps the order and folders of the Scenes and Playlists lists.
-    Folders only organise the lists; the files stay flat in `Scenes` and `Playlists`.
+  - `Sidebar.json` there keeps the order and folders of the Scenes list. A folder is a
+    playlist: its order is the play order, and it keeps a transition on each link between
+    neighbouring scenes. A scene is in at most one folder, and folders don't nest. The files
+    stay flat in `Scenes`.
   - `JIMVIZ_LIBRARY` overrides it.
 - **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking, StemgenRT's for stem separation), which are code and ship
   with the app.

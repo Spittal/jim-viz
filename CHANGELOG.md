@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Folders are playlists:** a folder in the Scenes list is a playlist, played in the folder's order. The bottom bar shows the folder holding the scene playing, and sets its transitions. A link keeps its transition while its two scenes stay next to each other; any reorder that breaks it goes back to the default crossfade. The Playlists tab and the library's `Playlists` folder are gone.
 - **LFO Hz is finer at the low end:** the knob follows a curve, so its first half covers 0–2.5 Hz.
 - **Type a knob's value:** double-click a knob to type a value; it's clamped to the knob's range. To reset a knob, click it and press Delete.
 

@@ -7,24 +7,11 @@ struct ContentView: View {
     var body: some View {
         @Bindable var engine = engine
         NavigationSplitView {
-            // Scenes (or playlists) on top, device browser below, like Ableton's left-hand
-            // browser. Mappings live in the inspector on the right.
+            // Scenes and their folders (playlists) on top, device browser below, like Ableton's
+            // left-hand browser. Mappings live in the inspector on the right.
             VSplitView {
-                VStack(spacing: 0) {
-                    Picker("", selection: Binding(get: { engine.playlists.tab }, set: { engine.playlists.tab = $0 })) {
-                        ForEach(SidebarTab.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    switch engine.playlists.tab {
-                    case .scenes: SceneList()
-                    case .playlists: PlaylistList()
-                    }
-                }
-                .frame(minHeight: 110, idealHeight: 200)
+                SceneList()
+                    .frame(minHeight: 110, idealHeight: 200)
                 DeviceBrowser()
                     .frame(minHeight: 180, idealHeight: 420)
             }
@@ -44,8 +31,10 @@ struct ContentView: View {
                         .background(Theme.chainBackground)
                 }
                 Divider()
-                PlaylistBar()
-                Divider()
+                if let playlist = engine.playlist {
+                    PlaylistBar(playlist: playlist)
+                    Divider()
+                }
                 StatusBar()
             }
             .toolbar { TransportToolbar() }
@@ -91,7 +80,7 @@ private struct SceneList: View {
     @Environment(Engine.self) private var engine
 
     var body: some View {
-        SidebarList(tab: .scenes, urls: engine.sceneURLs, selected: engine.currentURL,
+        SidebarList(urls: engine.sceneURLs, selected: engine.currentURL,
                     select: { engine.selectDevice(nil); engine.load($0) }, rename: { engine.renamingScene = $0 },
                     newHelp: "New Empty Scene (⌘N)", new: { engine.createNewScene() }) { url in
             SceneRow(url: url)

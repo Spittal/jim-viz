@@ -1,65 +1,100 @@
 import Foundation
 import Observation
 
-/// A row of a sidebar list: a scene or playlist, by its file name without `.json`, or a folder
-/// of them. Folders only organise the list: they hold files, not other folders, and the files
-/// on disk stay where they are.
+/// A row of the Scenes list: a scene, by its file name without `.json`, or a folder of them.
+/// A folder is a playlist: its scenes play in its order, looping, with a transition on each
+/// link. Folders hold scenes, not other folders, and each scene is listed once. The files on
+/// disk stay flat in `Scenes`.
 enum SidebarItem: Codable, Equatable, Identifiable {
-    case file(String)
+    case scene(String)
     case folder(SidebarFolder)
 
     var id: String {
         switch self {
-        case .file(let slug): return "file:\(slug)"
+        case .scene(let slug): return "scene:\(slug)"
         case .folder(let folder): return "folder:\(folder.name)"
         }
     }
 
-    /// In JSON a file is its name and a folder an object.
+    /// In JSON a scene is its name and a folder an object.
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if let slug = try? c.decode(String.self) { self = .file(slug) } else { self = .folder(try c.decode(SidebarFolder.self)) }
+        if let slug = try? c.decode(String.self) { self = .scene(slug) } else { self = .folder(try c.decode(SidebarFolder.self)) }
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
-        case .file(let slug): try c.encode(slug)
+        case .scene(let slug): try c.encode(slug)
         case .folder(let folder): try c.encode(folder)
         }
     }
 }
 
+/// A folder, which is a playlist: its scenes in play order, each with the transition into the
+/// next. The last one's transition loops back to the first.
 struct SidebarFolder: Codable, Equatable {
     var name: String
     /// Unfolded in the list.
     var open: Bool
-    var items: [String]
+    private(set) var entries: [PlaylistEntry]
+
+    init(name: String, open: Bool, scenes: [String] = []) {
+        self.name = name
+        self.open = open
+        entries = scenes.map { PlaylistEntry(scene: $0, transition: .default) }
+    }
+
+    var scenes: [String] { entries.map(\.scene) }
+
+    private struct Link: Hashable {
+        let from, to: String
+    }
+
+    /// Puts new scenes in, or the same ones in a new order. A link between the same two scenes
+    /// as before keeps its transition; every other link gets the default.
+    mutating func setScenes(_ new: [String]) {
+        var kept: [Link: TransitionSpec] = [:]
+        for (i, entry) in entries.enumerated() {
+            kept[Link(from: entry.scene, to: entries[(i + 1) % entries.count].scene)] = entry.transition
+        }
+        entries = new.indices.map { i in
+            PlaylistEntry(scene: new[i], transition: kept[Link(from: new[i], to: new[(i + 1) % new.count])] ?? .default)
+        }
+    }
+
+    /// Sets the transition after entry `index`, into the next one.
+    mutating func setTransition(_ index: Int, _ spec: TransitionSpec) {
+        guard entries.indices.contains(index) else { return }
+        entries[index].transition = spec
+    }
+
+    /// A scene's new file name. Its links keep their transitions.
+    mutating func rename(scene old: String, to new: String) {
+        for i in entries.indices where entries[i].scene == old { entries[i].scene = new }
+    }
+
+    /// The transition into entry `index`: the one on the link before it, wrapping around.
+    func transition(into index: Int) -> TransitionSpec {
+        entries[(index - 1 + entries.count) % entries.count].transition
+    }
 }
 
-/// The order and folders of the Scenes and Playlists lists, in `<library>/Sidebar.json`.
-/// Without the file, both lists are flat and in name order.
+/// The order and folders of the Scenes list, in `<library>/Sidebar.json`. Without the file the
+/// list is flat and in name order.
 struct SidebarFile: Codable, Equatable {
     var scenes: [SidebarItem] = []
-    var playlists: [SidebarItem] = []
-
-    subscript(tab: SidebarTab) -> [SidebarItem] {
-        get { tab == .scenes ? scenes : playlists }
-        set { if tab == .scenes { scenes = newValue } else { playlists = newValue } }
-    }
 
     struct Invalid: LocalizedError {
         let errorDescription: String?
     }
 
-    /// Strict: a file listed twice, or two folders with one name, is an error.
+    /// Strict: a scene listed twice, or two folders with one name, is an error.
     static func load(_ url: URL) throws -> SidebarFile {
         let file = try JSONDecoder().decode(SidebarFile.self, from: Data(contentsOf: url))
-        for (label, items) in [("scenes", file.scenes), ("playlists", file.playlists)] {
-            guard Set(items.files).count == items.files.count else { throw Invalid(errorDescription: "invalid shape: \(label) lists a file twice") }
-            guard Set(items.folders).count == items.folders.count, !items.folders.contains("") else {
-                throw Invalid(errorDescription: "invalid shape: \(label) folders need names of their own")
-            }
+        guard Set(file.scenes.scenes).count == file.scenes.scenes.count else { throw Invalid(errorDescription: "invalid shape: a scene is listed twice") }
+        guard Set(file.scenes.folders).count == file.scenes.folders.count, !file.scenes.folders.contains("") else {
+            throw Invalid(errorDescription: "invalid shape: folders need names of their own")
         }
         return file
     }
@@ -70,18 +105,24 @@ struct SidebarFile: Codable, Equatable {
 }
 
 extension [SidebarItem] {
-    /// Every file, top to bottom, folders' files included.
-    var files: [String] {
+    /// Every scene, top to bottom, folders' scenes included.
+    var scenes: [String] {
         flatMap { item -> [String] in
             switch item {
-            case .file(let slug): return [slug]
-            case .folder(let folder): return folder.items
+            case .scene(let slug): return [slug]
+            case .folder(let folder): return folder.scenes
             }
         }
     }
 
     var folders: [String] {
         compactMap { if case .folder(let folder) = $0 { folder.name } else { nil } }
+    }
+
+    /// The folder a scene is in, if any.
+    func folder(containing slug: String) -> SidebarFolder? {
+        for case .folder(let folder) in self where folder.scenes.contains(slug) { return folder }
+        return nil
     }
 
     private func folderIndex(_ name: String) -> Int? {
@@ -99,46 +140,50 @@ extension [SidebarItem] {
         let have = Set(present)
         self = compactMap { item in
             switch item {
-            case .file(let slug): return have.contains(slug) ? item : nil
+            case .scene(let slug): return have.contains(slug) ? item : nil
             case .folder(var folder):
-                folder.items.removeAll { !have.contains($0) }
+                if !folder.scenes.allSatisfy(have.contains) { folder.setScenes(folder.scenes.filter(have.contains)) }
                 return .folder(folder)
             }
         }
-        let listed = Set(files)
-        append(contentsOf: present.filter { !listed.contains($0) }.map(SidebarItem.file))
+        let listed = Set(scenes)
+        append(contentsOf: present.filter { !listed.contains($0) }.map(SidebarItem.scene))
     }
 
-    /// Takes a file out of the top level or its folder, and says where it was.
-    private mutating func remove(file: String) -> (folder: String?, index: Int)? {
-        if let i = firstIndex(of: .file(file)) {
+    /// Takes a scene out of the top level or its folder, and says where it was.
+    private mutating func remove(scene: String) -> (folder: String?, index: Int)? {
+        if let i = firstIndex(of: .scene(scene)) {
             remove(at: i)
             return (nil, i)
         }
         for case .folder(let folder) in self {
-            guard let i = folder.items.firstIndex(of: file) else { continue }
-            withFolder(folder.name) { $0.items.remove(at: i) }
+            guard let i = folder.scenes.firstIndex(of: scene) else { continue }
+            withFolder(folder.name) { $0.setScenes($0.scenes.filter { $0 != scene }) }
             return (folder.name, i)
         }
         return nil
     }
 
-    private mutating func insert(file: String, folder: String?, at index: Int?) {
+    private mutating func insert(scene: String, folder: String?, at index: Int?) {
         if let folder {
-            withFolder(folder) { $0.items.insert(file, at: Swift.min(index ?? $0.items.count, $0.items.count)) }
+            withFolder(folder) {
+                var scenes = $0.scenes
+                scenes.insert(scene, at: Swift.min(index ?? scenes.count, scenes.count))
+                $0.setScenes(scenes)
+            }
         } else {
-            insert(.file(file), at: Swift.min(index ?? count, count))
+            insert(.scene(scene), at: Swift.min(index ?? count, count))
         }
     }
 
-    /// Moves a file into a folder (nil for the top level), to sit before the row now at
+    /// Moves a scene into a folder (nil for the top level), to sit before the row now at
     /// `index` there, or at the end.
-    mutating func move(file: String, toFolder folder: String?, at index: Int? = nil) {
+    mutating func move(scene: String, toFolder folder: String?, at index: Int? = nil) {
         if let folder, folderIndex(folder) == nil { return }
-        guard let from = remove(file: file) else { return }
+        guard let from = remove(scene: scene) else { return }
         var index = index
         if let i = index, from.folder == folder, from.index < i { index = i - 1 }
-        insert(file: file, folder: folder, at: index)
+        insert(scene: scene, folder: folder, at: index)
     }
 
     /// Moves a folder to sit before the top-level row now at `index`.
@@ -148,28 +193,30 @@ extension [SidebarItem] {
         insert(item, at: Swift.min(from < index ? index - 1 : index, count))
     }
 
-    /// Lists a new file straight after another, in its folder: a duplicate after its original.
-    mutating func add(file: String, after other: String) {
-        if let i = firstIndex(of: .file(other)) {
-            insert(.file(file), at: i + 1)
+    /// Lists a new scene straight after another, in its folder: a duplicate after its original.
+    mutating func add(scene: String, after other: String) {
+        if let i = firstIndex(of: .scene(other)) {
+            insert(.scene(scene), at: i + 1)
             return
         }
-        for case .folder(let folder) in self {
-            guard let i = folder.items.firstIndex(of: other) else { continue }
-            withFolder(folder.name) { $0.items.insert(file, at: i + 1) }
-            return
-        }
+        guard let folder = folder(containing: other), let i = folder.scenes.firstIndex(of: other) else { return }
+        insert(scene: scene, folder: folder.name, at: i + 1)
     }
 
-    mutating func rename(file old: String, to new: String) {
+    mutating func rename(scene old: String, to new: String) {
         self = map { item in
             switch item {
-            case .file(let slug): return .file(slug == old ? new : slug)
+            case .scene(let slug): return .scene(slug == old ? new : slug)
             case .folder(var folder):
-                folder.items = folder.items.map { $0 == old ? new : $0 }
+                folder.rename(scene: old, to: new)
                 return .folder(folder)
             }
         }
+    }
+
+    /// Sets the transition after a folder's entry `index`, into the next one.
+    mutating func setTransition(folder: String, _ index: Int, _ spec: TransitionSpec) {
+        withFolder(folder) { $0.setTransition(index, spec) }
     }
 
     /// A folder name no other folder has: `name`, or `name 2`…
@@ -182,7 +229,7 @@ extension [SidebarItem] {
 
     /// New folders go at the top, where they can be seen.
     mutating func addFolder(_ name: String) {
-        insert(.folder(SidebarFolder(name: name, open: true, items: [])), at: 0)
+        insert(.folder(SidebarFolder(name: name, open: true)), at: 0)
     }
 
     mutating func renameFolder(_ old: String, to new: String) {
@@ -193,32 +240,33 @@ extension [SidebarItem] {
         withFolder(name) { $0.open = open }
     }
 
-    /// Removes a folder. Its files stay, in the list where the folder was.
+    /// Removes a folder, and with it its transitions. Its scenes stay, in the list where the
+    /// folder was.
     mutating func removeFolder(_ name: String) {
         guard let i = folderIndex(name), case .folder(let folder) = self[i] else { return }
-        replaceSubrange(i...i, with: folder.items.map(SidebarItem.file))
+        replaceSubrange(i...i, with: folder.scenes.map(SidebarItem.scene))
     }
 }
 
-/// The sidebar lists' order and folders, and the folder being renamed. Main thread only.
+/// The Scenes list's order and folders, and the folder being renamed. Main thread only.
 @Observable
 final class SidebarState {
     fileprivate(set) var file = SidebarFile()
-    /// The folder being renamed, in the list on show.
+    /// The folder being renamed.
     var renamingFolder: String?
 
-    /// Brings a list in line with the files on disk and returns them in its order.
-    func ordered(_ tab: SidebarTab, _ urls: [URL]) -> [URL] {
+    /// Brings the list in line with the scene files on disk and returns them in its order.
+    func ordered(_ urls: [URL]) -> [URL] {
         let bySlug = Dictionary(uniqueKeysWithValues: urls.map { ($0.deletingPathExtension().lastPathComponent, $0) })
-        var items = file[tab]
+        var items = file.scenes
         items.reconcile(urls.map { $0.deletingPathExtension().lastPathComponent })
-        if items != file[tab] { file[tab] = items }
-        return items.files.compactMap { bySlug[$0] }
+        if items != file.scenes { file.scenes = items }
+        return items.scenes.compactMap { bySlug[$0] }
     }
 }
 
 extension Engine {
-    /// Reads `Sidebar.json`. If it's invalid the error shows and the lists stay as they were.
+    /// Reads `Sidebar.json`. If it's invalid the error shows and the list stays as it was.
     func loadSidebar() {
         let url = store.sidebarURL
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -234,12 +282,12 @@ extension Engine {
         }
     }
 
-    /// Changes a list's order or folders, saves it and shows it.
-    func editSidebar(_ tab: SidebarTab, _ change: (inout [SidebarItem]) -> Void) {
-        var items = sidebar.file[tab]
+    /// Changes the list's order, folders or transitions, saves it and shows it.
+    func editSidebar(_ change: (inout [SidebarItem]) -> Void) {
+        var items = sidebar.file.scenes
         change(&items)
-        guard items != sidebar.file[tab] else { return }
-        sidebar.file[tab] = items
+        guard items != sidebar.file.scenes else { return }
+        sidebar.file.scenes = items
         let url = store.sidebarURL
         do {
             try sidebar.file.write(to: url)
@@ -248,20 +296,20 @@ extension Engine {
         } catch {
             errors[url.lastPathComponent] = "save failed: \(error.localizedDescription)"
         }
-        if tab == .scenes { refreshSceneList() } else { refreshPlaylists() }
+        refreshSceneList()
     }
 
-    /// Adds a folder to a list and starts naming it.
-    func createSidebarFolder(_ tab: SidebarTab) {
-        let name = sidebar.file[tab].uniqueFolderName("New Folder")
-        editSidebar(tab) { $0.addFolder(name) }
+    /// Adds a folder to the list and starts naming it.
+    func createSidebarFolder() {
+        let name = sidebar.file.scenes.uniqueFolderName("New Folder")
+        editSidebar { $0.addFolder(name) }
         sidebar.renamingFolder = name
     }
 
-    func renameSidebarFolder(_ tab: SidebarTab, _ folder: String, to newName: String) {
+    func renameSidebarFolder(_ folder: String, to newName: String) {
         sidebar.renamingFolder = nil
         let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != folder else { return }
-        editSidebar(tab) { $0.renameFolder(folder, to: $0.uniqueFolderName(name, except: folder)) }
+        editSidebar { $0.renameFolder(folder, to: $0.uniqueFolderName(name, except: folder)) }
     }
 }

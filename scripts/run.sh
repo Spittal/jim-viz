@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Build and run Jim Viz with the repo's shaders and maps, so shader edits hot-reload live.
-# Scenes, presets and playlists come from ~/Library/Application Support/jim-viz.
+# Scenes, presets and the sidebar's folders (playlists) come from ~/Library/Application Support/jim-viz.
 # Pass --release for an optimized build.
 set -e
 cd "${0:A:h}/.."

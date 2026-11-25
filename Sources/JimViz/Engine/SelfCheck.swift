@@ -702,13 +702,14 @@ enum SelfCheck {
         return nil
     }
 
-    /// Playlists: strict files, stepping that loops both ways with the transition on the link
-    /// it crosses, edits saved straight away, MIDI learn for the buttons with trigger-style
-    /// firing, and scene renames followed.
+    /// Playlists, which are sidebar folders: a strict format, transitions that stay on a link
+    /// only while its two scenes stay next to each other, stepping that loops both ways with
+    /// the transition on the link crossed, edits saved straight away, and MIDI learn for the
+    /// buttons with trigger-style firing.
     private static func checkPlaylists(engine: Engine) -> String? {
         // Strict format: a missing field is an error, not a default.
-        let broken = Data(#"{"name": "x", "entries": [{"scene": "a"}]}"#.utf8)
-        guard (try? JSONDecoder().decode(PlaylistFile.self, from: broken)) == nil else { return "entry without a transition decoded" }
+        let broken = Data(#"{"scenes": [{"name": "x", "open": true, "entries": [{"scene": "a"}]}]}"#.utf8)
+        guard (try? JSONDecoder().decode(SidebarFile.self, from: broken)) == nil else { return "entry without a transition decoded" }
 
         // Timing follows the spec.
         let controller = TransitionController()
@@ -719,40 +720,57 @@ enum SelfCheck {
         controller.start(from: sceneA, to: sceneA, spec: TransitionSpec(type: .crossfade, duration: 0), now: 20)
         guard controller.advance(now: 20)?.progress == 1, !controller.isTransitioning else { return "0 s transition didn't cut" }
 
+        // A link keeps its transition while its two scenes stay next to each other, the
+        // wrap-around included; any other link goes back to the default.
+        func spec(_ s: Double) -> TransitionSpec { TransitionSpec(type: .crossfade, duration: s) }
+        var f = SidebarFolder(name: "f", open: true, scenes: ["a", "b", "c"])
+        guard f.entries.map(\.transition) == [.default, .default, .default] else { return "new scenes don't start with a 300 ms crossfade" }
+        f.setTransition(0, spec(0.4)); f.setTransition(1, spec(0.5)); f.setTransition(2, spec(0.6))
+        f.setScenes(["a", "b", "c", "d"])
+        guard f.entries.map(\.transition) == [spec(0.4), spec(0.5), .default, .default] else { return "adding d: \(f.entries)" }
+        f.setScenes(["a", "b", "c"])
+        guard f.entries.map(\.transition) == [spec(0.4), spec(0.5), .default] else { return "removing d brought back c → a: \(f.entries)" }
+        f.setTransition(2, spec(0.6))
+        f.setScenes(["b", "c", "a"])
+        guard f.entries.map(\.transition) == [spec(0.5), spec(0.6), spec(0.4)] else { return "rotating lost links: \(f.entries)" }
+        f.setScenes(["c", "b", "a"])
+        guard f.entries.map(\.transition) == [.default, .default, .default] else { return "reversing kept links: \(f.entries)" }
+        f.setTransition(0, spec(0.7))
+        f.rename(scene: "c", to: "z")
+        guard f.scenes == ["z", "b", "a"], f.entries[0].transition == spec(0.7) else { return "renaming a scene lost its link" }
+
+        // Sidebar edits move scenes in and out of a folder by the same rule.
+        var items: [SidebarItem] = [.folder(SidebarFolder(name: "f", open: true, scenes: ["a", "b", "c"])), .scene("d")]
+        items.setTransition(folder: "f", 0, spec(0.4))
+        items.setTransition(folder: "f", 1, spec(0.5))
+        items.move(scene: "d", toFolder: "f", at: 1)
+        guard items.folder(containing: "d")?.entries.map(\.transition) == [.default, .default, spec(0.5), .default] else { return "dropping d between a and b: \(items)" }
+        items.move(scene: "d", toFolder: nil)
+        guard items.folder(containing: "a")?.entries.map(\.transition) == [.default, spec(0.5), .default] else { return "taking d out brought back a → b: \(items)" }
+
         let a = fixtureA.deletingPathExtension().lastPathComponent, b = fixtureB.deletingPathExtension().lastPathComponent
-        // At launch the first playlist is open (none, without playlists).
-        guard engine.playlists.selectedURL == engine.playlists.urls.first else { return "the first playlist isn't open by default" }
-        let url = engine.store.playlistsDir.appendingPathComponent("selfcheck.json")
+        let url = engine.store.sidebarURL
+        let before = try? Data(contentsOf: url)
         defer {
-            engine.selectPlaylist(nil)
-            try? FileManager.default.removeItem(at: url)
-            engine.refreshPlaylists()
+            if let before { try? before.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+            engine.loadSidebar()
+            engine.refreshSceneList()
+            engine.loop.transition.cancel()
             engine.load(fixtureA, animated: false)
         }
-        do { try PlaylistFile(name: "Self-check", entries: []).write(to: url) } catch { return "could not write: \(error)" }
-        engine.store.markSeen(url)
-        engine.refreshPlaylists()
-        guard engine.playlists.urls.contains(url) else { return "playlist not listed" }
-        // Deleting the open playlist opens the first one left (none, without playlists).
-        let extra = engine.store.playlistsDir.appendingPathComponent("selfcheck-extra.json")
-        do { try PlaylistFile(name: "Extra", entries: []).write(to: extra) } catch { return "could not write: \(error)" }
-        engine.refreshPlaylists()
-        engine.selectPlaylist(extra)
-        engine.deletePlaylist(extra)
-        guard engine.playlists.selectedURL == engine.playlists.urls.first, !engine.playlists.urls.contains(extra) else {
-            return "deleting the open playlist didn't fall back to the first"
-        }
-        engine.load(fixtureB, animated: false)
-        engine.selectPlaylist(url)
-        guard engine.playlists.file?.entries.isEmpty == true, !engine.playlistActive else { return "new playlist not empty" }
+        // A scene outside a folder isn't in a playlist.
+        engine.editSidebar { $0.move(scene: a, toFolder: nil, at: 0); $0.move(scene: b, toFolder: nil, at: 0) }
+        engine.load(fixtureA, animated: false)
+        guard engine.playlist == nil, !engine.playlistActive else { return "a scene outside a folder has a playlist" }
 
-        // A → (0.4 s) → B → (0.7 s) → back to A. Scenes added get the default crossfade.
-        engine.insertPlaylistScene(a)
-        engine.insertPlaylistScene(b)
-        guard engine.playlists.file?.entries.map(\.transition) == [.default, .default] else { return "added scenes don't start with a 300 ms crossfade" }
-        engine.setPlaylistTransition(0, TransitionSpec(type: .crossfade, duration: 0.4))
-        engine.setPlaylistTransition(1, TransitionSpec(type: .crossfade, duration: 0.7))
-        guard let saved = try? PlaylistFile.load(url), saved.entries.map(\.scene) == [a, b],
+        // A → (0.4 s) → B → (0.7 s) → back to A.
+        engine.createSidebarFolder()
+        engine.renameSidebarFolder("New Folder", to: "Self-check")
+        engine.editSidebar { $0.move(scene: a, toFolder: "Self-check"); $0.move(scene: b, toFolder: "Self-check") }
+        guard engine.playlist?.name == "Self-check", engine.playlistPosition == 0 else { return "the folder holding the scene playing isn't the playlist" }
+        engine.setPlaylistTransition(0, spec(0.4))
+        engine.setPlaylistTransition(1, spec(0.7))
+        guard let saved = (try? SidebarFile.load(url))?.scenes.folder(containing: a), saved.scenes == [a, b],
               saved.entries.map(\.transition.duration) == [0.4, 0.7] else { return "edits not saved" }
 
         // Each step starts with the scene it leaves on screen, so the load blends.
@@ -760,16 +778,12 @@ enum SelfCheck {
             engine.loop.transition.cancel()
             engine.load(position == 0 ? fixtureB : fixtureA, animated: false)
             engine.stepScene(d)
-            guard engine.playlists.position == position else { return "\(what): at \(String(describing: engine.playlists.position)), expected \(position)" }
+            guard engine.playlistPosition == position else { return "\(what): at \(String(describing: engine.playlistPosition)), expected \(position)" }
             guard engine.loop.transition.isTransitioning, abs(engine.loop.transition.duration - duration) < 1e-9 else {
                 return "\(what): transition \(engine.loop.transition.duration) s, expected \(duration) s"
             }
             return nil
         }
-        // The scene on screen (B) isn't where the playlist starts, so Next goes to the first entry,
-        // across the wrap-around link.
-        engine.selectPlaylist(nil); engine.load(fixtureA, animated: false); engine.selectPlaylist(url)
-        guard engine.playlists.position == 0 else { return "opening didn't find the scene on screen" }
         if let e = step(1, expect: 1, duration: 0.4, "A → B") { return e }
         if let e = step(1, expect: 0, duration: 0.7, "B → A, looping") { return e }
         if let e = step(-1, expect: 1, duration: 0.7, "A ← B, looping back") { return e }
@@ -777,16 +791,13 @@ enum SelfCheck {
         engine.loop.transition.cancel()
         engine.load(fixtureA, animated: false)
         engine.playPlaylistEntry(1)
-        guard engine.playlists.position == 1, abs(engine.loop.transition.duration - 0.4) < 1e-9 else { return "clicking B didn't use the link into it" }
-
-        // Moving takes the transition with the entry.
-        engine.movePlaylistEntry(from: 1, to: 0)
-        guard engine.playlists.file?.entries.map(\.scene) == [b, a], engine.playlists.file?.entries.first?.transition.duration == 0.7,
-              engine.playlists.position == 0 else { return "move didn't carry the transition or the position" }
+        guard engine.playlistPosition == 1, abs(engine.loop.transition.duration - 0.4) < 1e-9 else { return "clicking B didn't use the link into it" }
+        engine.loop.transition.cancel()
+        engine.load(fixtureA, animated: false)
 
         // MIDI: nothing is bound at first; learning takes the next control pressed, and a bound
         // control fires once per press.
-        guard engine.playlists.bindings.isEmpty else { return "playlist buttons start mapped" }
+        guard engine.playlists.bindings.isEmpty, !engine.playlistWantsMIDI else { return "playlist buttons start mapped" }
         func note(_ n: Int, _ v: Int) -> MIDIMessage {
             MIDIMessage(channel: 1, command: v > 0 ? .noteOn : .noteOff, data1: n, data2: v, timestamp: 0)
         }
@@ -796,47 +807,38 @@ enum SelfCheck {
         guard engine.playlists.bindings[.next] == MIDIControl(kind: .note, number: 36, channel: 1), engine.playlists.learning == nil else {
             return "Next didn't learn the note"
         }
-        guard engine.playlists.position == 0 else { return "learning also stepped" }
+        guard engine.playlistPosition == 0 else { return "learning also stepped" }
         engine.playlists.mapMode = false
         engine.handleMIDI(note(36, 100))
-        guard engine.playlists.position == 0 else { return "the learning press fired on its repeat without a release" }
+        guard engine.playlistPosition == 0 else { return "the learning press fired on its repeat without a release" }
         engine.handleMIDI(note(36, 0))
         engine.handleMIDI(note(36, 100))
-        guard engine.playlists.position == 1 else { return "bound note didn't step" }
+        guard engine.playlistPosition == 1 else { return "bound note didn't step" }
         engine.handleMIDI(note(36, 100))
-        guard engine.playlists.position == 1 else { return "held note fired twice" }
+        guard engine.playlistPosition == 1 else { return "held note fired twice" }
         // A pedal that sends a press and its release together: both arrive in one packet.
         var events = MIDIEventList()
         let pulse: [UInt32] = [0x20B0_157F, 0x20B0_1500]
         _ = MIDIEventListAdd(&events, MemoryLayout<MIDIEventList>.size, MIDIEventListInit(&events, ._1_0), 0, pulse.count, pulse)
         guard MIDIEngine.channelMessages(in: &events).map(\.d2) == [127, 0] else { return "a packet's second message was dropped" }
         guard engine.playlistWantsMIDI else { return "bound buttons don't want MIDI" }
-        engine.selectPlaylist(nil)
-        guard !engine.playlistWantsMIDI else { return "MIDI wanted with no playlist open" }
-        engine.selectPlaylist(url)
         engine.clearPlaylistMIDI(.next)
-
-        // Renaming a scene follows into playlists.
-        engine.renameSceneInPlaylists(from: a, to: "renamed-a")
-        guard (try? PlaylistFile.load(url))?.entries.map(\.scene) == [b, "renamed-a"] else { return "rename not followed" }
-        guard engine.playlistSceneURL("renamed-a") == nil else { return "missing scene resolved" }
-
-        // Loading a scene from outside moves the highlight: onto it if it's in the playlist, else off.
+        guard !engine.playlistWantsMIDI else { return "MIDI still wanted after clearing" }
         engine.loop.transition.cancel()
-        engine.load(fixtureB, animated: false)
-        guard engine.playlists.position == 0 else { return "loading a scene in the playlist didn't highlight it" }
+
+        // Reordering in the sidebar is the playlist's order.
+        engine.editSidebar { $0.move(scene: b, toFolder: "Self-check", at: 0) }
         engine.load(fixtureA, animated: false)
-        guard engine.playlists.position == nil else { return "loading a scene not in the playlist left one highlighted" }
-        engine.loop.transition.cancel()
+        guard engine.playlist?.scenes == [b, a], engine.playlistPosition == 1 else { return "sidebar reorder didn't reorder the playlist" }
         return nil
     }
 
-    /// The sidebar lists: a strict file, scenes and playlists in the order they're put in,
-    /// folders that only organise (the files stay put), and the two lists kept apart.
+    /// The Scenes list: a strict file, scenes in the order they're put in, and folders that
+    /// hold scenes without moving their files.
     private static func checkSidebar(engine: Engine) -> String? {
-        // Strict format: a folder needs all its fields, and a file is listed once.
+        // Strict format: a folder needs all its fields, and a scene is listed once.
         let decoder = JSONDecoder()
-        guard (try? decoder.decode(SidebarFile.self, from: Data(#"{"scenes": [{"name": "x", "items": []}], "playlists": []}"#.utf8))) == nil else {
+        guard (try? decoder.decode(SidebarFile.self, from: Data(#"{"scenes": [{"name": "x", "entries": []}]}"#.utf8))) == nil else {
             return "folder without `open` decoded"
         }
         let url = engine.store.sidebarURL
@@ -845,61 +847,59 @@ enum SelfCheck {
             if let before { try? before.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
             engine.loadSidebar()
             engine.refreshSceneList()
-            engine.refreshPlaylists()
         }
-        try? Data(#"{"scenes": ["a", {"name": "f", "open": true, "items": ["a"]}], "playlists": []}"#.utf8).write(to: url)
+        try? Data(#"{"scenes": ["a", {"name": "f", "open": true, "entries": [{"scene": "a", "transition": {"type": "crossfade", "duration": 0.3}}]}]}"#.utf8).write(to: url)
         guard (try? SidebarFile.load(url)) == nil else { return "a scene listed twice loaded" }
         let listed = engine.sidebar.file
         engine.loadSidebar()
-        guard engine.errors[url.lastPathComponent] != nil, engine.sidebar.file == listed else { return "an invalid file wasn't reported, or replaced the lists" }
+        guard engine.errors[url.lastPathComponent] != nil, engine.sidebar.file == listed else { return "an invalid file wasn't reported, or replaced the list" }
         try? FileManager.default.removeItem(at: url)
         engine.loadSidebar()
         engine.refreshSceneList()
-        engine.refreshPlaylists()
         guard engine.errors[url.lastPathComponent] == nil else { return "error stayed after the file went" }
 
-        // Moving within a list lands before the row dropped on, wherever it came from.
-        var items: [SidebarItem] = ["a", "b", "c"].map(SidebarItem.file)
-        items.move(file: "a", toFolder: nil, at: 2)
-        guard items.files == ["b", "a", "c"] else { return "moving down landed at \(items.files)" }
-        items.move(file: "c", toFolder: nil, at: 0)
-        items.move(file: "b", toFolder: nil)
-        guard items.files == ["c", "a", "b"] else { return "moving up or to the end landed at \(items.files)" }
+        // Moving within the list lands before the row dropped on, wherever it came from.
+        var items: [SidebarItem] = ["a", "b", "c"].map(SidebarItem.scene)
+        items.move(scene: "a", toFolder: nil, at: 2)
+        guard items.scenes == ["b", "a", "c"] else { return "moving down landed at \(items.scenes)" }
+        items.move(scene: "c", toFolder: nil, at: 0)
+        items.move(scene: "b", toFolder: nil)
+        guard items.scenes == ["c", "a", "b"] else { return "moving up or to the end landed at \(items.scenes)" }
         items.addFolder("f")
-        items.move(file: "b", toFolder: "f")
-        items.move(file: "c", toFolder: "f", at: 0)
-        items.move(file: "c", toFolder: "f", at: 2)
-        items.move(file: "a", toFolder: "missing")
-        guard items == [.folder(SidebarFolder(name: "f", open: true, items: ["b", "c"])), .file("a")] else { return "moving into a folder gave \(items)" }
-        items.add(file: "b2", after: "b")
-        items.rename(file: "c", to: "d")
+        items.move(scene: "b", toFolder: "f")
+        items.move(scene: "c", toFolder: "f", at: 0)
+        items.move(scene: "c", toFolder: "f", at: 2)
+        items.move(scene: "a", toFolder: "missing")
+        guard items == [.folder(SidebarFolder(name: "f", open: true, scenes: ["b", "c"])), .scene("a")] else { return "moving into a folder gave \(items)" }
+        items.add(scene: "b2", after: "b")
+        items.rename(scene: "c", to: "d")
         items.move(folder: "f", to: 2)
-        guard items == [.file("a"), .folder(SidebarFolder(name: "f", open: true, items: ["b", "b2", "d"]))] else { return "duplicate, rename or folder move gave \(items)" }
+        guard items == [.scene("a"), .folder(SidebarFolder(name: "f", open: true, scenes: ["b", "b2", "d"]))] else { return "duplicate, rename or folder move gave \(items)" }
         guard let round = try? decoder.decode([SidebarItem].self, from: JSONEncoder().encode(items)), round == items else { return "items don't survive saving" }
         items.removeFolder("f")
-        guard items.files == ["a", "b", "b2", "d"], items.folders.isEmpty else { return "removing a folder lost its files" }
+        guard items.scenes == ["a", "b", "b2", "d"], items.folders.isEmpty else { return "removing a folder lost its scenes" }
 
-        // Scenes: the list follows the order it's put in, and the order is saved.
+        // The list follows the order it's put in, and the order is saved.
         let a = fixtureA.deletingPathExtension().lastPathComponent, b = fixtureB.deletingPathExtension().lastPathComponent
-        engine.editSidebar(.scenes) { $0.move(file: b, toFolder: nil, at: 0) }
-        engine.editSidebar(.scenes) { $0.move(file: a, toFolder: nil, at: 1) }
+        engine.editSidebar { $0.move(scene: b, toFolder: nil, at: 0) }
+        engine.editSidebar { $0.move(scene: a, toFolder: nil, at: 1) }
         guard Array(engine.sceneURLs.prefix(2)) == [fixtureB, fixtureA] else { return "scenes didn't reorder" }
-        guard let saved = try? SidebarFile.load(url), Array(saved.scenes.files.prefix(2)) == [b, a] else { return "scene order not saved" }
+        guard let saved = try? SidebarFile.load(url), Array(saved.scenes.scenes.prefix(2)) == [b, a] else { return "scene order not saved" }
 
         // A folder holds scenes without moving their files, and starts being named.
-        engine.createSidebarFolder(.scenes)
+        engine.createSidebarFolder()
         guard engine.sidebar.renamingFolder == "New Folder", engine.sidebar.file.scenes.first?.id == "folder:New Folder" else { return "new folder not at the top, being named" }
-        engine.renameSidebarFolder(.scenes, "New Folder", to: " Set ")
+        engine.renameSidebarFolder("New Folder", to: " Set ")
         guard engine.sidebar.renamingFolder == nil, engine.sidebar.file.scenes.folders == ["Set"] else { return "folder not renamed" }
-        engine.createSidebarFolder(.scenes)
-        engine.renameSidebarFolder(.scenes, "New Folder", to: "Set")
+        engine.createSidebarFolder()
+        engine.renameSidebarFolder("New Folder", to: "Set")
         guard engine.sidebar.file.scenes.folders == ["Set 2", "Set"] else { return "two folders share a name: \(engine.sidebar.file.scenes.folders)" }
-        engine.editSidebar(.scenes) { $0.removeFolder("Set 2") }
-        engine.editSidebar(.scenes) { $0.move(file: a, toFolder: "Set") }
+        engine.editSidebar { $0.removeFolder("Set 2") }
+        engine.editSidebar { $0.move(scene: a, toFolder: "Set") }
         guard engine.sceneURLs.first == fixtureA, FileManager.default.fileExists(atPath: fixtureA.path),
-              engine.playlistSceneURL(a) == fixtureA else { return "a scene in a folder moved on disk or left the list" }
-        engine.editSidebar(.scenes) { $0.setFolder("Set", open: false) }
-        guard (try? SidebarFile.load(url))?.scenes.first == .folder(SidebarFolder(name: "Set", open: false, items: [a])) else { return "folder not saved" }
+              engine.sceneURL(a) == fixtureA else { return "a scene in a folder moved on disk or left the list" }
+        engine.editSidebar { $0.setFolder("Set", open: false) }
+        guard (try? SidebarFile.load(url))?.scenes.first == .folder(SidebarFolder(name: "Set", open: false, scenes: [a])) else { return "folder not saved" }
 
         // Files that come and go on disk: new ones join at the end, outside folders; gone ones leave.
         let extra = engine.store.scenesDir.appendingPathComponent("selfcheck-sidebar.json")
@@ -908,36 +908,18 @@ enum SelfCheck {
             try SceneFile(name: "Sidebar", inputs: [], modulators: [], camera: nil, palettes: [], generators: [], effects: [], mappings: []).write(to: extra)
         } catch { return "could not write: \(error)" }
         engine.refreshSceneList()
-        guard engine.sceneURLs.last == extra, engine.sidebar.file.scenes.last == .file("selfcheck-sidebar") else { return "a new scene didn't join the end of the list" }
-        engine.editSidebar(.scenes) { $0.move(file: "selfcheck-sidebar", toFolder: "Set") }
+        guard engine.sceneURLs.last == extra, engine.sidebar.file.scenes.last == .scene("selfcheck-sidebar") else { return "a new scene didn't join the end of the list" }
+        engine.editSidebar { $0.move(scene: "selfcheck-sidebar", toFolder: "Set") }
         engine.duplicateScene(extra)
         let copy = engine.store.scenesDir.appendingPathComponent("sidebar-copy.json")
         defer { try? FileManager.default.removeItem(at: copy) }
-        guard engine.sidebar.file.scenes.first == .folder(SidebarFolder(name: "Set", open: false, items: [a, "selfcheck-sidebar", "sidebar-copy"])) else {
+        guard engine.sidebar.file.scenes.first == .folder(SidebarFolder(name: "Set", open: false, scenes: [a, "selfcheck-sidebar", "sidebar-copy"])) else {
             return "a duplicate didn't land after its original: \(engine.sidebar.file.scenes.first.map { "\($0)" } ?? "")"
         }
         engine.deleteScene(copy)
         engine.deleteScene(extra)
         engine.load(fixtureA, animated: false)
-        guard engine.sidebar.file.scenes.files.first == a, !engine.sidebar.file.scenes.files.contains("selfcheck-sidebar") else { return "a deleted scene stayed listed" }
-
-        // Playlists have their own order and folders.
-        guard engine.sidebar.file.playlists.folders.isEmpty else { return "a scene folder showed up in Playlists" }
-        let lists = ["selfcheck-one", "selfcheck-two"].map { engine.store.playlistsDir.appendingPathComponent("\($0).json") }
-        defer { lists.forEach { try? FileManager.default.removeItem(at: $0) } }
-        for list in lists {
-            do { try PlaylistFile(name: list.lastPathComponent, entries: []).write(to: list) } catch { return "could not write: \(error)" }
-        }
-        engine.refreshPlaylists()
-        engine.createSidebarFolder(.playlists)
-        engine.renameSidebarFolder(.playlists, "New Folder", to: "Gigs")
-        engine.editSidebar(.playlists) { $0.move(file: "selfcheck-two", toFolder: "Gigs") }
-        engine.editSidebar(.playlists) { $0.move(file: "selfcheck-one", toFolder: "Gigs") }
-        guard Array(engine.playlists.urls.prefix(2)) == [lists[1], lists[0]], engine.sidebar.file.scenes.folders == ["Set"] else {
-            return "playlists didn't go into their folder in order, or it showed up in Scenes"
-        }
-        engine.editSidebar(.playlists) { $0.removeFolder("Gigs") }
-        guard engine.sidebar.file.playlists.folders.isEmpty, Array(engine.playlists.urls.prefix(2)) == [lists[1], lists[0]] else { return "removing a playlist folder lost its playlists" }
+        guard engine.sidebar.file.scenes.scenes.first == a, !engine.sidebar.file.scenes.scenes.contains("selfcheck-sidebar") else { return "a deleted scene stayed listed" }
         return nil
     }
 
@@ -2891,13 +2873,13 @@ enum SelfCheck {
         if let problem = checkPlaylists(engine: engine) {
             print("FAIL playlists: \(problem)"); failures += 1
         } else {
-            print("ok   playlists (strict file, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
+            print("ok   playlists (folders are playlists, links keep transitions only while their scenes stay neighbours, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
         }
 
         if let problem = checkSidebar(engine: engine) {
             print("FAIL sidebar: \(problem)"); failures += 1
         } else {
-            print("ok   sidebar (strict file, scenes and playlists reorder, folders hold, rename and delete without touching files, lists kept apart)")
+            print("ok   sidebar (strict file, scenes reorder, folders hold, rename and delete without touching files)")
         }
 
         if let audio = engine.offlineAudio {

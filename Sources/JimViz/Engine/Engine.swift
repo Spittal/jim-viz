@@ -16,7 +16,7 @@ final class Engine {
     let audioCaptures = AudioCaptures()
     /// MIDI controllers, for MIDI Inputs.
     let midi = MIDIEngine()
-    /// Playlists, and the one open in the bottom bar.
+    /// The playlist bar's state and MIDI bindings.
     let playlists: PlaylistState
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
@@ -29,7 +29,7 @@ final class Engine {
     /// False until launch finishes, and always in the headless self-check.
     @ObservationIgnored private var hardwareReady = false
 
-    /// The Scenes and Playlists lists' order and folders.
+    /// The Scenes list's order and folders (playlists).
     let sidebar = SidebarState()
     /// Scene files, in the sidebar's order.
     private(set) var sceneURLs: [URL] = []
@@ -38,6 +38,8 @@ final class Engine {
     /// The scene being renamed in the list.
     var renamingScene: URL?
     private(set) var currentURL: URL?
+    /// The scene playing: the one blending in during a transition, else `currentURL`.
+    private(set) var playingURL: URL?
     private(set) var current: RenderScene?
     @ObservationIgnored private var sceneFile: SceneFile?
 
@@ -90,7 +92,6 @@ final class Engine {
 
         loadSidebar()
         refreshSceneList()
-        refreshPlaylists()
         if headless {
             enableAutoSave = false
             return
@@ -266,7 +267,7 @@ final class Engine {
     var dropKnob: String?
 
     func refreshSceneList() {
-        sceneURLs = sidebar.ordered(.scenes, store.sceneURLs())
+        sceneURLs = sidebar.ordered(store.sceneURLs())
         struct Named: Decodable { let name: String? }
         var names: [URL: String] = [:]
         for url in sceneURLs {
@@ -298,8 +299,7 @@ final class Engine {
             store.markSeen(dest)
             if dest.standardizedFileURL != url.standardizedFileURL { try FileManager.default.removeItem(at: url) }
             errors["rename"] = nil
-            renameSceneInPlaylists(from: oldSlug, to: slug)
-            editSidebar(.scenes) { $0.rename(file: oldSlug, to: slug) }
+            editSidebar { $0.rename(scene: oldSlug, to: slug) }
         } catch {
             errors["rename"] = "rename failed: \(error.localizedDescription)"
             return
@@ -308,6 +308,7 @@ final class Engine {
             syncValues(from: scene, into: &file)
             file.name = name
             currentURL = dest
+            if playingURL == url { playingURL = dest }
             sceneFile = file
             if let rebuilt = build(file, reuse: scene) { install(rebuilt) }
         }
@@ -322,7 +323,7 @@ final class Engine {
             errors[url.lastPathComponent] = nil
             let isReload = url == currentURL
             guard let nextScene = build(file, reuse: isReload ? current : nil) else { return }
-            followPlaylist(url)
+            playingURL = url
             autoSaveWorkItem?.cancel()
             autoSaveWorkItem = nil
             isDirty = false
@@ -373,6 +374,7 @@ final class Engine {
                 } else {
                     current = nil
                     currentURL = nil
+                    playingURL = nil
                     sceneFile = nil
                     isDirty = false
                 }
@@ -382,11 +384,11 @@ final class Engine {
         }
     }
 
-    /// Steps the open playlist, or with none open, the scene list.
+    /// Steps the playlist the scene playing is in, or the scene list if it's in none.
     func stepScene(_ delta: Int) {
         if playlistActive { stepPlaylist(delta); return }
         guard !sceneURLs.isEmpty else { return }
-        let idx = currentURL.flatMap { sceneURLs.firstIndex(of: $0) } ?? -1
+        let idx = playingURL.flatMap { sceneURLs.firstIndex(of: $0) } ?? -1
         load(sceneURLs[(idx + delta + sceneURLs.count) % sceneURLs.count])
     }
 
@@ -944,7 +946,7 @@ final class Engine {
             try file.write(to: dest)
             store.markSeen(dest)
             errors["duplicate"] = nil
-            editSidebar(.scenes) { $0.add(file: slugify(name), after: url.deletingPathExtension().lastPathComponent) }
+            editSidebar { $0.add(scene: slugify(name), after: url.deletingPathExtension().lastPathComponent) }
             refreshSceneList()
             load(dest, animated: false)
             info = "Duplicated as \(name)"
@@ -1581,7 +1583,6 @@ final class Engine {
     private func filesChanged(_ urls: [URL]) {
         var rebuild = false
         var sceneChanged = false
-        var playlistsChanged = false
         for url in urls {
             if url.pathExtension == "metal" {
                 rebuild = true
@@ -1594,12 +1595,10 @@ final class Engine {
                 if url.standardizedFileURL == currentURL?.standardizedFileURL { sceneChanged = true }
                 // Preset names show in device headers.
                 if url.path.contains("/Presets/") { rebuild = true; refreshTools() }
-                if url.path.contains("/Playlists/") { playlistsChanged = true }
-                if url.path == store.sidebarURL.standardizedFileURL.path { loadSidebar(); playlistsChanged = true }
+                if url.path == store.sidebarURL.standardizedFileURL.path { loadSidebar() }
             }
         }
         refreshSceneList()
-        if playlistsChanged { refreshPlaylists() }
         guard let url = currentURL else {
             if let first = sceneURLs.first { load(first) }
             return

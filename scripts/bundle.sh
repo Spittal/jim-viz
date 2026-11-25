@@ -1,8 +1,8 @@
 #!/bin/zsh
 # Build a release .app into build/Jim Viz.app: scripts/bundle.sh [version]
 # The version defaults to the latest git tag (v1.2.3 → 1.2.3), or 0.0.0 before the first tag.
-# Shaders, maps and models are bundled and read from the app; scenes, presets and playlists
-# live in ~/Library/Application Support/jim-viz.
+# Shaders, maps and models are bundled and read from the app; scenes, presets and the
+# sidebar's folders (playlists) live in ~/Library/Application Support/jim-viz.
 set -e
 cd "${0:A:h}/.."
 version=${1:-${$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0)#v}}
