@@ -173,10 +173,10 @@ final class CameraMotion {
     private(set) var phaseOutput: Float = 0
 
     /// Picks up where another scene's camera is, so switching scenes doesn't jump the orbit.
+    /// Roll starts level: a new camera's Roll knob means what it says.
     init(_ rig: CameraRig, continuing old: CameraMotion? = nil) {
         self.rig = rig
         orbit = old?.rig == rig ? old!.orbit : 0
-        roll = old?.roll ?? 0
         sway = old?.sway ?? 0
     }
 

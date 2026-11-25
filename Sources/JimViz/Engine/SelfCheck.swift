@@ -525,6 +525,12 @@ enum SelfCheck {
             guard min(abs(e.x), abs(e.z)) < 0.001, abs(max(abs(e.x), abs(e.z)) - 5) < 0.001 else { return "orbit snap off the steps: \(e)" }
         }
 
+        // A rolling orbit's accumulated roll doesn't leak into the next camera.
+        let rolling = CameraMotion(.orbit), rollingBank = bank(.orbit, ["rollSpeed": 1])
+        for _ in 0..<60 { _ = rolling.advance(rollingBank, frame: f) }
+        let level = CameraMotion(.orbit, continuing: rolling).advance(bank(.orbit), frame: f)
+        guard level.roll == 0 else { return "new orbit camera inherited roll \(level.roll)" }
+
         let cutter = CameraMotion(.cutter), cutterBank = bank(.cutter, ["rate": 0, "shake": 0, "drift": 0])
         guard cutterBank["trigger"] == nil, cutterBank["threshold"] == nil,
               cutter.triggerInputs.map(\.key) == ["camera.cut"], CameraMotion(.orbit).triggerInputs.isEmpty else {
