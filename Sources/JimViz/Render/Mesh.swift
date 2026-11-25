@@ -1,3 +1,4 @@
+import Metal
 import simd
 
 /// Non-indexed vertex. Every triangle owns its three vertices, so each face can be
@@ -21,7 +22,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, street, hand, face, dancer, shrek, globe, ridges, shoes, instruments
+    case sphere, torus, plane, cube, shards, wheel, drive, street, city, hand, face, dancer, shrek, globe, ridges, shoes, instruments
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -34,6 +35,7 @@ enum MeshShape: String, CaseIterable {
         case .wheel: return ["blades", "segments"]
         case .drive: return ["segments", "palms"]
         case .street: return ["segments", "detail"]
+        case .city: return ["detail"]
         case .hand: return ["sides", "segments"]
         case .face: return ["detail"]
         case .dancer, .shrek, .shoes: return ["sides"]
@@ -44,10 +46,20 @@ enum MeshShape: String, CaseIterable {
     }
 
     /// How many copies of the mesh to draw, from the live knobs, for a shape that sets its own;
-    /// nil draws the `instances` knob's count. Street draws the street and one copy per lot.
+    /// nil draws the `instances` knob's count. Street draws the street and one copy per lot; City
+    /// the ground and one copy per block.
     func instanceCount(_ value: (String) -> Float) -> Int? {
         switch self {
         case .street: return 1 + 2 * streetLots(distance: value("distance"), behind: value("behind"), lot: value("lot"))
+        case .city: return 1 + CityLayout(value).blocks
+        default: return nil
+        }
+    }
+
+    /// The simulation a shape's shader reads at buffer(4), if it has one: City's cars and people.
+    func makeSim(device: MTLDevice) -> GeoSim? {
+        switch self {
+        case .city: return CitySim(device: device)
         default: return nil
         }
     }
@@ -90,6 +102,7 @@ struct MeshBuilder {
         case .wheel: return [min(max(i("blades"), 1), 96), min(max(i("segments"), 1), 16)]
         case .drive: return [min(max(i("segments"), 8), 512), min(max(i("palms"), 0), 256)]
         case .street: return [min(max(i("segments"), 8), 512), min(max(i("detail"), 0), 2)]
+        case .city: return [min(max(i("detail"), 0), 2)]
         case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
         case .face: return [min(max(i("detail"), 0), 4)]
         case .dancer, .shrek, .shoes: return [min(max(i("sides"), 3), 16)]
@@ -110,6 +123,7 @@ struct MeshBuilder {
         case .wheel: b.wheel(blades: t[0], segments: t[1])
         case .drive: b.drive(segments: t[0], palms: t[1])
         case .street: b.street(segments: t[0], detail: t[1])
+        case .city: b.city(detail: t[0])
         case .hand: b.hand(sides: t[0], segments: t[1])
         case .face: b.face(detail: t[0])
         case .dancer: b.dancer(sides: t[0])

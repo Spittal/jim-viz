@@ -17,6 +17,9 @@ struct CompiledShader {
     /// declaration order. Generators read the textures from texture(0) up, effects from
     /// texture(2) up; bit n of `f.inputs` is set when the input at texture(n) is connected.
     var inputs: [StreamInputDef] = []
+    /// Generators: trigger inputs from `// @trigger` lines, in declaration order. Each gets a
+    /// `<name>Count` field in `Params`, after the phases.
+    var triggers: [ShaderTriggerDef] = []
     /// Generators: the mesh named by a `// @mesh` line.
     var mesh: MeshShape?
     /// Files pulled in by `// @include`, so editing one recompiles this shader.
@@ -28,7 +31,8 @@ struct CompiledShader {
 /// Each file is compiled as: common.metal + a generated `Params` struct + the file itself.
 /// The struct comes from `// @param name default min max [int]` comments, so shader
 /// authors write `p.amount` and the UI gets a knob for free. A param flagged `rate` also gets
-/// a `<name>Phase` field after all the others: its value integrated over time.
+/// a `<name>Phase` field after all the others: its value integrated over time. A generator's
+/// `// @trigger name Label` line adds a trigger input and a `<name>Count` field after those.
 /// A `// @include file.metal` line is replaced by that file (next to the shader), so a family
 /// of shaders can share code and knobs; its `// @param`s count as the shader's own, in place.
 final class ShaderCompiler {
@@ -78,8 +82,16 @@ final class ShaderCompiler {
         if let clash = phases.first(where: { n in defs.contains { $0.name == n } || inputs.contains { $0.name == n } }) {
             throw ShaderError(file: name, message: "\(clash) is generated for a rate param and can't be declared too")
         }
-        let fields = defs.isEmpty ? "    float _unused;"
-            : (defs.map(\.name) + phases).map { "    float \($0);" }.joined(separator: "\n")
+        let triggers = ShaderTriggerDef.parse(shaderSource: body)
+        if let clash = triggers.first(where: { t in defs.contains { $0.name == t.name } || inputs.contains { $0.name == t.name } }) {
+            throw ShaderError(file: name, message: "trigger \(clash.name) has the same name as a param or input")
+        }
+        let counts = triggers.map { "\($0.name)Count" }
+        if let clash = counts.first(where: { n in defs.contains { $0.name == n } || phases.contains(n) }) {
+            throw ShaderError(file: name, message: "\(clash) is generated for a trigger and can't be declared too")
+        }
+        let fields = defs.isEmpty && counts.isEmpty ? "    float _unused;"
+            : (defs.map(\.name) + phases + counts).map { "    float \($0);" }.joined(separator: "\n")
         let source = """
         #line 1 "common.metal"
         \(common)
@@ -95,7 +107,7 @@ final class ShaderCompiler {
             let lib = try device.makeLibrary(source: source, options: opts)
             return CompiledShader(url: url, library: lib, params: defs,
                                   selfHistory: body.contains("// @history self"), inputs: inputs,
-                                  mesh: mesh, includes: includes)
+                                  triggers: triggers, mesh: mesh, includes: includes)
         } catch {
             throw ShaderError(file: name, message: Self.summarize(error))
         }

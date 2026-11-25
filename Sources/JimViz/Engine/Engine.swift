@@ -1080,11 +1080,12 @@ final class Engine {
             }
             let old = reuse?.generators.first { $0.key == slotKey }
             let same = old?.type == slot.type && old?.preset == slot.preset
-            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil)
+            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil,
+                                 triggers: shader.triggers.map(\.name))
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,
                                                mesh: mesh, bank: bank, pipelines: pipelines,
-                                               inputs: shader.inputs, device: renderer.device,
+                                               inputs: shader.inputs, triggers: shader.triggers, device: renderer.device,
                                                reusing: old?.type == slot.type ? old : nil))
         }
 
@@ -1305,6 +1306,7 @@ final class Engine {
         for case .audio(let a) in inputs { triggers[a.firstBeatTrigger.key] = (a.firstBeatTrigger, "Audio In · \(a.firstBeatTrigger.label)") }
         for case .video(let v) in inputs { for t in v.triggerInputs { triggers[t.key] = (t, "\(v.displayName) · \(t.label)") } }
         for mod in modulators { if let t = mod.trigger { triggers[t.key] = (t, "\(mod.id) · \(t.label)") } }
+        for gen in generators { for t in gen.triggerInputs { triggers[t.key] = (t, "\(gen.label ?? "Generator") · \(t.label)") } }
 
         /// Why a source isn't available, when its device isn't in the chain.
         func missing(_ source: String) -> String {
@@ -1473,6 +1475,9 @@ final class Engine {
         if let hit = cache[key] { return hit }
         do {
             let shader = try compiler.compile(url)
+            if role != .generator, !shader.triggers.isEmpty {
+                throw ShaderError(file: url.lastPathComponent, message: "only generators take // @trigger inputs")
+            }
             let entry: CacheEntry
             switch role {
             case .generator:

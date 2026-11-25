@@ -52,7 +52,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 | palette | Palette · Colours | `// @palette name Label` inputs |
 | audio | Audio In · Audio Out | nothing yet |
 | clock | Audio In · Sync | LFO · Sync, `// @clock name Label` inputs (the shader's `rate` knobs follow the beat) |
-| trigger | Audio In · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump/Restart, LFO · Reset, Audio In · First Beat |
+| trigger | Audio In · On Beat/Bar/Phrase, Camera · On Cut | Cutter · Cut, Video · Jump/Restart, LFO · Reset, Audio In · First Beat, `// @trigger name Label` inputs on a generator (City · Lights Change/Reshuffle; the shader reads `p.<name>Count`) |
 | stmap | Lens · ST Map (Nuke convention: s, t in red, green; t bottom to top) | Camera · Lens, which reprojects the rendered picture before the effects |
 
 - A value mapping is additive: `value = base ± amount × curve(signal) × span`, with amount 0–100%

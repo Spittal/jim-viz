@@ -119,8 +119,11 @@ final class ParamBank {
     let packedCount: Int
     private let byName: [String: Param]
 
-    init(defs: [ParamDef], unpacked: [ParamDef] = [], values: [String: Float] = [:], reuse: ParamBank? = nil) {
+    init(defs: [ParamDef], unpacked: [ParamDef] = [], values: [String: Float] = [:], reuse: ParamBank? = nil,
+         triggers: [String] = []) {
         packedCount = defs.count
+        triggerNames = triggers
+        triggerCounts = reuse?.triggerNames == triggers ? reuse!.triggerCounts : [Float](repeating: 0, count: triggers.count)
         params = (defs + unpacked).map { def in
             // Keep the existing object when the definition is unchanged, so UI state survives reloads.
             if let old = reuse?[def.name], old.def == def {
@@ -136,7 +139,17 @@ final class ParamBank {
         syncedBeat = reuse?.syncedBeat
         rateParams = params.filter(\.def.isRate)
         packedRates = params.prefix(packedCount).filter(\.def.isRate)
-        packBuffer = [Float](repeating: 0, count: max(packedCount + packedRates.count, 1))
+        packBuffer = [Float](repeating: 0, count: max(packedCount + packedRates.count + triggers.count, 1))
+    }
+
+    /// The shader's `// @trigger` inputs, by name, and how many times each has fired, packed
+    /// after the phases as `p.<name>Count`. Counted by the generator on the render thread.
+    let triggerNames: [String]
+    var triggerCounts: [Float]
+
+    /// How many times the named trigger has fired; 0 for one the shader doesn't declare.
+    func triggerCount(_ name: String) -> Float {
+        triggerNames.firstIndex(of: name).map { triggerCounts[$0] } ?? 0
     }
 
     subscript(name: String) -> Param? { byName[name] }
@@ -182,11 +195,12 @@ final class ParamBank {
     }
 
     /// Live values packed to match the generated Metal `Params` struct (one 0 when there are
-    /// none): every param in order, then each rate param's phase. As bytes for
-    /// `setFragmentBytes`. Render thread only.
+    /// none): every param in order, then each rate param's phase, then each trigger's count. As
+    /// bytes for `setFragmentBytes`. Render thread only.
     func withPacked(_ body: (UnsafeRawPointer, Int) -> Void) {
         for i in 0..<packedCount { packBuffer[i] = params[i].live }
         for i in packedRates.indices { packBuffer[packedCount + i] = Float(packedRates[i].phase) }
+        for i in triggerCounts.indices { packBuffer[packedCount + packedRates.count + i] = triggerCounts[i] }
         packBuffer.withUnsafeBytes { body($0.baseAddress!, $0.count) }
     }
 

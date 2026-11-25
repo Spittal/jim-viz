@@ -1169,7 +1169,7 @@ enum SelfCheck {
     /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
     /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "ridges", "shoes", "instruments"]
+        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "city", "ridges", "shoes", "instruments"]
         let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
         guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
@@ -1184,7 +1184,7 @@ enum SelfCheck {
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
                                      "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
                                      "drive": "lane", "street": "footprint", "ridges": "history", "shoes": "shimmy",
-                                     "instruments": "slide"]
+                                     "instruments": "slide", "city": "traffic"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -1200,6 +1200,10 @@ enum SelfCheck {
                 if let p = gen.bank[knob], p.base != 0 { return "\(geo) starts with \(knob) \(p.base), expected 0" }
             }
             if geo != "drive", geo != "street", gen.bank["scale"]?.def.group != "Shape" { return "\(geo)'s scale isn't in Shape" }
+            // Trigger inputs a geo declares start unmapped.
+            if let t = gen.triggerInputs.first(where: { t in engine.current?.mappings.contains { $0.target == t.key } == true }) {
+                return "\(geo)'s \(t.label) connected itself"
+            }
             // Every geo fades with opacity, in Look, starting fully there.
             guard let opacity = gen.bank["opacity"], opacity.base == 1, opacity.def.min == 0, opacity.def.max == 1,
                   opacity.def.group == "Look" else { return "\(geo) has no opacity knob at 1 in Look" }
@@ -1236,10 +1240,10 @@ enum SelfCheck {
                 scale.reset()
             }
 
-            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive, Street and
-            // Ridges have no Motion group: the road scrolls and the spectrum travels instead of
-            // the mesh turning.
-            if ["drive", "street", "ridges"].contains(geo) { continue }
+            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive, Street, City
+            // and Ridges have no Motion group: the road scrolls, the traffic drives and the
+            // spectrum travels instead of the mesh turning.
+            if ["drive", "street", "city", "ridges"].contains(geo) { continue }
             guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
                 return "\(geo) missing spin or tumble"
             }
@@ -1593,6 +1597,137 @@ enum SelfCheck {
         guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn walking backwards" }
         if let err = engine.errorSummary { return err }
         print(String(format: "     street %.2f ms/frame GPU, %d vertices × %d instances", ms, gen.vertexCount, 1 + 2 * lots))
+        return nil
+    }
+
+    /// City, a Low Poly generator: starts unmapped, with its Palette, Spectrum, Lights Change and
+    /// Reshuffle inputs; seen from above on a scene built in memory it fills most of the frame,
+    /// drawn as the ground plus one instance per block. With the lights held, the cars on the
+    /// red roads all come to a stop while the others drive, and Lights Change swaps them; people
+    /// walk. Reshuffle changes the blocks, and an LFO mapped into it fires it. Big, shattered and
+    /// wired, it still draws.
+    private static func checkCity(engine: Engine, snapshotDir: URL?) -> String? {
+        let file = SceneFile(name: "city", inputs: [], modulators: [],
+                             camera: CameraSlot(type: "static", preset: nil, params: ["x": 3, "y": 6, "z": 2, "fov": 60]),
+                             palettes: [PaletteSlot(colors: ["#05060F", "#1F2A44", "#5A6B7A", "#C9B79C", "#FFD27A"])],
+                             generators: [GeneratorSlot(id: nil, type: "city", preset: nil, params: [:])],
+                             effects: [], mappings: [])
+        guard let bare = engine.build(file, reuse: nil), let gen = bare.generator else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.mesh == .city, gen.vertexCount > 0 else { return "built an empty mesh" }
+        guard bare.mappings.isEmpty, bare.streamBindings.isEmpty else { return "connected itself" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+        guard gen.triggerInputs.map(\.key) == ["generator.lights", "generator.reshuffle"],
+              gen.triggerInputs.map(\.label) == ["Lights Change", "Reshuffle"],
+              gen.triggerInputs.allSatisfy({ t in bare.triggerInputs.contains { $0 === t } }) else {
+            return "trigger inputs should be Lights Change and Reshuffle, in the scene's"
+        }
+        let layout = CityLayout(gen.bank.live)
+        guard layout.blocks == 32, gen.mesh.instanceCount(gen.bank.live) == 33 else { return "instance count doesn't follow the blocks" }
+        guard gen.sim is CitySim else { return "no traffic simulation" }
+
+        var coloured = file
+        coloured.mappings = [MappingSpec(source: "palette.colors", target: "generator.pal")]
+        guard let scene = engine.build(coloured, reuse: nil), let gen = scene.generator else { return "didn't build with a palette" }
+        let ms = engine.renderOffscreen(scene, frames: 30, snapshot: snapshotDir?.appendingPathComponent("city.png"))
+        let drawn = engine.coverage(engine.renderer.history)
+        guard drawn.fraction > 0.5 else { return "drew \(drawn.fraction) of the frame from above" }
+        if let snapshotDir {
+            // Down at a crossing, to see the cars and people.
+            func aim(_ v: [(String, Float)]) { for (k, x) in v { scene.camera?[k]?.setBase(x) } }
+            aim([("x", 1.1), ("y", 0.25), ("z", 0.05), ("lookX", 0), ("lookY", -0.1), ("lookZ", 0)])
+            _ = engine.renderOffscreen(scene, frames: 2, snapshot: snapshotDir.appendingPathComponent("city-street.png"))
+            aim([("x", 3), ("y", 6), ("z", 2), ("lookX", 0), ("lookY", 0), ("lookZ", 0)])
+        }
+
+        // Hold the lights: the red roads' cars all stop, the green roads' drive. Then swap them.
+        guard let city = gen.sim as? CitySim else { return "no traffic simulation" }
+        gen.bank["cycle"]?.setBase(0)
+        var t = 0.0
+        func run(_ seconds: Double) {
+            for _ in 0..<Int(seconds * 60) {
+                t += 1.0 / 60
+                scene.modulate(SignalFrame(time: Float(t), dt: 1 / 60, now: t))
+            }
+        }
+        func moving(alongZ: Bool) -> (stopped: Int, driving: Int) {
+            var stopped = 0, driving = 0
+            for c in city.carOn.indices where city.carOn[c] && city.carAlongZ[c] == alongZ {
+                if city.carV[c] < 0.3 { stopped += 1 } else if city.carV[c] > 3 { driving += 1 }
+            }
+            return (stopped, driving)
+        }
+        func people() -> [SIMD2<Float>] {
+            let out = city.current.contents().bindMemory(to: SIMD4<Float>.self, capacity: CitySim.peopleOffset + CitySim.maxPeople)
+            return (0..<CitySim.maxPeople).filter { out[CitySim.peopleOffset + $0].w >= 0 }
+                .map { SIMD2(out[CitySim.peopleOffset + $0].x, out[CitySim.peopleOffset + $0].y) }
+        }
+        run(1)
+        let before = people()
+        guard city.avenuesGreen else { return "the avenues should start with the green" }
+        run(25)
+        let streets = moving(alongZ: true), avenues = moving(alongZ: false)
+        guard streets.stopped > 0, streets.driving == 0, streets.stopped == city.carOn.indices.filter({ city.carOn[$0] && city.carAlongZ[$0] }).count else {
+            return "cars on the red streets didn't all stop: \(streets)"
+        }
+        guard avenues.driving > avenues.stopped else { return "cars on the green avenues aren't driving: \(avenues)" }
+        let after = people()
+        guard before.count > 100, before.count == after.count,
+              zip(before, after).filter({ simd_distance($0, $1) > 1 }).count > before.count / 2 else {
+            return "people aren't walking: \(before.count) out, \(after.count) after"
+        }
+        gen.triggerInputs[0].fire()
+        run(25)
+        guard !city.avenuesGreen else { return "Lights Change didn't swap the lights" }
+        let avenuesRed = moving(alongZ: false), streetsGreen = moving(alongZ: true)
+        guard avenuesRed.driving == 0, streetsGreen.driving > 0 else {
+            return "after Lights Change, avenues \(avenuesRed), streets \(streetsGreen)"
+        }
+        gen.bank["cycle"]?.reset()
+
+        // Reshuffle rebuilds the blocks: with nothing else moving, the picture changes.
+        for (name, value) in [("traffic", 0), ("crowd", 0), ("waves", 0), ("towers", 0)] as [(String, Float)] {
+            gen.bank[name]?.setBase(value)
+        }
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: nil)
+        let still = engine.averageColor(engine.renderer.history)
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: nil)
+        let still2 = engine.averageColor(engine.renderer.history)
+        gen.triggerInputs[1].fire()
+        _ = engine.renderOffscreen(scene, frames: 2, snapshot: snapshotDir?.appendingPathComponent("city-reshuffled.png"))
+        let shuffled = engine.averageColor(engine.renderer.history)
+        guard gen.bank.triggerCount("reshuffle") == 1 else { return "Reshuffle counted \(gen.bank.triggerCount("reshuffle")) fires" }
+        guard simd_length(still2 - still) < 1e-4, simd_length(shuffled - still) > 1e-3 else {
+            return "Reshuffle didn't change the picture: \(still) → \(shuffled) (still \(still2))"
+        }
+
+        // An LFO mapped into Reshuffle fires it.
+        var mapped = coloured
+        mapped.modulators = [ModulatorSpec(type: "lfo", id: "lfo", params: ["hz": 4])]
+        mapped.mappings! += [MappingSpec(source: "mod.lfo.out", target: "generator.reshuffle")]
+        guard let lfoScene = engine.build(mapped, reuse: nil), let lfoGen = lfoScene.generator else { return "didn't build with an LFO" }
+        guard let m = lfoScene.mappings.first(where: { $0.target == "generator.reshuffle" }), m.problem == nil else {
+            return "LFO → Reshuffle mapping inactive: \(lfoScene.mappings.map { $0.problem ?? "ok" })"
+        }
+        _ = engine.renderOffscreen(lfoScene, frames: 60, snapshot: nil)
+        guard lfoGen.bank.triggerCount("reshuffle") >= 2 else { return "the LFO fired Reshuffle \(lfoGen.bank.triggerCount("reshuffle")) times in a second" }
+
+        // Big, crowded, shattered and wired: still draws.
+        for (name, value) in [("width", 16), ("length", 16), ("traffic", 1), ("crowd", 1), ("figures", 6), ("detail", 2),
+                              ("explode", 1), ("wire", 1), ("river", 200), ("eq", 3)] as [(String, Float)] {
+            gen.bank[name]?.setBase(value)
+        }
+        gen.finishMeshBuild(device: engine.device)
+        let big = engine.renderOffscreen(scene, frames: 10, snapshot: snapshotDir?.appendingPathComponent("city-big.png"))
+        guard engine.coverage(engine.renderer.history).fraction > 0.3 else { return "nothing drawn at 16 × 16 blocks" }
+        if let err = engine.errorSummary { return err }
+        // The simulation runs on the render thread: time a step with every car and person out.
+        let start = CACurrentMediaTime()
+        run(2)
+        let step = (CACurrentMediaTime() - start) / 120 * 1000
+        print(String(format: "     city %.2f ms/frame GPU (%.2f at 16 × 16 blocks, everything out), %d vertices × %d instances, %.3f ms a step of %d cars and %d people",
+                     ms, big, gen.vertexCount, 33, step, city.carOn.filter { $0 }.count, city.pOn.filter { $0 }.count))
         return nil
     }
 
@@ -2644,6 +2779,11 @@ enum SelfCheck {
             print("FAIL street: \(problem)"); failures += 1
         } else {
             print("ok   street (starts unmapped, buildings both sides, every style draws, walks both ways, one instance per lot)")
+        }
+        if let problem = checkCity(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL city: \(problem)"); failures += 1
+        } else {
+            print("ok   city (starts unmapped, fills the frame from above, one instance per block, cars stop at red and go on green, people walk, Reshuffle and Lights Change fire from a mapping)")
         }
         for geo in ["dancer", "shrek", "shoes"] {
             if let problem = checkDancer(engine: engine, geo: geo, snapshotDir: snapshotDir) {

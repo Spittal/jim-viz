@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **City geo:** a little Manhattan to look down on, a tile of blocks sized by width and length, with stepped-back towers, water towers, parks, a river with piers, street lamps, crosswalks, cars that stop at red lights and people who cross at the corners. Lights Change and Reshuffle trigger inputs.
+- **Generator trigger inputs:** a generator's shader can declare `// @trigger name Label`; it reads how many times it has fired as `p.<name>Count`.
+
 ## 1.3.0 (2026-11-16)
 
 - **Shoes geo:** a pair of low-poly high-tops dancing a 32-beat routine, with a Sync clock input so it follows the beat.

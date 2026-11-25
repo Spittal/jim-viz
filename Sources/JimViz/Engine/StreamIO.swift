@@ -149,6 +149,31 @@ struct StreamInputDef: Hashable {
     }
 }
 
+/// A trigger input a generator's shader declares:
+///   // @trigger reshuffle Reshuffle
+/// Its key is `<device>.<name>` (`generator.reshuffle`). The shader reads how many times it has
+/// fired as `p.<name>Count`, a field after the rate params' phases; a geo's simulation
+/// (`GeoSim`) can read the count too.
+struct ShaderTriggerDef: Hashable {
+    let name: String
+    let label: String
+
+    static let directive = "// @trigger "
+
+    static func parse(shaderSource: String) -> [ShaderTriggerDef] {
+        var defs: [ShaderTriggerDef] = []
+        for raw in shaderSource.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix(directive) else { continue }
+            let parts = line.dropFirst(directive.count).split(separator: " ", maxSplits: 1).map(String.init)
+            guard let name = parts.first, name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil,
+                  !defs.contains(where: { $0.name == name }) else { continue }
+            defs.append(ShaderTriggerDef(name: name, label: parts.count > 1 ? parts[1] : humanize(name)))
+        }
+        return defs
+    }
+}
+
 /// A stream input in the scene, for the UI: `generator.bgVideo`, "Background", video.
 struct StreamInput: Identifiable, Hashable {
     /// The Camera's Lens input, which takes a lens's ST map and reprojects the picture through it.
@@ -162,7 +187,8 @@ struct StreamInput: Identifiable, Hashable {
 }
 
 /// A trigger input a tool declares: the Cutter camera's `camera.cut`, a Video's
-/// `video.<id>.jump` and `video.<id>.restart`, an LFO's `mod.<id>.reset`, a Toggle's `mod.<id>.toggle`. Something happens each time it fires.
+/// `video.<id>.jump` and `video.<id>.restart`, an LFO's `mod.<id>.reset`, a Toggle's `mod.<id>.toggle`,
+/// the ones a generator's shader declares (`generator.reshuffle`). Something happens each time it fires.
 ///
 /// Mapped outputs fire it: a trigger output on its event, a value output each time it rises
 /// past ½ (it has to fall below ¼ before it can fire again). Clicking its pad fires it by hand.

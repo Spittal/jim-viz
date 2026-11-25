@@ -34,6 +34,11 @@ final class GeneratorRuntime: Identifiable {
     let pipelines: GeneratorPipelines
     /// Declared with `// @video`, `// @spectrum`, `// @palette` (bound from texture(0) up) and `// @clock`.
     let inputs: [StreamInputDef]
+    /// Declared with `// @trigger`, keyed `<key>.<name>`, in the bank's `triggerNames` order.
+    let triggerInputs: [TriggerInput]
+    /// The geo's simulation (City's traffic and people), if its mesh has one. Carried over while
+    /// the mesh stays the same, so a shader edit doesn't reset it.
+    let sim: GeoSim?
 
     /// Render thread only. Swapped for a rebuilt mesh by `updateMesh`.
     private(set) var vertexBuffer: MTLBuffer
@@ -49,16 +54,26 @@ final class GeneratorRuntime: Identifiable {
     /// Builds the mesh for the bank's current mesh knobs, or carries on `old`'s when it draws the same mesh.
     init(id: String, key: String, type: String, preset: String?, label: String?, mesh: MeshShape, bank: ParamBank,
          pipelines: GeneratorPipelines,
-         inputs: [StreamInputDef], device: MTLDevice, reusing old: GeneratorRuntime?) {
+         inputs: [StreamInputDef], triggers: [ShaderTriggerDef], device: MTLDevice, reusing old: GeneratorRuntime?) {
         self.id = id; self.key = key; self.type = type; self.preset = preset; self.label = label
         self.mesh = mesh; self.bank = bank; self.inputs = inputs
         self.pipelines = pipelines
+        triggerInputs = triggers.map { TriggerInput("\(key).\($0.name)", $0.label) }
         if let old, old.mesh == mesh {
             (vertexBuffer, vertexCount, topology) = (old.vertexBuffer, old.vertexCount, old.topology)
+            sim = old.sim
         } else {
             topology = MeshBuilder.topology(mesh) { bank.live($0) }
             (vertexBuffer, vertexCount) = Self.makeBuffer(device, mesh, topology)
+            sim = mesh.makeSim(device: device)
         }
+    }
+
+    /// Render thread, once per frame after the knobs are set: counts the triggers that fired
+    /// and steps the simulation.
+    func advance(dt: Float) {
+        for (i, t) in triggerInputs.enumerated() where t.take() { bank.triggerCounts[i] += 1 }
+        sim?.step(bank, dt: dt)
     }
 
     static func makeBuffer(_ device: MTLDevice, _ mesh: MeshShape, _ topology: [Int]) -> (MTLBuffer, Int) {
@@ -249,7 +264,7 @@ final class RenderScene {
     let streamOutputs: [StreamOutput]
     let streamInputs: [StreamInput]
     /// Every trigger input in the chain, in chain order: Audio In · First Beat, Videos' Jump and Restart,
-    /// LFOs' Reset, Toggles' Toggle, the Cutter's Cut.
+    /// LFOs' Reset, Toggles' Toggle, the Cutter's Cut, generators' own (City · Reshuffle).
     let triggerInputs: [TriggerInput]
     /// Which stream feeds each stream input, by input key (`generator.texVideo`). Active routes only.
     let streamBindings: [String: StreamOutput]
@@ -318,7 +333,7 @@ final class RenderScene {
         let boundKeys = Set(streamBindings.values.map(\.key))
         boundPalettes = palettes.filter { boundKeys.contains($0.outputKey) }
         triggerInputs = (audioIn.map { [$0.firstBeatTrigger] } ?? []) + videos.flatMap(\.triggerInputs)
-            + modulators.compactMap(\.trigger) + (cameraMotion?.triggerInputs ?? [])
+            + modulators.compactMap(\.trigger) + (cameraMotion?.triggerInputs ?? []) + generators.flatMap(\.triggerInputs)
         self.camera = camera; self.cameraMotion = cameraMotion; self.cameraPreset = cameraPreset; self.cameraLabel = cameraLabel
         self.lens = lens
         cameraLens = streamBindings[StreamInput.cameraLensKey]
@@ -346,6 +361,7 @@ final class RenderScene {
             for p in bank.params { p.live = p.def.clamp(p.liveBase + p.modAccum) }
             bank.integrate(dt: f.dt)
         }
+        for g in generators { g.advance(dt: f.dt) }
         for v in videos { v.advanceTransport() }
     }
 }
@@ -852,6 +868,7 @@ final class Renderer {
 
                 enc.setCullMode(.none)
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
+                if let sim = gen.sim { enc.setVertexBuffer(sim.current, offset: 0, index: 4) }
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)
                 enc.setVertexBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
                 let instances = gen.mesh.instanceCount(gen.bank.live) ?? max(1, Int(gen.bank["instances"]?.live ?? 1))
