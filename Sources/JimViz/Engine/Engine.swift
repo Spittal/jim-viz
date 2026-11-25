@@ -230,6 +230,8 @@ final class Engine {
     /// The device selected in the chain, by chain key (`audio`, `clock`, `mod.<id>`, `camera`,
     /// `palette`, `generator`, `post.<id>`). The inspector shows its outputs and mappings.
     var selectedDevice: String?
+    /// The knob last clicked or turned, which Delete resets. Selecting a device clears it.
+    var activeKnob: Param?
 
     /// Folded devices, by scene file and chain key. Kept for the session, not saved in the scene.
     private var collapsed: Set<String> = []
@@ -255,7 +257,9 @@ final class Engine {
     /// Selects a device, unless mapping or learning, where clicks land on knobs in other devices
     /// and the inspector should stay on the device being mapped from.
     func selectDevice(_ key: String?) {
-        guard mapSource == nil, selectedDevice != key else { return }
+        guard mapSource == nil else { return }
+        activeKnob = nil
+        guard selectedDevice != key else { return }
         selectedDevice = key
     }
     /// The knob an output is being dragged over.
@@ -725,10 +729,22 @@ final class Engine {
 
     /// Deletes whichever item is currently highlighted: a selected tool, or prompts to delete the active scene.
     func deleteHighlighted() {
-        if selectedDevice != nil {
+        if let knob = activeKnob {
+            editKnob(knob, "Reset") { knob.reset() }
+        } else if selectedDevice != nil {
             removeSelectedDevice()
         } else if let url = currentURL {
             scenePendingDeletion = url
+        }
+    }
+
+    /// Runs an edit to a knob as one undo step, saving the scene if it changed anything.
+    func editKnob(_ param: Param, _ verb: String, _ edit: () -> Void) {
+        let snapshot = currentSnapshot()
+        edit()
+        if let snapshot, let current = currentSnapshot(), snapshot != current {
+            recordUndo(name: "\(verb) \(knobLabel(param.def.name))", before: snapshot)
+            scheduleAutoSave()
         }
     }
 

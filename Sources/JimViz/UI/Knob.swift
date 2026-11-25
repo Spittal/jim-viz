@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// An Ableton-style rotary knob.
-/// Drag vertically to change, hold Shift for fine control, double-click to reset.
+/// Drag vertically to change, hold Shift for fine control, double-click to type a value
+/// (clamped to the knob's range). Click it then press Delete to reset it.
 /// Mappable knobs (those with a `targetPath`) also receive an output when clicked while one is
 /// waiting to be mapped, or when one is dropped on them (the chain's drop delegate does the
 /// routing), and show a cyan arc for the range their mappings can reach.
@@ -11,6 +12,8 @@ struct Knob: View {
     var targetPath: String? = nil
     @State private var dragStart: Float?
     @State private var dragSnapshot: SceneFile?
+    @State private var editText: String?
+    @FocusState private var editFocused: Bool
 
     private static let startAngle = 135.0
     private static let sweep = 270.0
@@ -18,7 +21,7 @@ struct Knob: View {
     var body: some View {
         let mappable = targetPath != nil
         let mapMode = mappable && engine.mapSource.map { engine.kind(of: $0) == .value } ?? false
-        let selected = mappable && engine.selectedTarget == targetPath && !mapMode
+        let selected = (mappable && engine.selectedTarget == targetPath || engine.activeKnob === param) && !mapMode
         let mappings = targetPath.map { engine.mappings(for: $0) } ?? []
         let dropHover = mappable && engine.dropKnob == targetPath
 
@@ -44,20 +47,29 @@ struct Knob: View {
                 if let targetPath, engine.knobClicked(targetPath, keepMapping: NSEvent.modifierFlags.contains(.shift)) {
                     return
                 }
+                engine.activeKnob = param
                 if NSApp.currentEvent?.clickCount == 2 {
-                    let snapshot = engine.currentSnapshot()
-                    param.reset()
-                    if let snapshot, let current = engine.currentSnapshot(), snapshot != current {
-                        engine.recordUndo(name: "Reset \(knobLabel(param.def.name))", before: snapshot)
-                        engine.scheduleAutoSave()
-                    }
+                    editText = Knob.format(param.base, param.def)
+                    editFocused = true
                 }
             }
 
-            Text(valueText)
-                .font(Theme.valueFont)
-                .foregroundStyle(param.isModulated ? Theme.modulation : Theme.text)
-                .lineLimit(1)
+            if let editText {
+                TextField("", text: Binding(get: { editText }, set: { self.editText = $0 }))
+                    .textFieldStyle(.plain)
+                    .font(Theme.valueFont)
+                    .multilineTextAlignment(.center)
+                    .background(RoundedRectangle(cornerRadius: 2).fill(Color.black.opacity(0.5)))
+                    .focused($editFocused)
+                    .onSubmit { commitEdit() }
+                    .onExitCommand { self.editText = nil }
+                    .onChange(of: editFocused) { _, focused in if !focused { self.editText = nil } }
+            } else {
+                Text(valueText)
+                    .font(Theme.valueFont)
+                    .foregroundStyle(param.isModulated ? Theme.modulation : Theme.text)
+                    .lineLimit(1)
+            }
         }
         .frame(width: 54, height: 58)
         .background(RoundedRectangle(cornerRadius: 3).fill(selected ? Color.white.opacity(0.07) : .clear))
@@ -65,6 +77,20 @@ struct Knob: View {
         // Outputs dropped here are routed by the chain's drop delegate, which finds the knob by frame.
         .chainFrame(targetPath.map { ChainDropDelegate.knobKey($0) } ?? "")
         .contextMenu { if let targetPath { menu(targetPath, mappings) } }
+    }
+
+    /// Applies a typed value, clamped to the knob's range. Int knobs also take a step's name.
+    private func commitEdit() {
+        defer { editText = nil }
+        guard let text = editText?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return }
+        let def = param.def
+        if let i = def.labels.firstIndex(where: { $0.caseInsensitiveCompare(text) == .orderedSame }) {
+            engine.editKnob(param, "Set") { param.setBase(def.min + Float(i)) }
+            return
+        }
+        let number = text.prefix { "0123456789.-+".contains($0) }
+        guard let v = Float(number) else { return }
+        engine.editKnob(param, "Set") { param.setBase(v) }
     }
 
     @ViewBuilder
@@ -95,14 +121,14 @@ struct Knob: View {
 
     private func dial(_ mappings: [MappingRuntime]) -> some View {
         let def = param.def
-        let norm = { (v: Float) -> Double in Double((v - def.min) / max(def.span, 1e-6)) }
+        let norm = { (v: Float) -> Double in Double(def.position(v)) }
         let baseN = norm(param.base)
         let liveN = norm(param.display)
         let zeroN = def.min < 0 && def.max > 0 ? norm(0) : 0
         // The range modulation can reach: positive and negative amounts add up separately.
         let mods = mappings.filter { $0.isActive && $0.enabled }
-        let up = Double(mods.reduce(Float(0)) { $0 + max($1.signedAmount, 0) })
-        let down = Double(mods.reduce(Float(0)) { $0 + min($1.signedAmount, 0) })
+        let up = norm(param.base + mods.reduce(Float(0)) { $0 + max($1.signedAmount, 0) } * def.span)
+        let down = norm(param.base + mods.reduce(Float(0)) { $0 + min($1.signedAmount, 0) } * def.span)
         let modulated = !mods.isEmpty
         return Canvas { ctx, size in
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -121,7 +147,7 @@ struct Knob: View {
             ctx.stroke(arc(0, 1, radius: r), with: .color(Theme.knobTrack), style: StrokeStyle(lineWidth: 3, lineCap: .round))
             ctx.stroke(arc(zeroN, baseN, radius: r), with: .color(Theme.accent), style: StrokeStyle(lineWidth: 3, lineCap: .round))
             if modulated {
-                ctx.stroke(arc(baseN + down, baseN + up, radius: r + 2.5), with: .color(Theme.modulation.opacity(0.35)),
+                ctx.stroke(arc(down, up, radius: r + 2.5), with: .color(Theme.modulation.opacity(0.35)),
                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 let dot = point(liveN, r + 2.5)
                 ctx.fill(Path(ellipseIn: CGRect(x: dot.x - 2, y: dot.y - 2, width: 4, height: 4)), with: .color(Theme.modulation))
@@ -137,13 +163,16 @@ struct Knob: View {
         DragGesture(minimumDistance: 1)
             .onChanged { v in
                 if dragStart == nil {
-                    dragStart = param.base
+                    dragStart = param.def.position(param.base)
                     dragSnapshot = engine.currentSnapshot()
                     if let targetPath { engine.selectedTarget = targetPath; engine.selectDevice(devicePath(targetPath)) }
+                    engine.activeKnob = param
                 }
                 let fine: Float = NSEvent.modifierFlags.contains(.shift) ? 0.1 : 1
-                let delta = Float(-v.translation.height / 160) * param.def.span * fine
-                param.setBase((dragStart ?? param.base) + delta)
+                // In knob positions, so a tapered knob moves finely where its low end is spread out.
+                let delta = Float(-v.translation.height / 160) * fine
+                let start = dragStart ?? param.def.position(param.base)
+                param.setBase(param.def.value(atPosition: start + delta))
             }
             .onEnded { _ in
                 if let snapshot = dragSnapshot, let current = engine.currentSnapshot(), snapshot != current {
@@ -179,7 +208,7 @@ struct Knob: View {
         let d = param.def
         var t = "\(d.name)  \(Knob.format(d.min, d))…\(Knob.format(d.max, d))  default \(Knob.format(d.defaultValue, d))"
         for m in mappings { t += "\n← \(m.sourceLabel)\(m.isActive ? "" : " (inactive)")" }
-        t += "\nDrag to change, Shift for fine, double-click to reset"
+        t += "\nDrag to change, Shift for fine, double-click to type a value, Delete to reset"
         if targetPath != nil { t += "\nDrop an output here, or right-click to map" }
         return t
     }

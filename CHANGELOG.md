@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **LFO Hz is finer at the low end:** the knob follows a curve, so its first half covers 0–2.5 Hz.
+- **Type a knob's value:** double-click a knob to type a value; it's clamped to the knob's range. To reset a knob, click it and press Delete.
+
 - **Simulation generators:** a new browser section for geos driven by a simulation. City moves there.
 - **Jenga geo:** a hand builds a tower on a plinth, a block each time Place fires. Quake shakes the plinth: kicks chip at the top, a drop brings it down, fallen blocks tumble and crumble away, and the hand builds again. A Spectrum mapped in shakes the stage too (its bass bounces the plinth and can bring the tower down, its mids sway it, stage sets how hard) and raises the ground.
 - **Simulations read the spectrum:** a simulated geo sees the spectrum mapped into its Spectrum input on the CPU, without a GPU readback.

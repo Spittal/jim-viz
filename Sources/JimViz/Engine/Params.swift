@@ -22,8 +22,23 @@ struct ParamDef: Hashable {
     /// and hands the shader `p.<name>Phase` (= ∫ value dt), so turning the knob changes how fast
     /// things move without jumping, as `time × value` would.
     var isRate = false
+    /// The knob's curve: its position n (0–1) gives `min + span × nᵗᵃᵖᵉʳ`. Above 1, the low end
+    /// gets more of the knob's travel, as on a log scale but reaching `min` (LFO Hz).
+    var taper: Float = 1
 
     var span: Float { max - min }
+
+    /// Knob position (0–1) of a value, following the taper.
+    func position(_ v: Float) -> Float {
+        let n = Swift.min(Swift.max((v - min) / Swift.max(span, 1e-6), 0), 1)
+        return taper == 1 ? n : pow(n, 1 / taper)
+    }
+
+    /// The value at a knob position (0–1), following the taper.
+    func value(atPosition n: Float) -> Float {
+        let c = Swift.min(Swift.max(n, 0), 1)
+        return min + span * (taper == 1 ? c : pow(c, taper))
+    }
 
     func clamp(_ v: Float) -> Float {
         let c = Swift.min(Swift.max(v, min), max)

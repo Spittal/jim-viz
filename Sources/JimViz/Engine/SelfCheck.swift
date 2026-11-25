@@ -213,6 +213,17 @@ enum SelfCheck {
         exit(0)
     }
 
+    /// A tapered knob gives its low end more travel, and position and value round-trip.
+    private static func checkTaper() -> String? {
+        guard let hz = LFOParams.defs.first(where: { $0.name == "hz" }), hz.taper > 1 else { return "LFO hz has no taper" }
+        guard hz.value(atPosition: 0) == hz.min, hz.value(atPosition: 1) == hz.max else { return "ends moved" }
+        guard hz.value(atPosition: 0.5) < hz.min + hz.span * 0.2 else { return "half-way is \(hz.value(atPosition: 0.5)) Hz" }
+        for v: Float in [0, 0.01, 0.5, 3, 20] where abs(hz.value(atPosition: hz.position(v)) - v) > 1e-3 {
+            return "\(v) Hz doesn't round-trip"
+        }
+        return nil
+    }
+
     /// Outputs, modulation and MIDI mappings, LFOs, copy/paste and duplicate. Nothing is saved
     /// except the duplicate, which is deleted again.
     private static func checkMappings(engine: Engine) -> String? {
@@ -414,6 +425,17 @@ enum SelfCheck {
         engine.selectDevice("generator")
         guard engine.selectedDevice == "mod.lfo2" else { return "selection moved while mapping" }
         engine.mapSource = nil
+        // Delete resets the knob last clicked, not its device; selecting a device lets Delete remove it again.
+        let hzKnob = engine.current!.modulators.first { $0.id == "lfo2" }!.bank["hz"]!
+        hzKnob.setBase(7)
+        _ = engine.knobClicked("mod.lfo2.hz", keepMapping: false)
+        engine.activeKnob = hzKnob
+        engine.deleteHighlighted()
+        guard hzKnob.base == hzKnob.def.defaultValue, engine.current?.modulators.contains(where: { $0.id == "lfo2" }) == true else {
+            return "Delete didn't reset the clicked knob"
+        }
+        engine.selectDevice("mod.lfo2")
+        guard engine.activeKnob == nil else { return "selecting a device kept the knob active" }
         engine.addMapping(source: "mod.lfo2.out", target: "generator.spin")
         engine.addMapping(source: "mod.lfo.out", target: "mod.lfo2.depth")
         // Sync via mapping only: typed stream mapping.
@@ -2768,6 +2790,12 @@ enum SelfCheck {
             print("FAIL mappings: \(problem)"); failures += 1
         } else {
             print("ok   mappings (outputs, modulation, MIDI inputs, LFOs, paused devices, copy/paste, duplicate)")
+        }
+
+        if let problem = checkTaper() {
+            print("FAIL taper: \(problem)"); failures += 1
+        } else {
+            print("ok   taper (LFO Hz spreads its low end over the knob)")
         }
 
         if let problem = checkRates(engine: engine) {

@@ -57,7 +57,7 @@ struct JimVizApp: App {
                 Divider()
                 Button("Delete") { engine.deleteHighlighted() }
                     .keyboardShortcut(.delete, modifiers: [])
-                    .disabled(engine.selectedDevice == nil && engine.currentURL == nil)
+                    .disabled(engine.activeKnob == nil && engine.selectedDevice == nil && engine.currentURL == nil)
                 Button("Copy Mappings") { engine.copyMappings() }
                     .keyboardShortcut("c", modifiers: [.command, .option])
                 Button("Paste Mappings") { engine.pasteMappings() }

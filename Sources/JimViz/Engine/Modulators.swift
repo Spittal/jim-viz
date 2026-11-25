@@ -35,7 +35,7 @@ enum LFOParams {
     static let defs: [ParamDef] = [
         ParamDef(name: "shape", defaultValue: 0, min: 0, max: Float(shapes.count - 1), isInt: true, labels: shapes),
         ParamDef(name: "rate", defaultValue: 14, min: 0, max: Float(rates.count - 1), isInt: true, labels: rates.map(\.label)),
-        ParamDef(name: "hz", defaultValue: 0.5, min: 0, max: 20, isInt: false),
+        ParamDef(name: "hz", defaultValue: 0.5, min: 0, max: 20, isInt: false, taper: 3),
         ParamDef(name: "phase", defaultValue: 0, min: 0, max: 1, isInt: false),
         ParamDef(name: "depth", defaultValue: 1, min: 0, max: 1, isInt: false),
     ]
