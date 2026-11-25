@@ -161,8 +161,9 @@ The aesthetic reference is Autechre and Aphex Twin visuals: weird, glitchy and a
     neighbouring scenes. A scene is in at most one folder, and folders don't nest. The files
     stay flat in `Scenes`.
   - `JIMVIZ_LIBRARY` overrides it.
-- **Content: the repo's `Content/`** holds `Shaders`, `Maps` and `Models` (BeatNet's weights for beat tracking, StemgenRT's for stem separation), which are code and ship
+- **Content: the repo's `Content/`** holds `Shaders`, `Maps`, `Models` (BeatNet's weights for beat tracking, StemgenRT's for stem separation) and `Motion` (the Dancer's motion-capture clips, baked from AIST++; see its `ATTRIBUTION.md`), which are code and ship
   with the app.
+
   - `scripts/run.sh` points `JIMVIZ_CONTENT` at it, so shaders hot-reload.
   - The bundled app reads its own copy in `Contents/Resources/Content`.
 - **Caches: `~/Library/Caches/jim-viz`** holds the compiled depth model.
@@ -180,6 +181,7 @@ scripts/check.sh [/tmp/snaps]   # headless self-check on a scratch copy of your 
 scripts/bundle.sh [1.2.3]       # build/Jim Viz.app
 scripts/release.sh 1.2.3 [--publish]  # check, bundle, build/jim-viz-1.2.3.dmg; --publish tags and releases
 scripts/fetch-depth-model.sh    # once: Core ML depth model (~50 MB)
+scripts/bake-motion.py --fetch  # rebake the Dancer's clips in Content/Motion from AIST++ (only after changing the baker)
 ```
 
 - **`scripts/check.sh` must pass before you report work as done.**

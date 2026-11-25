@@ -13,7 +13,7 @@ app="build/Jim Viz.app"
 rm -rf $app
 mkdir -p $app/Contents/MacOS $app/Contents/Resources/Content
 cp .build/release/jim-viz $app/Contents/MacOS/jim-viz
-cp -R Content/Shaders Content/Maps Content/Models $app/Contents/Resources/Content/
+cp -R Content/Shaders Content/Maps Content/Models Content/Motion $app/Contents/Resources/Content/
 cp Resources/AppIcon.icns $app/Contents/Resources/
 # The depth model (scripts/fetch-depth-model.sh), if it's been fetched.
 model="$HOME/Library/Application Support/jim-viz/Models/DepthAnythingV2SmallF16.mlpackage"

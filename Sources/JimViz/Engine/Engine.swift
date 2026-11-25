@@ -740,6 +740,21 @@ final class Engine {
         }
     }
 
+    /// Steps the active knob up or down: an int knob by one, any other by 1% of its travel
+    /// (0.1% when fine), in knob positions so a tapered knob steps finely at its spread-out end.
+    func nudgeActiveKnob(_ direction: Int, fine: Bool) {
+        guard let knob = activeKnob else { return }
+        let def = knob.def
+        editKnob(knob, "Adjust") {
+            if def.isInt {
+                knob.setBase(knob.base + Float(direction))
+            } else {
+                let step: Float = fine ? 0.001 : 0.01
+                knob.setBase(def.value(atPosition: def.position(knob.base) + Float(direction) * step))
+            }
+        }
+    }
+
     /// Runs an edit to a knob as one undo step, saving the scene if it changed anything.
     func editKnob(_ param: Param, _ verb: String, _ edit: () -> Void) {
         let snapshot = currentSnapshot()
@@ -1098,7 +1113,8 @@ final class Engine {
             }
             let old = reuse?.generators.first { $0.key == slotKey }
             let same = old?.type == slot.type && old?.preset == slot.preset
-            let bank = ParamBank(defs: shader.params, values: slot.params ?? [:], reuse: same ? old?.bank : nil,
+            let bank = ParamBank(defs: shader.params, unpacked: GeneratorPlacement.defs, values: slot.params ?? [:],
+                                 reuse: same ? old?.bank : nil,
                                  triggers: shader.triggers.map(\.name))
             let label = presetName(.generator, slot.type, slot.preset) ?? Tools.label(.generator, slot.type)
             generators.append(GeneratorRuntime(id: slotId, key: slotKey, type: slot.type, preset: slot.preset, label: label,

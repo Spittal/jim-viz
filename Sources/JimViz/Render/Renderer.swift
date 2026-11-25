@@ -22,6 +22,22 @@ struct GeneratorPipelines {
     let background: MTLRenderPipelineState
 }
 
+/// Every generator's Placement knobs: where the geo sits in the world. The tool reads them
+/// itself, moving the camera it hands the shader the other way, so they're left out of the
+/// shader's uniforms and every geo moves without its shader knowing.
+enum GeneratorPlacement {
+    static let defs: [ParamDef] = ["x", "y", "z"].map {
+        ParamDef(name: $0, defaultValue: 0, min: -20, max: 20, isInt: false, group: "Placement")
+    }
+
+    /// The camera as seen from the geo's own space: the geo sits at (x, y, z).
+    static func camera(_ cam: CameraUniforms, _ bank: ParamBank) -> CameraUniforms {
+        let t = SIMD3(bank.live("x"), bank.live("y"), bank.live("z"))
+        guard t != .zero else { return cam }
+        return CameraUniforms(viewProj: cam.viewProj * .translation(t), position: cam.position - SIMD4(t, 0))
+    }
+}
+
 final class GeneratorRuntime: Identifiable {
     let id: String
     let key: String
@@ -805,7 +821,7 @@ final class Renderer {
         encodeVideoSources(cmd, scene, &f)
         f.resolution = SIMD2(Float(outputSize.width), Float(outputSize.height))
         for pal in scene.boundPalettes { updatePalette(pal) }
-        var cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
+        let cam = cameraUniforms(scene.camera, scene.cameraMotion, frame: f)
 
         // Scene pass.
         let rp = MTLRenderPassDescriptor()
@@ -847,7 +863,8 @@ final class Renderer {
                     enc.setFragmentBytes($0, length: $1, index: 1)
                     enc.setVertexBytes($0, length: $1, index: 2)
                 }
-                enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
+                var genCam = GeneratorPlacement.camera(cam, gen.bank)
+                enc.setFragmentBytes(&genCam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
                 enc.setRenderPipelineState(gen.pipelines.background)
                 enc.setDepthStencilState(depthOff)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
@@ -867,13 +884,14 @@ final class Renderer {
                     enc.setFragmentBytes($0, length: $1, index: 1)
                     enc.setVertexBytes($0, length: $1, index: 2)
                 }
-                enc.setFragmentBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
+                var genCam = GeneratorPlacement.camera(cam, gen.bank)
+                enc.setFragmentBytes(&genCam, length: MemoryLayout<CameraUniforms>.stride, index: 2)
 
                 enc.setCullMode(.none)
                 enc.setVertexBuffer(gen.vertexBuffer, offset: 0, index: 0)
                 if let sim = gen.sim { enc.setVertexBuffer(sim.current, offset: 0, index: 4) }
                 enc.setVertexBytes(&f, length: MemoryLayout<FrameUniforms>.stride, index: 1)
-                enc.setVertexBytes(&cam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
+                enc.setVertexBytes(&genCam, length: MemoryLayout<CameraUniforms>.stride, index: 3)
                 let instances = gen.mesh.instanceCount(gen.bank.live) ?? max(1, Int(gen.bank["instances"]?.live ?? 1))
                 func draw(_ pipeline: MTLRenderPipelineState, _ depth: MTLDepthStencilState) {
                     enc.setRenderPipelineState(pipeline)

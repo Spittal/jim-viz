@@ -25,6 +25,10 @@ extension simd_float4x4 {
         ))
     }
 
+    static func translation(_ t: SIMD3<Float>) -> simd_float4x4 {
+        simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(t, 1)))
+    }
+
     static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
         let f = simd_normalize(target - eye)
         let s = simd_normalize(simd_cross(f, up))

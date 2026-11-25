@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// An Ableton-style rotary knob.
-/// Drag vertically to change, hold Shift for fine control, double-click to type a value
-/// (clamped to the knob's range). Click it then press Delete to reset it.
+/// Drag vertically to change, hold Shift for fine control, double-click to reset it, and
+/// double-click its label to type a value (clamped to the knob's range). Once clicked, Delete
+/// resets it and the up and down arrows step it (Shift for fine).
 /// Mappable knobs (those with a `targetPath`) also receive an output when clicked while one is
 /// waiting to be mapped, or when one is dropped on them (the chain's drop delegate does the
 /// routing), and show a cyan arc for the range their mappings can reach.
@@ -31,6 +32,8 @@ struct Knob: View {
                 .foregroundStyle(selected ? Theme.text : Theme.textDim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .contentShape(Rectangle())
+                .onTapGesture { click(double: startEdit) }
 
             ZStack {
                 dial(mappings).frame(width: 30, height: 30)
@@ -42,17 +45,7 @@ struct Knob: View {
             }
             .contentShape(Rectangle())
             .gesture(mapMode ? nil : drag)
-            // One tap handler: SwiftUI never fires a count-2 tap declared after a count-1 one.
-            .onTapGesture {
-                if let targetPath, engine.knobClicked(targetPath, keepMapping: NSEvent.modifierFlags.contains(.shift)) {
-                    return
-                }
-                engine.activeKnob = param
-                if NSApp.currentEvent?.clickCount == 2 {
-                    editText = Knob.format(param.base, param.def)
-                    editFocused = true
-                }
-            }
+            .onTapGesture { click(double: { engine.editKnob(param, "Reset") { param.reset() } }) }
 
             if let editText {
                 TextField("", text: Binding(get: { editText }, set: { self.editText = $0 }))
@@ -78,6 +71,38 @@ struct Knob: View {
         .chainFrame(targetPath.map { ChainDropDelegate.knobKey($0) } ?? "")
         .contextMenu { if let targetPath { menu(targetPath, mappings) } }
     }
+
+    /// A click on the dial or label: maps a waiting output, or selects the knob and, on a
+    /// double-click, runs `double`. One tap handler each, as SwiftUI never fires a count-2 tap
+    /// declared after a count-1 one.
+    private func click(double: () -> Void) {
+        if let targetPath, engine.knobClicked(targetPath, keepMapping: NSEvent.modifierFlags.contains(.shift)) {
+            return
+        }
+        engine.activeKnob = param
+        if NSApp.currentEvent?.clickCount == 2 { double() }
+    }
+
+    private func startEdit() {
+        editText = Knob.format(param.base, param.def)
+        editFocused = true
+    }
+
+    /// Lets the up and down arrows step the active knob. Keys typed into a text field or a list
+    /// (the Scenes sidebar) are left alone.
+    static func installArrowKeys(_ engine: Engine) {
+        guard arrowMonitor == nil else { return }
+        arrowMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let up = event.keyCode == 126, down = event.keyCode == 125
+            guard up || down, engine.activeKnob != nil,
+                  event.modifierFlags.isDisjoint(with: [.command, .option, .control]) else { return event }
+            let responder = event.window?.firstResponder
+            if responder is NSText || responder is NSTableView { return event }
+            engine.nudgeActiveKnob(up ? 1 : -1, fine: event.modifierFlags.contains(.shift))
+            return nil
+        }
+    }
+    nonisolated(unsafe) private static var arrowMonitor: Any?
 
     /// Applies a typed value, clamped to the knob's range. Int knobs also take a step's name.
     private func commitEdit() {
@@ -208,7 +233,7 @@ struct Knob: View {
         let d = param.def
         var t = "\(d.name)  \(Knob.format(d.min, d))…\(Knob.format(d.max, d))  default \(Knob.format(d.defaultValue, d))"
         for m in mappings { t += "\n← \(m.sourceLabel)\(m.isActive ? "" : " (inactive)")" }
-        t += "\nDrag to change, Shift for fine, double-click to type a value, Delete to reset"
+        t += "\nDrag to change, Shift for fine, double-click to reset, double-click the label to type a value, ↑↓ to step"
         if targetPath != nil { t += "\nDrop an output here, or right-click to map" }
         return t
     }

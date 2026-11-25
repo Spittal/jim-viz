@@ -434,6 +434,11 @@ enum SelfCheck {
         guard hzKnob.base == hzKnob.def.defaultValue, engine.current?.modulators.contains(where: { $0.id == "lfo2" }) == true else {
             return "Delete didn't reset the clicked knob"
         }
+        // The arrows step the active knob: 1% of its travel, or one step on an int knob.
+        engine.nudgeActiveKnob(1, fine: false)
+        guard hzKnob.base > hzKnob.def.defaultValue else { return "up arrow didn't raise the knob" }
+        engine.nudgeActiveKnob(-1, fine: false)
+        guard abs(hzKnob.base - hzKnob.def.defaultValue) < 1e-4 else { return "down arrow didn't step back" }
         engine.selectDevice("mod.lfo2")
         guard engine.activeKnob == nil else { return "selecting a device kept the knob active" }
         engine.addMapping(source: "mod.lfo2.out", target: "generator.spin")
@@ -1179,7 +1184,7 @@ enum SelfCheck {
     /// Every Low Poly and Simulation geo: listed under its category, its own knobs, starts
     /// unmapped, renders, and rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let categories = ["lowpoly": ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek",
+        let categories = ["lowpoly": ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer",
                                       "globe", "drive", "street", "ridges", "shoes", "instruments"],
                           "simulation": ["city", "jenga"]]
         for (category, geos) in categories {
@@ -1197,7 +1202,7 @@ enum SelfCheck {
         // Knobs that belong to one geo only.
         let own: [String: String] = ["sphere": "squash", "torus": "thickness", "plane": "jitter",
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
-                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
+                                     "hand": "pinkyCurl", "face": "vowel", "dancer": "travel", "globe": "ocean",
                                      "drive": "lane", "street": "footprint", "ridges": "history", "shoes": "shimmy",
                                      "instruments": "slide", "city": "traffic", "jenga": "quake"]
         for geo in geos {
@@ -1230,7 +1235,7 @@ enum SelfCheck {
             guard Array(titles.prefix(lead.count)) == lead, Array(titles.suffix(gated.count)) == gated else {
                 return "\(geo) sections out of order: \(titles.joined(separator: ", "))"
             }
-            if geo == "cube", titles != ["Instances", "Shape", "Surface", "Motion", "Look", "Intersection", "Spectrum", "Texture"] {
+            if geo == "cube", titles != ["Instances", "Shape", "Surface", "Motion", "Look", "Intersection", "Placement", "Spectrum", "Texture"] {
                 return "cube sections out of order: \(titles.joined(separator: ", "))"
             }
             guard engine.current?.streamBindings.keys.contains(where: { $0.hasPrefix(gen.key + ".") }) == false else {
@@ -1286,8 +1291,8 @@ enum SelfCheck {
                 _ = engine.renderOffscreen(engine.current!, frames: 1, snapshot: nil)
                 w.reset(); l.reset()
             }
-            if geo == "dancer" || geo == "shrek" {
-                let sizes = ["limbWidth", "limbLength", "headSize"] + (geo == "shrek" ? ["belly", "earSize"] : [])
+            if geo == "dancer" {
+                let sizes = ["limbWidth", "limbLength", "headSize", "belly", "earSize", "hair"]
                 let knobs = sizes.compactMap { gen.bank[$0] }
                 guard knobs.count == sizes.count, knobs.allSatisfy({ $0.def.min == 0 }) else {
                     return "\(geo) \(sizes.joined(separator: "/")) min should be 0"
@@ -1911,7 +1916,7 @@ enum SelfCheck {
         return nil
     }
 
-    /// A dancing figure (Dancer, Shrek, Shoes), on a scene built in memory (a static camera on the front): its Sync input starts
+    /// A dancing figure (Dancer, Shoes), on a scene built in memory (a static camera on the front): its Sync input starts
     /// unmapped, the routine draws a figure standing on the floor all the way through, it moves
     /// at tempo and holds still at tempo 0, and with Audio In · Sync mapped its tempo follows the
     /// beat instead of the seconds.
@@ -1988,8 +1993,145 @@ enum SelfCheck {
         return nil
     }
 
+    /// The Dancer's performances on every body, the sim stepped at 60 fps through each style
+    /// (Content/Motion's clips) at 120 BPM: every style has plenty to pick from; every clip reads
+    /// as whole bars at a sane tempo; the feet stay on or over the floor; the legs and arms keep
+    /// their length; nothing pops from one frame to the next, a handover between performances
+    /// included; every one starts on a bar line of the dance's beat and is danced on the beat, not
+    /// at half or double time; it dances several in turn; and at a held beat it holds still. With
+    /// a snapshot folder, pictures of each style on each body.
+    private static func checkDanceStyles(engine: Engine, snapshotDir: URL?) -> String? {
+        typealias J = DancerModel.Joint
+        for (style, clips) in zip(MotionLibrary.styles, MotionLibrary.clips) where clips.count < 10 {
+            return "\(style) has \(clips.count) performances in Content/Motion"
+        }
+        for clip in MotionLibrary.clips.joined() {
+            guard clip.bpm >= 60, clip.bpm <= 240, clip.beats.truncatingRemainder(dividingBy: 4) == 0,
+                  clip.firstBeat + clip.beats * 60 / clip.bpm <= Float(clip.frames) / clip.fps + 0.5 else {
+                return "\(clip.name): \(clip.beats) beats at \(clip.bpm) BPM don't fit its \(clip.frames) frames"
+            }
+        }
+        var styles = 0
+        for (model, modelName) in ["Male", "Female", "Shrek"].enumerated() {
+            let file = SceneFile(name: "dance", inputs: [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 4.5, "y": 0, "z": 0, "fov": 55]),
+                                 palettes: [],
+                                 generators: [GeneratorSlot(id: nil, type: "dancer", preset: nil,
+                                                            params: ["bgGlow": 0, "fog": 0, "noiseAmount": 0, "model": Float(model)])],
+                                 effects: [], mappings: [])
+            guard let scene = engine.build(file, reuse: nil), let gen = scene.generator, let sim = gen.sim as? DanceSim,
+                  let tempo = gen.bank["tempo"], let style = gen.bank["style"] else { return "didn't build: \(engine.errorSummary ?? "")" }
+            let m = DancerModel.all[model]
+            guard gen.vertexCount > 0 else { return "\(modelName) built an empty mesh" }
+            guard style.def.labels.count == MotionLibrary.styles.count else { return "style knob has \(style.def.labels.count) steps" }
+            for (i, name) in MotionLibrary.styles.enumerated() {
+                let what = "\(name) on \(modelName)", clips = MotionLibrary.clips[i]
+                style.setBase(Float(i))
+                tempo.phase = 0
+                sim.step(gen.bank, dt: 1.0 / 60, spectrum: nil)
+                guard (sim.clip == nil) == clips.isEmpty else { return "\(what): \(clips.count) clips, but \(sim.clip?.name ?? "none") playing" }
+                if clips.isEmpty { continue }
+                if model == 0 { styles += 1 }
+                var last = sim.position, heard = Set<String>()
+                // 240 beats at 120 BPM: through several performances and the handovers between them.
+                for frame in 1...7200 {
+                    tempo.phase = Double(frame) / 60
+                    sim.step(gen.bank, dt: 1.0 / 60, spectrum: nil)
+                    heard.insert(sim.clip!.name)
+                    // Every clip starts on one of the dance's bar lines, so its beats are the dance's.
+                    guard sim.startBeat.truncatingRemainder(dividingBy: 4) == 0, sim.startBeat <= tempo.phase * 2 else {
+                        return "\(what): \(sim.clip!.name) started off the bar, at beat \(sim.startBeat)"
+                    }
+                    guard sim.fold == 1 else { return "\(what): \(sim.clip!.name) (\(sim.clip!.bpm) BPM) danced at \(sim.fold)× the beat" }
+                    let p = sim.position
+                    let at = "\(sim.clip!.name) at beat " + String(format: "%.2f", tempo.phase * 2)
+                    guard p.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }) else { return "\(what): not finite, \(at)" }
+                    for side in 0..<2 {
+                        guard p[J.ankleL + side].y > DanceSim.floorY + m.ankleHeight * 0.8 - 1e-3,
+                              p[J.toesL + side].y > DanceSim.floorY + m.ballHeight - 1e-3 else { return "\(what): a foot through the floor, \(at)" }
+                        let thigh = simd_distance(p[J.hipL + side], p[J.kneeL + side]), shin = simd_distance(p[J.kneeL + side], p[J.ankleL + side])
+                        guard abs(thigh - m.lengths[J.hipL]) < 1e-3, abs(shin - m.lengths[J.kneeL]) < 1e-3 else { return "\(what): a leg stretched, \(at)" }
+                        let upper = simd_distance(p[J.shoulderL + side], p[J.elbowL + side]), fore = simd_distance(p[J.elbowL + side], p[J.wristL + side])
+                        guard abs(upper - m.lengths[J.shoulderL]) < 1e-3, abs(fore - m.lengths[J.elbowL]) < 1e-3 else { return "\(what): an arm stretched, \(at)" }
+                    }
+                    // The head stays over the floor: the hips were baked in hip heights above it.
+                    guard p[J.head].y > DanceSim.floorY else { return "\(what): the head is under the floor, \(at)" }
+                    // A pop is a joint further in a frame than the bake lets any move (15 m/s on its
+                    // reference body), sped up a third for the tempo and a quarter for a long-limbed body.
+                    let moves = zip(p, last).map { simd_distance($0, $1) }
+                    let jump = moves.max() ?? 0
+                    guard jump < 15 * 1.3 * 1.25 / 60 else {
+                        return "\(what): joint \(moves.firstIndex(of: jump) ?? 0) popped \(jump) in a frame, \(at)"
+                    }
+                    last = p
+                }
+                // Several performances in those 240 beats.
+                guard heard.count >= 3 else {
+                    return "\(what): danced only \(heard.sorted())"
+                }
+                // Held at a beat, it settles and stays.
+                for _ in 0..<240 { sim.step(gen.bank, dt: 1.0 / 60, spectrum: nil) }
+                let settled = sim.position
+                sim.step(gen.bank, dt: 1.0 / 60, spectrum: nil)
+                let still = zip(sim.position, settled).map { simd_distance($0, $1) }.max() ?? 0
+                guard still < 1e-4 else { return "\(what): still moving \(still) at a held beat" }
+                if model == 1 && i == 0 {
+                    let start = CACurrentMediaTime()
+                    for frame in 0..<600 { tempo.phase = Double(frame) / 60; sim.step(gen.bank, dt: 1.0 / 60, spectrum: nil) }
+                    print(String(format: "     dancer %.3f ms a step", (CACurrentMediaTime() - start) / 600 * 1000))
+                }
+                if let dir = snapshotDir {
+                    for beat in [2.0, 6.5, 11.0, 15.5] {
+                        tempo.phase = beat / 2
+                        _ = engine.renderOffscreen(scene, frames: 1, snapshot: dir.appendingPathComponent("dance-\(modelName)-\(name)-\(beat).png"))
+                    }
+                }
+            }
+        }
+        print("     dancer: \(styles) of \(MotionLibrary.styles.count) styles have clips here, \(MotionLibrary.clips.joined().count) clips")
+        return nil
+    }
+
     /// Low Poly Instances layout (Grid, Cube), Brownian motion and Intersection blending, on a
     /// scene built in memory: a static camera on the front, one geo, nothing mapped.
+    /// Placement: every geo has x, y and z knobs in Placement, at 0, read by the tool rather than
+    /// its shader, and moving them moves the geo on screen: from a camera on +x looking at the
+    /// centre, +z moves it left and +y up.
+    private static func checkPlacement(engine: Engine) -> String? {
+        func scene(_ geo: String, _ params: [String: Float]) -> RenderScene? {
+            let file = SceneFile(name: "placement", inputs: [], modulators: [],
+                                 camera: CameraSlot(type: "static", preset: nil, params: ["x": 12, "y": 0, "z": 0, "fov": 55]),
+                                 palettes: [],
+                                 generators: [GeneratorSlot(id: nil, type: geo, preset: nil,
+                                                            params: ["bgGlow": 0, "fog": 0, "scale": 0.5].merging(params) { $1 })],
+                                 effects: [], mappings: [])
+            return engine.build(file, reuse: nil)
+        }
+        for geo in engine.tools.filter({ $0.kind == .generator }).map(\.name) {
+            guard let s = scene(geo, [:]), let gen = s.generator else { return "\(geo) didn't build: \(engine.errorSummary ?? "")" }
+            for axis in ["x", "y", "z"] {
+                guard let p = gen.bank[axis], p.base == 0, p.def.group == "Placement" else { return "\(geo) has no \(axis) at 0 in Placement" }
+                guard !gen.bank.packedDefs.contains(where: { $0.name == axis }) else { return "\(geo)'s shader is handed \(axis)" }
+            }
+            guard s.mappings.isEmpty else { return "\(geo)'s placement connected itself" }
+            guard let moved = scene(geo, ["x": -3, "y": 2, "z": 4]) else { return "\(geo) didn't build placed" }
+            _ = engine.renderOffscreen(moved, frames: 1, snapshot: nil)
+            if let err = engine.errorSummary { return "\(geo) placed: \(err)" }
+        }
+        for geo in ["sphere", "cube", "hand", "torus"] {
+            guard let home = scene(geo, [:]), let placed = scene(geo, ["y": 1.5, "z": 2]) else { return "\(geo) didn't build" }
+            _ = engine.renderOffscreen(home, frames: 1, snapshot: nil)
+            let a = engine.coverage(engine.renderer.history)
+            _ = engine.renderOffscreen(placed, frames: 1, snapshot: nil)
+            let b = engine.coverage(engine.renderer.history)
+            guard a.fraction > 0.001, b.fraction > 0.001 else { return "\(geo) didn't draw: \(a.fraction), \(b.fraction)" }
+            guard b.centroid.x < a.centroid.x - 0.05, b.centroid.y < a.centroid.y - 0.05 else {
+                return "\(geo) at y 1.5, z 2 moved from \(a.centroid) to \(b.centroid), expected left and up"
+            }
+        }
+        return nil
+    }
+
     private static func checkInstancing(engine: Engine) -> String? {
         func scene(_ geo: String, _ params: [String: Float]) -> RenderScene? {
             let base: [String: Float] = ["bgGlow": 0, "fog": 0, "noiseAmount": 0, "spikes": 0, "scale": 0.5]
@@ -2901,6 +3043,12 @@ enum SelfCheck {
             print("ok   encapsulation (scenes own their Audio In and beat, beat continues across a switch, no broadcast, hardware idle)")
         }
 
+        if let problem = checkPlacement(engine: engine) {
+            print("FAIL placement: \(problem)"); failures += 1
+        } else {
+            print("ok   placement (every geo has x, y, z in Placement at 0, kept from its shader; moving them moves the geo)")
+        }
+
         if let problem = checkLowPoly(engine: engine) {
             print("FAIL low poly: \(problem)"); failures += 1
         } else {
@@ -2941,12 +3089,17 @@ enum SelfCheck {
         } else {
             print("ok   jenga (starts unmapped and built, stands still, Place adds blocks, kicks chip it and a drop brings it down, a spectrum's bass shakes it, the fallen fade, the hand rebuilds)")
         }
-        for geo in ["dancer", "shrek", "shoes"] {
+        for geo in ["dancer", "shoes"] {
             if let problem = checkDancer(engine: engine, geo: geo, snapshotDir: snapshotDir) {
                 print("FAIL \(geo): \(problem)"); failures += 1
             } else {
                 print("ok   \(geo) (Sync starts unmapped, the routine stands on the floor, dances at tempo, follows the beat when synced)")
             }
+        }
+        if let problem = checkDanceStyles(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL dance styles: \(problem)"); failures += 1
+        } else {
+            print("ok   dance styles (every clip on every body: whole bars, feet on the floor, limbs their length, no pops through handovers, holds still at a held beat)")
         }
         if let problem = checkInstancing(engine: engine) {
             print("FAIL instancing: \(problem)"); failures += 1

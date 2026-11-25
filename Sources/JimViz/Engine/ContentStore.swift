@@ -30,19 +30,23 @@ final class ContentStore {
     }()
     /// Model weights that ship with the app (BeatNet).
     static var modelsDir: URL { contentDir.appendingPathComponent("Models") }
+    /// The library folder: `JIMVIZ_LIBRARY`, or `~/Library/Application Support/jim-viz`.
+    static let libraryDir: URL = {
+        if let path = ProcessInfo.processInfo.environment["JIMVIZ_LIBRARY"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("jim-viz", isDirectory: true)
+    }()
+    /// Motion-capture clips for the Dancer, a folder a style (scripts/bake-motion.py).
+    static var motionDir: URL { contentDir.appendingPathComponent("Motion") }
 
     private var mtimes: [URL: Date] = [:]
     private var timer: Timer?
 
     init() {
         let fm = FileManager.default
-        let env = ProcessInfo.processInfo.environment
-        if let path = env["JIMVIZ_LIBRARY"], !path.isEmpty {
-            library = URL(fileURLWithPath: path, isDirectory: true)
-        } else {
-            library = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("jim-viz", isDirectory: true)
-        }
+        library = Self.libraryDir
         content = Self.contentDir
         guard fm.fileExists(atPath: content.appendingPathComponent("Shaders").path) else {
             fatalError("No shaders in \(content.path). Run scripts/run.sh, or set JIMVIZ_CONTENT to the repo's Content folder.")

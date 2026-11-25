@@ -16,6 +16,7 @@ struct JimVizApp: App {
                 .environment(engine)
                 .frame(minWidth: 980, minHeight: 620)
                 .preferredColorScheme(.dark)
+                .onAppear { Knob.installArrowKeys(engine) }
         }
         .defaultSize(width: 1280, height: 820)
         .commands {

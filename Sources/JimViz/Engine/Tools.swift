@@ -85,7 +85,6 @@ enum Tools {
             case "drive": return "car.side"
             case "face": return "face.dashed"
             case "globe": return "globe"
-            case "shrek": return "ear"
             case "ridges": return "waveform.path.ecg"
             case "shoes": return "shoe.2"
             case "instruments": return "music.quarternote.3"

@@ -22,7 +22,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, street, city, jenga, hand, face, dancer, shrek, globe, ridges, shoes, instruments
+    case sphere, torus, plane, cube, shards, wheel, drive, street, city, jenga, hand, face, dancer, globe, ridges, shoes, instruments
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -39,7 +39,8 @@ enum MeshShape: String, CaseIterable {
         case .jenga: return ["sides"]
         case .hand: return ["sides", "segments"]
         case .face: return ["detail"]
-        case .dancer, .shrek, .shoes: return ["sides"]
+        case .dancer: return ["model", "sides"]
+        case .shoes: return ["sides"]
         case .globe: return ["detail", "facets"]
         case .ridges: return ["lines", "segments"]
         case .instruments: return ["sides"]
@@ -58,11 +59,12 @@ enum MeshShape: String, CaseIterable {
     }
 
     /// The simulation a shape's shader reads at buffer(4), if it has one: City's cars and people,
-    /// Jenga's blocks and hand.
+    /// Jenga's blocks and hand, the Dancer's posed bones.
     func makeSim(device: MTLDevice) -> GeoSim? {
         switch self {
         case .city: return CitySim(device: device)
         case .jenga: return JengaSim(device: device)
+        case .dancer: return DanceSim(device: device)
         default: return nil
         }
     }
@@ -109,7 +111,8 @@ struct MeshBuilder {
         case .jenga: return [min(max(i("sides"), 3), 16)]
         case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
         case .face: return [min(max(i("detail"), 0), 4)]
-        case .dancer, .shrek, .shoes: return [min(max(i("sides"), 3), 16)]
+        case .dancer: return [min(max(i("model"), 0), DancerModel.all.count - 1), min(max(i("sides"), 3), 16)]
+        case .shoes: return [min(max(i("sides"), 3), 16)]
         case .globe: return [min(max(i("detail"), 0), WorldMap.tolerances.count - 1), min(max(i("facets"), 0), 5)]
         case .ridges: return [min(max(i("lines"), 1), 128), min(max(i("segments"), 2), 256)]
         case .instruments: return [min(max(i("sides"), 3), 16)]
@@ -131,8 +134,7 @@ struct MeshBuilder {
         case .jenga: b.jenga(sides: t[0])
         case .hand: b.hand(sides: t[0], segments: t[1])
         case .face: b.face(detail: t[0])
-        case .dancer: b.dancer(sides: t[0])
-        case .shrek: b.shrek(sides: t[0])
+        case .dancer: b.dancer(sides: t[1], model: t[0])
         case .globe: b.globe(detail: t[0], facets: t[1])
         case .ridges: b.ridges(lines: t[0], segments: t[1])
         case .shoes: b.shoes(sides: t[0])
