@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-11-25)
 
 - **Placement on every geo:** x, y and z knobs, in a Placement section, move the whole generator through the world. They start at 0 and can be mapped like any knob.
 - **Folders are playlists:** a folder in the Scenes list is a playlist, played in the folder's order. The bottom bar shows the folder holding the scene playing, and sets its transitions. A link keeps its transition while its two scenes stay next to each other; any reorder that breaks it goes back to the default crossfade. The Playlists tab and the library's `Playlists` folder are gone.
