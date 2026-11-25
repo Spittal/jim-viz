@@ -14,7 +14,7 @@ import simd
 /// - building: a unit box for each tier, shape.x = the tier 0...2 (the ledge is tier 0's).
 /// - rooftop things, trees, lamps, signals, cars and people: metres from their foot (x forward
 ///   for cars and people); the spire's height is a fraction of its length. Legs: shape.x = side.
-/// Must match the constants in Shaders/generators/lowpoly/city.metal.
+/// Must match the constants in Shaders/generators/simulation/city.metal.
 enum CityPart: Int {
     case land, water, base, sidewalk, curb, wall, roof, ledge, tank, hvac, spire, trunk, crown
     case post, lamp, signal, car, cabin, skin, clothes, legs, pier
@@ -224,8 +224,9 @@ private struct CityKit {
 protocol GeoSim: AnyObject {
     /// The buffer the last step wrote. Render thread.
     var current: MTLBuffer { get }
-    /// Render thread, once per frame after the knobs are set and triggers counted.
-    func step(_ bank: ParamBank, dt: Float)
+    /// Render thread, once per frame after the knobs are set and triggers counted. `spectrum`
+    /// is the one mapped into the geo's Spectrum input, nil while unmapped.
+    func step(_ bank: ParamBank, dt: Float, spectrum: SpectrumTextures?)
 }
 
 /// City's traffic and people. Cars drive straight along their lane (right-hand traffic), keep
@@ -312,7 +313,7 @@ final class CitySim: GeoSim {
         pOn = [Bool](repeating: false, count: m)
     }
 
-    func step(_ bank: ParamBank, dt rawDt: Float) {
+    func step(_ bank: ParamBank, dt rawDt: Float, spectrum: SpectrumTextures?) {
         let dt = min(max(rawDt, 0), 0.1)
         let L = CityLayout(bank.live)
         if !started {

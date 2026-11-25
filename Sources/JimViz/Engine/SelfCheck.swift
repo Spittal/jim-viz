@@ -1166,12 +1166,17 @@ enum SelfCheck {
         return nil
     }
 
-    /// Every Low Poly geo: listed under its category, its own knobs, starts unmapped, renders, and
-    /// rebuilds its mesh when a mesh knob changes, by hand or by modulation.
+    /// Every Low Poly and Simulation geo: listed under its category, its own knobs, starts
+    /// unmapped, renders, and rebuilds its mesh when a mesh knob changes, by hand or by modulation.
     private static func checkLowPoly(engine: Engine) -> String? {
-        let geos = ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek", "globe", "drive", "street", "city", "ridges", "shoes", "instruments"]
-        let listed = engine.tools.filter { $0.kind == .generator && $0.category == "lowpoly" }.map(\.name)
-        guard Set(listed) == Set(geos) else { return "Low Poly lists \(listed), expected \(geos)" }
+        let categories = ["lowpoly": ["sphere", "torus", "plane", "cube", "shards", "wheel", "hand", "face", "dancer", "shrek",
+                                      "globe", "drive", "street", "ridges", "shoes", "instruments"],
+                          "simulation": ["city", "jenga"]]
+        for (category, geos) in categories {
+            let listed = engine.tools.filter { $0.kind == .generator && $0.category == category }.map(\.name)
+            guard Set(listed) == Set(geos) else { return "\(Tools.categoryLabel(category)) lists \(listed), expected \(geos)" }
+        }
+        let geos = categories.values.flatMap { $0 }
         guard !engine.tools.contains(where: { $0.name.hasPrefix("_") }) else { return "shared shader code listed as a tool" }
         let url = fixtureA!
         engine.load(url, animated: false)
@@ -1184,7 +1189,7 @@ enum SelfCheck {
                                      "cube": "inflate", "shards": "shardSpin", "wheel": "pitch",
                                      "hand": "pinkyCurl", "face": "vowel", "dancer": "flail", "shrek": "earSize", "globe": "ocean",
                                      "drive": "lane", "street": "footprint", "ridges": "history", "shoes": "shimmy",
-                                     "instruments": "slide", "city": "traffic"]
+                                     "instruments": "slide", "city": "traffic", "jenga": "quake"]
         for geo in geos {
             while let gen = engine.current?.generators.first { engine.removeGenerator(key: gen.key) }
             engine.apply(.generator, geo)
@@ -1240,10 +1245,10 @@ enum SelfCheck {
                 scale.reset()
             }
 
-            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive, Street, City
-            // and Ridges have no Motion group: the road scrolls, the traffic drives and the
-            // spectrum travels instead of the mesh turning.
-            if ["drive", "street", "city", "ridges"].contains(geo) { continue }
+            // Motion group defaults to 0 spin and tumble, and resets cleanly. Drive, Street, City,
+            // Jenga and Ridges have no Motion group: the road scrolls, the simulation moves and
+            // the spectrum travels instead of the mesh turning.
+            if ["drive", "street", "city", "jenga", "ridges"].contains(geo) { continue }
             guard let spin = gen.bank["spin"], let tumble = gen.bank["tumble"] else {
                 return "\(geo) missing spin or tumble"
             }
@@ -1600,7 +1605,7 @@ enum SelfCheck {
         return nil
     }
 
-    /// City, a Low Poly generator: starts unmapped, with its Palette, Spectrum, Lights Change and
+    /// City, a Simulation generator: starts unmapped, with its Palette, Spectrum, Lights Change and
     /// Reshuffle inputs; seen from above on a scene built in memory it fills most of the frame,
     /// drawn as the ground plus one instance per block. With the lights held, the cars on the
     /// red roads all come to a stop while the others drive, and Lights Change swaps them; people
@@ -1728,6 +1733,136 @@ enum SelfCheck {
         let step = (CACurrentMediaTime() - start) / 120 * 1000
         print(String(format: "     city %.2f ms/frame GPU (%.2f at 16 × 16 blocks, everything out), %d vertices × %d instances, %.3f ms a step of %d cars and %d people",
                      ms, big, gen.vertexCount, 33, step, city.carOn.filter { $0 }.count, city.pOn.filter { $0 }.count))
+        return nil
+    }
+
+    /// Jenga, a Simulation generator: starts unmapped, with its Palette, Spectrum and Place
+    /// inputs, the tower built. Still, it stands; each Place adds a block, a new layer when the
+    /// top is full; kicks chip at it and a drop brings it down, and once fallen they crumble away; then the hand
+    /// builds on what's left. It draws in frame from the side, wired and shattered too.
+    private static func checkJenga(engine: Engine, snapshotDir: URL?) -> String? {
+        let file = SceneFile(name: "jenga", inputs: [], modulators: [],
+                             camera: CameraSlot(type: "static", preset: nil, params: ["x": 5, "y": 1.2, "z": 3, "fov": 60]),
+                             palettes: [PaletteSlot(colors: ["#0B0710", "#2B2238", "#8A5A3C", "#D9A46A", "#F4E9D8"])],
+                             generators: [GeneratorSlot(id: nil, type: "jenga", preset: nil, params: [:])],
+                             effects: [], mappings: [])
+        guard let bare = engine.build(file, reuse: nil), let gen = bare.generator else {
+            return "didn't build: \(engine.errorSummary ?? "")"
+        }
+        guard gen.mesh == .jenga, gen.vertexCount > 0 else { return "built an empty mesh" }
+        guard bare.mappings.isEmpty, bare.streamBindings.isEmpty else { return "connected itself" }
+        guard gen.inputs.map(\.kind) == [.palette, .spectrum] else { return "inputs should be Palette and Spectrum" }
+        guard gen.triggerInputs.map(\.key) == ["generator.place"], gen.triggerInputs.map(\.label) == ["Place"] else {
+            return "trigger inputs should be Place"
+        }
+        guard gen.mesh.instanceCount(gen.bank.live) == nil, gen.bank["instances"] == nil else { return "Jenga draws one instance" }
+
+        var coloured = file
+        coloured.mappings = [MappingSpec(source: "palette.colors", target: "generator.pal")]
+        guard let scene = engine.build(coloured, reuse: nil), let gen = scene.generator,
+              let sim = gen.sim as? JengaSim else { return "no simulation with a palette" }
+        let ms = engine.renderOffscreen(scene, frames: 30, snapshot: snapshotDir?.appendingPathComponent("jenga.png"))
+        let drawn = engine.coverage(engine.renderer.history)
+        guard drawn.fraction > 0.1 else { return "drew \(drawn.fraction) of the frame" }
+        let layers = Int(gen.bank.live("layers"))
+        guard sim.placedCount == layers * 3, sim.looseCount == 0 else {
+            return "should start as a tower of \(layers * 3), has \(sim.placedCount) standing and \(sim.looseCount) falling"
+        }
+
+        var t = 0.0
+        func run(_ seconds: Double) {
+            for _ in 0..<Int(seconds * 60) {
+                t += 1.0 / 60
+                scene.modulate(SignalFrame(time: Float(t), dt: 1 / 60, now: t))
+            }
+        }
+        // Still, it stands, and the full tower takes no more.
+        run(4)
+        guard sim.placedCount == layers * 3, sim.looseCount == 0 else { return "fell without a quake: \(sim.placedCount) standing" }
+        gen.triggerInputs[0].fire()
+        run(1)
+        guard sim.placedCount == layers * 3 else { return "placed past layers" }
+
+        // A spectrum mapped in shakes the stage: its bass bounces the plinth and, loud and
+        // lasting, knocks the tower down; none, or stage at 0, leaves it still.
+        let n = AudioAnalyzer.spectrumBins
+        let loud = engine.renderer.makeSpectrumTextures()
+        loud.upload((0..<n).map { $0 < n / 5 ? 0.9 : 0.3 }, dt: SpectrumTextures.step)
+        func shaken(_ spectrum: SpectrumTextures?, stage: Float = 1, seconds: Int) -> JengaSim {
+            gen.bank["stage"]?.setBase(stage)
+            defer { gen.bank["stage"]?.reset() }
+            let s = JengaSim(device: engine.device)
+            for _ in 0..<seconds * 60 { s.step(gen.bank, dt: 1 / 60, spectrum: spectrum) }
+            return s
+        }
+        let quiet = shaken(nil, seconds: 1), bassy = shaken(loud, seconds: 1), unstaged = shaken(loud, stage: 0, seconds: 1)
+        guard abs(quiet.plinth.y) < 1e-4, abs(unstaged.plinth.y) < 1e-4, bassy.plinth.y > 0.05 else {
+            return "the spectrum's bass should lift the plinth: \(quiet.plinth.y) unmapped, \(bassy.plinth.y) mapped, \(unstaged.plinth.y) at stage 0"
+        }
+        let dropped = shaken(loud, seconds: 4)
+        guard dropped.placedCount < layers * 3 / 2, shaken(nil, seconds: 4).placedCount == layers * 3 else {
+            return "a loud spectrum left \(dropped.placedCount) of \(layers * 3) standing"
+        }
+
+        // Taller: each Place adds a block.
+        gen.bank["layers"]?.setBase(Float(layers + 2))
+        for _ in 0..<4 { gen.triggerInputs[0].fire(); run(0.6) }
+        guard sim.placedCount == layers * 3 + 4, sim.phase == nil else { return "4 Places made \(sim.placedCount - layers * 3) blocks" }
+        if let snapshotDir {
+            // Close by the hand, mid-placement.
+            func aim(_ v: [(String, Float)]) { for (k, x) in v { scene.camera?[k]?.setBase(x) } }
+            gen.triggerInputs[0].fire()
+            run(0.3)
+            aim([("x", 2.2), ("y", 2.4), ("z", 2.2), ("lookY", 1.3)])
+            _ = engine.renderOffscreen(scene, frames: 1, snapshot: snapshotDir.appendingPathComponent("jenga-hand.png"))
+            aim([("x", 5), ("y", 1.2), ("z", 3), ("lookY", 0)])
+            run(0.5)
+        }
+        let built = sim.placedCount
+
+        // Kicks (short full pulses on the beat) chip at the top; a drop (quake that stays up)
+        // brings it down.
+        for _ in 0..<8 {
+            gen.bank["quake"]?.setBase(1); run(0.1)
+            gen.bank["quake"]?.setBase(0); run(0.4)
+        }
+        let kicked = sim.placedCount
+        guard kicked > built / 2 else { return "8 kicks brought the tower down: \(kicked) of \(built) standing" }
+        gen.bank["quake"]?.setBase(1)
+        run(0.8)
+        _ = engine.renderOffscreen(scene, frames: 1, snapshot: snapshotDir?.appendingPathComponent("jenga-quake.png"))
+        run(2)
+        guard sim.placedCount < kicked / 2 else {
+            return "a drop to full quake left \(sim.placedCount) of \(kicked) standing"
+        }
+        guard sim.isFinite else { return "a block flew off to infinity" }
+        gen.bank["quake"]?.setBase(0)
+        gen.bank["fade"]?.setBase(1)
+        let standing = sim.placedCount
+        run(6)
+        guard sim.looseCount == 0 else { return "\(sim.looseCount) fallen blocks didn't fade" }
+        guard sim.placedCount == standing else { return "blocks fell after the quake stopped" }
+
+        // The hand builds again.
+        for _ in 0..<3 { gen.triggerInputs[0].fire(); run(0.6) }
+        guard sim.placedCount > standing || standing == (layers + 2) * 3 else {
+            return "the hand didn't rebuild: \(standing) → \(sim.placedCount)"
+        }
+
+        // Wired, shattered, a tall ground: still draws.
+        for (name, value) in [("wire", 1), ("explode", 1), ("terrain", 3), ("layers", 24)] as [(String, Float)] {
+            gen.bank[name]?.setBase(value)
+        }
+        _ = engine.renderOffscreen(scene, frames: 5, snapshot: nil)
+        guard engine.coverage(engine.renderer.history).fraction > 0.1 else { return "nothing drawn wired and shattered" }
+        if let err = engine.errorSummary { return err }
+        // The simulation runs on the render thread: time a step mid-quake.
+        gen.bank["quake"]?.setBase(1)
+        let start = CACurrentMediaTime()
+        run(2)
+        let step = (CACurrentMediaTime() - start) / 120 * 1000
+        print(String(format: "     jenga %.2f ms/frame GPU, %d vertices, %.3f ms a step mid-quake; %d of %d standing after 8 kicks",
+                     ms, gen.vertexCount, step, kicked, built))
         return nil
     }
 
@@ -2784,6 +2919,11 @@ enum SelfCheck {
             print("FAIL city: \(problem)"); failures += 1
         } else {
             print("ok   city (starts unmapped, fills the frame from above, one instance per block, cars stop at red and go on green, people walk, Reshuffle and Lights Change fire from a mapping)")
+        }
+        if let problem = checkJenga(engine: engine, snapshotDir: snapshotDir) {
+            print("FAIL jenga: \(problem)"); failures += 1
+        } else {
+            print("ok   jenga (starts unmapped and built, stands still, Place adds blocks, kicks chip it and a drop brings it down, a spectrum's bass shakes it, the fallen fade, the hand rebuilds)")
         }
         for geo in ["dancer", "shrek", "shoes"] {
             if let problem = checkDancer(engine: engine, geo: geo, snapshotDir: snapshotDir) {

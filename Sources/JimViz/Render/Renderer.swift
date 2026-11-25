@@ -70,10 +70,13 @@ final class GeneratorRuntime: Identifiable {
     }
 
     /// Render thread, once per frame after the knobs are set: counts the triggers that fired
-    /// and steps the simulation.
-    func advance(dt: Float) {
+    /// and steps the simulation, with the spectrum mapped into its Spectrum input. `sources` are
+    /// the streams mapped into `inputs`, in order.
+    func advance(dt: Float, sources: [StreamOutput?]) {
         for (i, t) in triggerInputs.enumerated() where t.take() { bank.triggerCounts[i] += 1 }
-        sim?.step(bank, dt: dt)
+        guard let sim else { return }
+        let spectrum = zip(inputs, sources).first { $0.0.kind == .spectrum }?.1?.spectrum
+        sim.step(bank, dt: dt, spectrum: spectrum)
     }
 
     static func makeBuffer(_ device: MTLDevice, _ mesh: MeshShape, _ topology: [Int]) -> (MTLBuffer, Int) {
@@ -361,7 +364,7 @@ final class RenderScene {
             for p in bank.params { p.live = p.def.clamp(p.liveBase + p.modAccum) }
             bank.integrate(dt: f.dt)
         }
-        for g in generators { g.advance(dt: f.dt) }
+        for g in generators { g.advance(dt: f.dt, sources: generatorSources[g.key] ?? []) }
         for v in videos { v.advanceTransport() }
     }
 }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Simulation generators:** a new browser section for geos driven by a simulation. City moves there.
+- **Jenga geo:** a hand builds a tower on a plinth, a block each time Place fires. Quake shakes the plinth: kicks chip at the top, a drop brings it down, fallen blocks tumble and crumble away, and the hand builds again. A Spectrum mapped in shakes the stage too (its bass bounces the plinth and can bring the tower down, its mids sway it, stage sets how hard) and raises the ground.
+- **Simulations read the spectrum:** a simulated geo sees the spectrum mapped into its Spectrum input on the CPU, without a GPU readback.
 - **City geo:** a little Manhattan to look down on, a tile of blocks sized by width and length, with stepped-back towers, water towers, parks, a river with piers, street lamps, crosswalks, cars that stop at red lights and people who cross at the corners. Lights Change and Reshuffle trigger inputs.
 - **Generator trigger inputs:** a generator's shader can declare `// @trigger name Label`; it reads how many times it has fired as `p.<name>Count`.
 

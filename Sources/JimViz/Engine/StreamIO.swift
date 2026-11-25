@@ -74,15 +74,17 @@ final class StreamOutput: Identifiable {
     let kind: IOKind
     /// Video: a texture the renderer writes each frame.
     let texture: MTLTexture?
+    /// A spectrum's textures, whose levels a simulation reads on the CPU.
+    let spectrum: SpectrumTextures?
     /// Streams whose texture rotates (spectrum, palette): the tool's current one. Render thread.
     private let live: (() -> MTLTexture)?
     var id: String { key }
     var deviceKey: String { devicePath(key) }
 
     init(_ key: String, _ name: String, device: String, kind: IOKind = .video, texture: MTLTexture? = nil,
-         live: (() -> MTLTexture)? = nil) {
+         spectrum: SpectrumTextures? = nil, live: (() -> MTLTexture)? = nil) {
         self.key = key; self.name = name; self.device = device; self.kind = kind; self.texture = texture
-        self.live = live
+        self.spectrum = spectrum; self.live = live
     }
 
     /// The texture to bind this frame, if the stream is a picture.

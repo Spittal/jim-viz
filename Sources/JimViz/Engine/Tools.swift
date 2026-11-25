@@ -89,6 +89,7 @@ enum Tools {
             case "ridges": return "waveform.path.ecg"
             case "shoes": return "shoe.2"
             case "instruments": return "music.quarternote.3"
+            case "jenga": return "square.stack.3d.up"
             default: return "cube.transparent"
             }
         case .effect:

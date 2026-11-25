@@ -24,6 +24,16 @@ final class SpectrumTextures {
 
     var current: MTLTexture { textures[index] }
 
+    /// The spectrum now, averaged over the bins from `lo` to `hi` (fractions of the range, 0...1),
+    /// for a simulation reading the spectrum mapped into it. Render thread.
+    func level(_ lo: Float, _ hi: Float) -> Float {
+        let n = AudioAnalyzer.spectrumBins
+        let a = min(max(Int(lo * Float(n)), 0), n - 1), b = min(max(Int(hi * Float(n)), a + 1), n)
+        var sum: Float = 0
+        for i in a..<b { sum += history[i] }
+        return sum / Float(b - a)
+    }
+
     /// `dt` is the time since the last upload: the history moves down a row for every `step` of it.
     func upload(_ bins: [Float], dt: Float) {
         let n = AudioAnalyzer.spectrumBins
@@ -146,7 +156,7 @@ final class AudioInRuntime {
             every(32, "onPhrase", "On Phrase"),
         ]
         func spectrumOut(_ key: String, _ textures: SpectrumTextures) -> StreamOutput {
-            StreamOutput(key, StreamOutput.spectrumNames[key]!, device: d, kind: .spectrum) { textures.current }
+            StreamOutput(key, StreamOutput.spectrumNames[key]!, device: d, kind: .spectrum, spectrum: textures) { textures.current }
         }
         spectrumOutput = spectrumOut(StreamOutput.spectrumKey, spectrum)
         audioOutput = StreamOutput(StreamOutput.audioKey, "Audio Out", device: d, kind: .audio)

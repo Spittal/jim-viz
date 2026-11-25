@@ -22,7 +22,7 @@ struct MeshVertex {
 /// The mesh a low-poly geo draws, named by its shader's `// @mesh` line. Its knobs that change
 /// the triangle count are the shader's `mesh` params, read here by name.
 enum MeshShape: String, CaseIterable {
-    case sphere, torus, plane, cube, shards, wheel, drive, street, city, hand, face, dancer, shrek, globe, ridges, shoes, instruments
+    case sphere, torus, plane, cube, shards, wheel, drive, street, city, jenga, hand, face, dancer, shrek, globe, ridges, shoes, instruments
 
     /// The mesh params each shape reads. A geo shader must declare exactly these as `mesh` params.
     var meshParams: [String] {
@@ -36,6 +36,7 @@ enum MeshShape: String, CaseIterable {
         case .drive: return ["segments", "palms"]
         case .street: return ["segments", "detail"]
         case .city: return ["detail"]
+        case .jenga: return ["sides"]
         case .hand: return ["sides", "segments"]
         case .face: return ["detail"]
         case .dancer, .shrek, .shoes: return ["sides"]
@@ -56,10 +57,12 @@ enum MeshShape: String, CaseIterable {
         }
     }
 
-    /// The simulation a shape's shader reads at buffer(4), if it has one: City's cars and people.
+    /// The simulation a shape's shader reads at buffer(4), if it has one: City's cars and people,
+    /// Jenga's blocks and hand.
     func makeSim(device: MTLDevice) -> GeoSim? {
         switch self {
         case .city: return CitySim(device: device)
+        case .jenga: return JengaSim(device: device)
         default: return nil
         }
     }
@@ -103,6 +106,7 @@ struct MeshBuilder {
         case .drive: return [min(max(i("segments"), 8), 512), min(max(i("palms"), 0), 256)]
         case .street: return [min(max(i("segments"), 8), 512), min(max(i("detail"), 0), 2)]
         case .city: return [min(max(i("detail"), 0), 2)]
+        case .jenga: return [min(max(i("sides"), 3), 16)]
         case .hand: return [min(max(i("sides"), 3), 16), min(max(i("segments"), 1), 8)]
         case .face: return [min(max(i("detail"), 0), 4)]
         case .dancer, .shrek, .shoes: return [min(max(i("sides"), 3), 16)]
@@ -124,6 +128,7 @@ struct MeshBuilder {
         case .drive: b.drive(segments: t[0], palms: t[1])
         case .street: b.street(segments: t[0], detail: t[1])
         case .city: b.city(detail: t[0])
+        case .jenga: b.jenga(sides: t[0])
         case .hand: b.hand(sides: t[0], segments: t[1])
         case .face: b.face(detail: t[0])
         case .dancer: b.dancer(sides: t[0])
@@ -310,7 +315,7 @@ struct MeshBuilder {
     }
 
     /// Phalanx lengths (proximal, middle, distal) of the thumb, index, middle, ring and pinky.
-    /// Must match `handLen` in Shaders/generators/lowpoly/hand.metal.
+    /// Must match `handLen` in Shaders/generators/lowpoly/_hand.metal.
     static let handLengths: [SIMD3<Float>] = [
         [0.40, 0.28, 0.26], [0.42, 0.25, 0.22], [0.46, 0.28, 0.23], [0.43, 0.26, 0.22], [0.36, 0.22, 0.20],
     ]
@@ -322,7 +327,7 @@ struct MeshBuilder {
     /// y = along the finger 0...3 (whole numbers are the joints, 3 the tip), zw = the vertex's
     /// offset across the finger (sideways, toward the palm). position and faceNormal are in the
     /// straight finger's own frame (along, toward the palm, sideways), so the shader can bend them.
-    private mutating func hand(sides n: Int, segments: Int) {
+    mutating func hand(sides n: Int, segments: Int) {
         func ring(_ k: Int, phase: Float = 0) -> SIMD2<Float> {
             let a = (Float(k) + phase) / Float(n) * 2 * .pi
             return [cos(a), sin(a)]
