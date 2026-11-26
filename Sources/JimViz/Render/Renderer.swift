@@ -250,13 +250,12 @@ final class PaletteModel: Identifiable {
 
 /// A device in the scene's Inputs section.
 enum InputDevice: Identifiable {
-    case audio(AudioInRuntime), midi(MIDIInputRuntime), webcam(WebcamRuntime), video(VideoRuntime), picture(PictureRuntime)
+    case audio(AudioInRuntime), webcam(WebcamRuntime), video(VideoRuntime), picture(PictureRuntime)
 
     /// Chain key, as used for selection and in mapping keys.
     var id: String {
         switch self {
         case .audio: return "audio"
-        case .midi(let m): return m.key
         case .webcam(let w): return w.key
         case .video(let v): return v.key
         case .picture(let p): return p.key
@@ -269,11 +268,10 @@ final class RenderScene {
     let generators: [GeneratorRuntime]
     var generator: GeneratorRuntime? { generators.first }
     var generatorLabel: String? { generators.first?.label }
-    /// Audio In, MIDI and webcam inputs, in chain order.
+    /// Audio In, webcam, video and picture inputs, in chain order.
     let inputs: [InputDevice]
     let audioIn: AudioInRuntime?
     let modulators: [ModulatorRuntime]
-    let midiInputs: [MIDIInputRuntime]
     let webcams: [WebcamRuntime]
     let videos: [VideoRuntime]
     let pictures: [PictureRuntime]
@@ -312,8 +310,6 @@ final class RenderScene {
     let effectSources: [String: [StreamOutput?]]
     /// Palettes whose colours something reads, so their gradients are worth updating.
     let boundPalettes: [PaletteModel]
-    /// The MIDI input learning controls, if any.
-    var learningMIDI: MIDIInputRuntime? { midiInputs.first(where: \.isLearning) }
 
     init(name: String, generators: [GeneratorRuntime],
          inputs: [InputDevice], modulators: [ModulatorRuntime],
@@ -325,7 +321,6 @@ final class RenderScene {
         self.inputs = inputs
         self.modulators = modulators
         audioIn = inputs.lazy.compactMap { if case .audio(let a) = $0 { return a } else { return nil } }.first
-        midiInputs = inputs.compactMap { if case .midi(let m) = $0 { return m } else { return nil } }
         webcams = inputs.compactMap { if case .webcam(let w) = $0 { return w } else { return nil } }
         videos = inputs.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
         pictures = inputs.compactMap { if case .picture(let p) = $0 { return p } else { return nil } }
@@ -334,7 +329,7 @@ final class RenderScene {
             case .webcam(let w): return w
             case .video(let v): return v
             case .picture(let p): return p
-            case .audio, .midi: return nil
+            case .audio: return nil
             }
         }
         self.streamOutputs = streamOutputs
@@ -360,11 +355,6 @@ final class RenderScene {
         self.outputs = outputs; self.mappings = mappings; self.banksByPath = banksByPath
         deviceKeys = inputs.map(\.id) + modulators.map { "mod.\($0.id)" } + (camera != nil ? ["camera"] : []) + (lens != nil ? [LensRuntime.key] : []) + palettes.map(\.key) + generators.map(\.key) + effects.map { "post.\($0.id)" }
         banks = [audioIn?.bank].compactMap { $0 } + palettes.map(\.bank) + videoSources.map(\.bank) + modulators.map(\.bank) + generators.map(\.bank) + (camera.map { [$0] } ?? []) + (lens.map { [$0.bank] } ?? []) + effects.map(\.bank)
-    }
-
-    /// Starts one MIDI input learning controls, stopping any other, or stops learning (nil).
-    func learnMIDI(_ key: String?) {
-        for m in midiInputs where m.isLearning != (m.key == key) { m.isLearning = m.key == key }
     }
 
     /// Render thread, once per frame: runs its inputs (Audio In analyses and advances its
@@ -603,9 +593,10 @@ final class Renderer {
             float2 p = float2(vid & 1, vid >> 1);
             PV o; o.pos = float4((p * 2 - 1) * scale, 0, 1); o.uv = float2(p.x, 1 - p.y); return o;
         }
-        fragment float4 present_fragment(PV in [[stage_in]], texture2d<float> src [[texture(0)]]) {
+        fragment float4 present_fragment(PV in [[stage_in]], texture2d<float> src [[texture(0)]],
+                                         constant float& level [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
-            return float4(saturate(src.sample(s, in.uv).rgb), 1);
+            return float4(saturate(src.sample(s, in.uv).rgb) * level, 1);
         }
         """
         let lib = try! device.makeLibrary(source: src, options: nil)
@@ -1014,13 +1005,14 @@ final class Renderer {
         enc.endEncoding()
     }
 
-    /// Draws the finished frame into a window's drawable, letterboxed to 16:9.
-    func present(_ cmd: MTLCommandBuffer, into target: MTLTexture) {
-        present(cmd, history, into: target)
+    /// Draws the finished frame into a window's drawable, letterboxed to 16:9 and faded by
+    /// Output (`level`, 0 is black). `history` stays unfaded, so feedback effects don't see it.
+    func present(_ cmd: MTLCommandBuffer, into target: MTLTexture, level: Float) {
+        present(cmd, history, into: target, level: level)
     }
 
     /// Draws a texture into a drawable, letterboxed to 16:9.
-    func present(_ cmd: MTLCommandBuffer, _ source: MTLTexture, into target: MTLTexture) {
+    func present(_ cmd: MTLCommandBuffer, _ source: MTLTexture, into target: MTLTexture, level: Float = 1) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
@@ -1033,6 +1025,8 @@ final class Renderer {
         enc.setRenderPipelineState(presentPipeline)
         enc.setVertexBytes(&scale, length: 8, index: 0)
         enc.setFragmentTexture(source, index: 0)
+        var level = level
+        enc.setFragmentBytes(&level, length: 4, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }

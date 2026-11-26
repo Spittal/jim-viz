@@ -2,31 +2,20 @@ import CoreMIDI
 import Foundation
 import Observation
 
-struct MIDIDeviceInfo: Identifiable, Hashable {
-    let id: Int32
-    let name: String
-    let sourceCount: Int
-    var isEnabled: Bool = true
-}
-
-/// CoreMIDI manager: discovers and connects to all active USB and virtual MIDI input sources,
-/// parses MIDI channel packets, and dispatches them to parameter mappings and MIDI learn.
+/// CoreMIDI manager: connects to every active USB and virtual MIDI source, parses MIDI
+/// channel messages, and hands them to the engine (`MIDIMap`). Devices aren't told apart.
 @Observable
 final class MIDIEngine {
-    private(set) var devices: [MIDIDeviceInfo] = []
     private(set) var isConnected: Bool = false
-    private(set) var lastMessageText: String = "No MIDI received"
-    private(set) var lastActivityTime: CFAbsoluteTime = 0
 
     @ObservationIgnored private var client = MIDIClientRef()
     @ObservationIgnored private var inPort = MIDIPortRef()
     @ObservationIgnored private let queue = DispatchQueue(label: "jim-viz.midi", qos: .userInteractive)
     @ObservationIgnored private var connectedSources: Set<MIDIEndpointRef> = []
 
-    /// Receives every message, on main. The engine routes them to the scene's MIDI inputs.
+    /// Receives every message, on main. The engine routes them to mappings and MIDI map mode.
     @ObservationIgnored var onMessage: ((MIDIMessage) -> Void)?
-    /// True while a scene on screen has a MIDI Input. Sources are connected only then;
-    /// devices are listed either way, for the browser and device menus.
+    /// True while something is mapped to MIDI or MIDI map mode is on. Sources are connected only then.
     private(set) var isActive = false
 
     init() {
@@ -37,8 +26,7 @@ final class MIDIEngine {
         stop()
     }
 
-    /// Connects every source, or disconnects them all. The engine turns it on only while a
-    /// scene on screen has a MIDI Input.
+    /// Connects every source, or disconnects them all.
     func setActive(_ on: Bool) {
         guard on != isActive else { return }
         isActive = on
@@ -80,7 +68,7 @@ final class MIDIEngine {
             ._1_0,
             &port
         ) { [weak self] eventListPtr, srcConnRef in
-            self?.handleEvents(eventListPtr, device: Self.deviceName(srcConnRef))
+            self?.handleEvents(eventListPtr)
         }
 
         if portStatus == noErr {
@@ -93,7 +81,7 @@ final class MIDIEngine {
                 "jim-viz.in" as CFString,
                 &oldPort
             ) { [weak self] packetListPtr, srcConnRef in
-                self?.handlePacketList(packetListPtr, device: Self.deviceName(srcConnRef))
+                self?.handlePacketList(packetListPtr)
             }
             if oldStatus == noErr {
                 self.inPort = oldPort
@@ -103,75 +91,27 @@ final class MIDIEngine {
         refreshEndpoints()
     }
 
-    /// Discovers all available MIDI sources and connects to them.
+    /// Connects every available MIDI source while active.
     func refreshEndpoints() {
         guard inPort != 0 else { return }
-
-        var devList: [MIDIDeviceInfo] = []
-        let numDevs = MIDIGetNumberOfDevices()
-        for i in 0..<numDevs {
-            let dev = MIDIGetDevice(i)
-            var offline: Int32 = 0
-            MIDIObjectGetIntegerProperty(dev, kMIDIPropertyOffline, &offline)
-            guard offline == 0 else { continue }
-
-            var devName: Unmanaged<CFString>?
-            MIDIObjectGetStringProperty(dev, kMIDIPropertyName, &devName)
-            var uniqueID: Int32 = Int32(i)
-            MIDIObjectGetIntegerProperty(dev, kMIDIPropertyUniqueID, &uniqueID)
-
-            let entCount = MIDIDeviceGetNumberOfEntities(dev)
-            var srcCount = 0
-            for e in 0..<entCount {
-                srcCount += MIDIEntityGetNumberOfSources(MIDIDeviceGetEntity(dev, e))
-            }
-
-            let name = (devName?.takeRetainedValue() as String?) ?? "MIDI Device \(i)"
-            devList.append(MIDIDeviceInfo(id: uniqueID, name: name, sourceCount: srcCount))
-        }
-
-        let numSources = MIDIGetNumberOfSources()
         var newlyConnected: Set<MIDIEndpointRef> = []
-
-        for i in 0..<numSources {
+        for i in 0..<MIDIGetNumberOfSources() {
             let src = MIDIGetSource(i)
             var offline: Int32 = 0
             MIDIObjectGetIntegerProperty(src, kMIDIPropertyOffline, &offline)
             guard offline == 0, isActive else { continue }
-
-            if !connectedSources.contains(src) {
-                // The endpoint rides along as the connection's refCon, so messages know their device.
-                MIDIPortConnectSource(inPort, src, UnsafeMutableRawPointer(bitPattern: Int(src)))
-            }
+            if !connectedSources.contains(src) { MIDIPortConnectSource(inPort, src, nil) }
             newlyConnected.insert(src)
         }
-
         connectedSources = newlyConnected
-        devices = devList
         isConnected = !newlyConnected.isEmpty
-    }
-
-    /// Device name for a source endpoint passed as a connection refCon. Virtual sources,
-    /// which have no device, use their own name. Called on CoreMIDI's thread.
-    private static func deviceName(_ refCon: UnsafeMutableRawPointer?) -> String? {
-        guard let refCon else { return nil }
-        let src = MIDIEndpointRef(truncatingIfNeeded: Int(bitPattern: refCon))
-        var entity = MIDIEntityRef(), device = MIDIDeviceRef()
-        var object: MIDIObjectRef = src
-        if MIDIEndpointGetEntity(src, &entity) == noErr, entity != 0,
-           MIDIEntityGetDevice(entity, &device) == noErr, device != 0 {
-            object = device
-        }
-        var name: Unmanaged<CFString>?
-        guard MIDIObjectGetStringProperty(object, kMIDIPropertyName, &name) == noErr else { return nil }
-        return name?.takeRetainedValue() as String?
     }
 
     // MARK: - Packet Parsing
 
-    private func handleEvents(_ eventListPtr: UnsafePointer<MIDIEventList>, device: String?) {
+    private func handleEvents(_ eventListPtr: UnsafePointer<MIDIEventList>) {
         for message in Self.channelMessages(in: eventListPtr) {
-            parseBytes(status: message.status, d1: message.d1, d2: message.d2, time: message.time, device: device)
+            parseBytes(status: message.status, d1: message.d1, d2: message.d2, time: message.time)
         }
     }
 
@@ -198,7 +138,7 @@ final class MIDIEngine {
         return messages
     }
 
-    private func handlePacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>, device: String?) {
+    private func handlePacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         var packet = packetListPtr.pointee.packet
         for _ in 0..<packetListPtr.pointee.numPackets {
             let length = Int(packet.length)
@@ -210,7 +150,7 @@ final class MIDIEngine {
                         if status >= 0x80 && status < 0xF0 {
                             let d1 = idx + 1 < length ? bytes[idx + 1] : 0
                             let d2 = idx + 2 < length ? bytes[idx + 2] : 0
-                            parseBytes(status: status, d1: d1, d2: d2, time: packet.timeStamp, device: device)
+                            parseBytes(status: status, d1: d1, d2: d2, time: packet.timeStamp)
                             idx += 3
                         } else {
                             idx += 1
@@ -222,7 +162,7 @@ final class MIDIEngine {
         }
     }
 
-    private func parseBytes(status: UInt8, d1: UInt8, d2: UInt8, time: MIDITimeStamp, device: String?) {
+    private func parseBytes(status: UInt8, d1: UInt8, d2: UInt8, time: MIDITimeStamp) {
         let cmdNibble = status & 0xF0
         let ch = Int((status & 0x0F) + 1)
         guard let command = MIDICommand(rawValue: cmdNibble) else { return }
@@ -232,14 +172,9 @@ final class MIDIEngine {
             command: command,
             data1: Int(d1 & 0x7F),
             data2: Int(d2 & 0x7F),
-            timestamp: time,
-            device: device
+            timestamp: time
         )
-
-        let now = CFAbsoluteTimeGetCurrent()
         DispatchQueue.main.async {
-            self.lastMessageText = msg.logDescription
-            self.lastActivityTime = now
             self.onMessage?(msg)
         }
     }

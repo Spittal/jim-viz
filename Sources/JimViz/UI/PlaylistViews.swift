@@ -96,15 +96,8 @@ struct PlaylistBar: View {
                     .font(Theme.valueFont).foregroundStyle(Theme.textDim)
             }
             Spacer()
-            TransportButton(action: .previous)
-            TransportButton(action: .next)
-            Toggle(isOn: Binding(get: { state.mapMode }, set: { state.mapMode = $0; engine.learnPlaylistMIDI(nil) })) {
-                Image(systemName: "keyboard")
-            }
-            .toggleStyle(.button)
-            .tint(Theme.midi)
-            .controlSize(.small)
-            .help("MIDI map: click Previous or Next, then press a pad, key or button on your controller")
+            TransportButton(next: false)
+            TransportButton(next: true)
         }
         .padding(.horizontal, 10)
         .frame(height: 24)
@@ -112,41 +105,43 @@ struct PlaylistBar: View {
     }
 }
 
-/// Previous or Next. In MIDI map mode, clicking it waits for a control instead of stepping;
-/// its binding shows beside it.
+/// Previous or Next. In MIDI map mode (the toolbar's keyboard button), clicking it waits for a
+/// control instead of stepping, and its mapping shows beside it.
 private struct TransportButton: View {
     @Environment(Engine.self) private var engine
-    let action: PlaylistAction
+    let next: Bool
 
     var body: some View {
-        let state = engine.playlists
-        let learning = state.learning == action
-        let binding = state.bindings[action]
+        let map = engine.midiMap
+        let target = next ? MIDIMap.nextKey : MIDIMap.previousKey
+        let learning = map.isOn && map.learning == target
+        let mapping = engine.mappings(for: target).first
+        let control = mapping.flatMap { MIDIControl(sourceKey: $0.source) }
         HStack(spacing: 4) {
             Button {
-                if state.mapMode { engine.learnPlaylistMIDI(learning ? nil : action) }
-                else { engine.stepPlaylist(action == .next ? 1 : -1) }
+                if map.isOn { engine.learnMIDI(target) }
+                else { engine.stepPlaylist(next ? 1 : -1) }
             } label: {
-                Image(systemName: action == .next ? "forward.end.fill" : "backward.end.fill")
+                Image(systemName: next ? "forward.end.fill" : "backward.end.fill")
                     .frame(width: 18)
             }
             .controlSize(.small)
-            .tint(state.mapMode ? Theme.midi : nil)
+            .tint(map.isOn ? Theme.midi : nil)
             .buttonStyle(.borderedProminent)
             .overlay {
-                if state.mapMode {
+                if map.isOn {
                     RoundedRectangle(cornerRadius: 5).stroke(learning ? Color.white : Theme.midi, lineWidth: learning ? 2 : 1)
                 }
             }
-            .disabled(!state.mapMode && !engine.playlistActive)
-            .help("\(action.label) (⌘\(action == .next ? "]" : "["))" + (binding.map { " · MIDI \($0.label)" } ?? ""))
+            .disabled(!map.isOn && !engine.playlistActive)
+            .help("\(MIDIMap.label(target)) (⌘\(next ? "]" : "["))" + (control.map { " · MIDI \($0.label)" } ?? ""))
             .contextMenu {
-                if binding != nil { Button("Clear MIDI Mapping") { engine.clearPlaylistMIDI(action) } }
+                if mapping != nil { Button("Clear MIDI Mapping") { engine.removeMappings(target: target) } }
             }
-            if state.mapMode {
-                Text(learning ? "Press a control…" : binding?.label ?? "Unmapped")
+            if map.isOn {
+                Text(learning ? "Move a control…" : control?.label ?? "Unmapped")
                     .font(Theme.labelFont)
-                    .foregroundStyle(learning ? Color.white : binding == nil ? Theme.textDim : Theme.midi)
+                    .foregroundStyle(learning ? Color.white : control == nil ? Theme.textDim : Theme.midi)
                     .lineLimit(1)
             }
         }

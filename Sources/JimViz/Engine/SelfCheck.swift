@@ -356,41 +356,84 @@ enum SelfCheck {
             return "no scene snapshot"
         }
 
-        // MIDI Input: while learning, controls moved on its device become outputs,
-        // which then map like any other output.
-        func cc(_ number: Int, _ value: Int, channel: Int = 7, device: String = "DDJ-FLX4") -> MIDIMessage {
-            MIDIMessage(channel: channel, command: .controlChange, data1: number, data2: value, timestamp: 0, device: device)
+        // MIDI isn't a tool: in MIDI map mode a clicked knob learns the next control moved, on
+        // any device, mapped over the knob's whole range. The scene starts with no MIDI.
+        func cc(_ number: Int, _ value: Int, channel: Int = 7) -> MIDIMessage {
+            MIDIMessage(channel: channel, command: .controlChange, data1: number, data2: value, timestamp: 0)
         }
-        engine.apply(.input, "midi", preset: "DDJ-FLX4")
-        guard engine.current?.learningMIDI?.key == "midi.midi", engine.selectedDevice == "midi.midi" else { return "new MIDI input not learning" }
-        engine.handleMIDI(cc(31, 127, device: "Other Controller"))
-        guard engine.current?.midiInputs.first?.controls.isEmpty == true else { return "learned a control from another device" }
+        guard engine.current?.outputs.contains(where: { $0.key.hasPrefix("midi.") }) == false else { return "scene starts with MIDI outputs" }
+        guard !Tools.all(engine.store).contains(where: { $0.name == "midi" }) else { return "MIDI Input is still a tool" }
         engine.handleMIDI(cc(31, 127))
-        engine.handleMIDI(cc(31, 120))
-        guard engine.current?.midiInputs.first?.controls.count == 1,
-              let fader = engine.current?.outputs.first(where: { $0.key == "midi.midi.cc-31-7" }),
-              fader.name == "Crossfader" else { return "MIDI control not learned once as an output" }
-        guard engine.current?.learningMIDI?.key == "midi.midi" else { return "MIDI input stopped learning after a control" }
-        engine.current?.learnMIDI(nil)
-        engine.handleMIDI(cc(19, 127))
-        guard engine.current?.midiInputs.first?.controls.count == 1 else { return "learned while not learning" }
-        engine.addMapping(source: "midi.midi.cc-31-7", target: "generator.explode")
-        guard let s3 = engine.current, let explode = s3.generator?.bank["explode"],
-              let mm = s3.mappings.first(where: { $0.source == "midi.midi.cc-31-7" }), mm.isActive else {
-            return "MIDI output not mapped"
+        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("midi.") }) == false else { return "MIDI mapped outside MIDI map mode" }
+        engine.setMIDIMapMode(true)
+        guard engine.knobClicked("generator.explode", keepMapping: false), engine.midiMap.learning == "generator.explode" else {
+            return "clicking a knob in MIDI map mode didn't pick it to learn"
         }
-        mm.amount = 1
         engine.handleMIDI(cc(31, 64))
+        guard engine.midiMap.learning == nil, let s3 = engine.current, let explode = s3.generator?.bank["explode"],
+              let mm = s3.mappings.first(where: { $0.source == "midi.cc-31-7" && $0.target == "generator.explode" }),
+              mm.isActive, mm.amount == 1, mm.sourceLabel == "MIDI · Crossfader" else {
+            return "MIDI control not learned onto the knob at 100%"
+        }
         s3.modulate(f)
         let expected = explode.def.clamp(explode.base + 64 / 127 * explode.def.span)
         guard abs(explode.live - expected) < 0.01 else { return "MIDI value not applied: \(explode.live) vs \(expected)" }
         engine.handleMIDI(cc(31, 127, channel: 3))
         s3.modulate(f)
         guard abs(explode.live - expected) < 0.01 else { return "MIDI on another channel moved the knob" }
-        engine.removeInput("midi.midi")
-        guard engine.current?.mappings.contains(where: { $0.source.hasPrefix("midi.") }) == false else {
-            return "MIDI mapping outlived its input"
+        // Learning another control onto the knob replaces its MIDI mapping.
+        _ = engine.knobClicked("generator.explode", keepMapping: false)
+        engine.handleMIDI(cc(19, 10))
+        guard engine.current?.mappings.filter({ $0.target == "generator.explode" && $0.source.hasPrefix("midi.") }).map(\.source) == ["midi.cc-19-7"] else {
+            return "relearning didn't replace the knob's MIDI mapping"
         }
+        // A note learns on its press, not its release.
+        _ = engine.knobClicked("generator.explode", keepMapping: false)
+        engine.handleMIDI(MIDIMessage(channel: 1, command: .noteOff, data1: 40, data2: 0, timestamp: 0))
+        guard engine.midiMap.learning == "generator.explode" else { return "a note release was learned" }
+        engine.learnMIDI(nil)
+        engine.removeMappings(target: "generator.explode")
+        // The old MIDI Input tool is rejected, not ignored.
+        if var old = engine.currentSnapshot() {
+            old.inputs.append(InputSpec(type: "midi"))
+            guard engine.build(old, reuse: nil) == nil, engine.errors["input"] != nil else { return "a scene with a MIDI Input built" }
+            engine.errors["input"] = nil
+        }
+
+        // Output, the app's master fade: MIDI maps onto it on this Mac, not in the scene, and it
+        // fades what's presented, not the picture feedback effects read.
+        _ = engine.knobClicked(MIDIMap.outputKey, keepMapping: false)
+        engine.handleMIDI(cc(7, 0, channel: 1))
+        guard engine.midiMap.appMappings.map(\.target) == [MIDIMap.outputKey],
+              engine.current?.mappings.contains(where: { MIDIMap.isAppTarget($0.target) }) == false else {
+            return "Output's MIDI mapping not kept on this Mac"
+        }
+        engine.midiMap.output.setBase(0)
+        engine.handleMIDI(cc(7, 127, channel: 1))
+        guard abs(engine.midiMap.modulateOutput(f) - 1) < 1e-3 else { return "fader up didn't raise Output" }
+        engine.handleMIDI(cc(7, 0, channel: 1))
+        guard engine.midiMap.modulateOutput(f) < 1e-3 else { return "fader down didn't fade Output" }
+        _ = engine.renderOffscreen(s3, frames: 1, snapshot: nil)
+        func presented(_ level: Float) -> Float {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Renderer.drawableFormat, width: 64, height: 36, mipmapped: false)
+            d.usage = [.renderTarget, .shaderRead]
+            d.storageMode = .shared
+            guard let tex = engine.device.makeTexture(descriptor: d), let cmd = engine.renderer.queue.makeCommandBuffer() else { return -1 }
+            engine.renderer.present(cmd, into: tex, level: level)
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            var px = [UInt8](repeating: 0, count: 64 * 36 * 4)
+            tex.getBytes(&px, bytesPerRow: 64 * 4, from: MTLRegionMake2D(0, 0, 64, 36), mipmapLevel: 0)
+            return Float(px.enumerated().filter { $0.offset % 4 != 3 }.reduce(0) { $0 + Int($1.element) }) / Float(64 * 36 * 3)
+        }
+        let full = presented(1), half = presented(0.5), black = presented(0)
+        guard full > 2, black == 0, abs(half - full / 2) < max(2, full * 0.1) else {
+            return "Output didn't fade the presented picture: \(full) at 1, \(half) at ½, \(black) at 0"
+        }
+        engine.removeMappings(target: MIDIMap.outputKey)
+        guard engine.midiMap.appMappings.isEmpty, abs(engine.midiMap.modulateOutput(f)) < 1e-6 else { return "Output's mapping not removed" }
+        engine.midiMap.output.setBase(1)
+        engine.setMIDIMapMode(false)
 
         // Removing a device removes its mappings, and they don't come back with a new one.
         engine.removeInput("audio")
@@ -709,7 +752,7 @@ enum SelfCheck {
 
     /// Playlists, which are sidebar folders: a strict format, transitions that stay on a link
     /// only while its two scenes stay next to each other, stepping that loops both ways with
-    /// the transition on the link crossed, edits saved straight away, and MIDI learn for the
+    /// the transition on the link crossed, edits saved straight away, and MIDI mapping of the
     /// buttons with trigger-style firing.
     private static func checkPlaylists(engine: Engine) -> String? {
         // Strict format: a missing field is an error, not a default.
@@ -800,25 +843,25 @@ enum SelfCheck {
         engine.loop.transition.cancel()
         engine.load(fixtureA, animated: false)
 
-        // MIDI: nothing is bound at first; learning takes the next control pressed, and a bound
-        // control fires once per press.
-        guard engine.playlists.bindings.isEmpty, !engine.playlistWantsMIDI else { return "playlist buttons start mapped" }
+        // MIDI: nothing is mapped at first; in MIDI map mode clicking Next learns the next
+        // control pressed, on this Mac, and a mapped control fires once per press.
+        guard engine.midiMap.appMappings.isEmpty else { return "playlist buttons start mapped" }
         func note(_ n: Int, _ v: Int) -> MIDIMessage {
             MIDIMessage(channel: 1, command: v > 0 ? .noteOn : .noteOff, data1: n, data2: v, timestamp: 0)
         }
-        engine.playlists.mapMode = true
-        engine.learnPlaylistMIDI(.next)
+        engine.setMIDIMapMode(true)
+        engine.learnMIDI(MIDIMap.nextKey)
         engine.handleMIDI(note(36, 100))
-        guard engine.playlists.bindings[.next] == MIDIControl(kind: .note, number: 36, channel: 1), engine.playlists.learning == nil else {
+        guard engine.mappings(for: MIDIMap.nextKey).map(\.source) == ["midi.note-36-1"], engine.midiMap.learning == nil else {
             return "Next didn't learn the note"
         }
         guard engine.playlistPosition == 0 else { return "learning also stepped" }
-        engine.playlists.mapMode = false
+        engine.setMIDIMapMode(false)
         engine.handleMIDI(note(36, 100))
         guard engine.playlistPosition == 0 else { return "the learning press fired on its repeat without a release" }
         engine.handleMIDI(note(36, 0))
         engine.handleMIDI(note(36, 100))
-        guard engine.playlistPosition == 1 else { return "bound note didn't step" }
+        guard engine.playlistPosition == 1 else { return "mapped note didn't step" }
         engine.handleMIDI(note(36, 100))
         guard engine.playlistPosition == 1 else { return "held note fired twice" }
         // A pedal that sends a press and its release together: both arrive in one packet.
@@ -826,9 +869,8 @@ enum SelfCheck {
         let pulse: [UInt32] = [0x20B0_157F, 0x20B0_1500]
         _ = MIDIEventListAdd(&events, MemoryLayout<MIDIEventList>.size, MIDIEventListInit(&events, ._1_0), 0, pulse.count, pulse)
         guard MIDIEngine.channelMessages(in: &events).map(\.d2) == [127, 0] else { return "a packet's second message was dropped" }
-        guard engine.playlistWantsMIDI else { return "bound buttons don't want MIDI" }
-        engine.clearPlaylistMIDI(.next)
-        guard !engine.playlistWantsMIDI else { return "MIDI still wanted after clearing" }
+        engine.removeMappings(target: MIDIMap.nextKey)
+        guard engine.midiMap.appMappings.isEmpty else { return "Next's mapping not removed" }
         engine.loop.transition.cancel()
 
         // Reordering in the sidebar is the playlist's order.
@@ -2300,7 +2342,7 @@ enum SelfCheck {
         engine.removeInput("audio")
         guard engine.current?.hasAudioInput == false else { return "input not removed" }
 
-        // Tool cardinality: audio/camera/lens are single, palettes/generators/effects/LFOs/MIDI/webcams are many.
+        // Tool cardinality: audio/camera/lens are single, palettes/generators/effects/LFOs/webcams are many.
         guard Tools.cardinality(.input, "audio") == .one,
               Tools.cardinality(.camera, "orbit") == .one,
               Tools.cardinality(.palette, "palette") == .many,
@@ -2913,7 +2955,7 @@ enum SelfCheck {
         if let problem = checkMappings(engine: engine) {
             print("FAIL mappings: \(problem)"); failures += 1
         } else {
-            print("ok   mappings (outputs, modulation, MIDI inputs, LFOs, paused devices, copy/paste, duplicate)")
+            print("ok   mappings (outputs, modulation, MIDI map mode, Output, LFOs, paused devices, copy/paste, duplicate)")
         }
 
         if let problem = checkTaper() {
@@ -3015,7 +3057,7 @@ enum SelfCheck {
         if let problem = checkPlaylists(engine: engine) {
             print("FAIL playlists: \(problem)"); failures += 1
         } else {
-            print("ok   playlists (folders are playlists, links keep transitions only while their scenes stay neighbours, loops both ways on the link crossed, edits saved, MIDI learn fires per press, start unmapped)")
+            print("ok   playlists (folders are playlists, links keep transitions only while their scenes stay neighbours, loops both ways on the link crossed, edits saved, MIDI mapping fires per press, start unmapped)")
         }
 
         if let problem = checkSidebar(engine: engine) {
@@ -3663,7 +3705,7 @@ extension Engine {
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .shared
         guard let out = device.makeTexture(descriptor: d), let cmd = renderer.queue.makeCommandBuffer() else { return }
-        renderer.present(cmd, into: out)
+        renderer.present(cmd, into: out, level: 1)
         cmd.commit()
         cmd.waitUntilCompleted()
         var bytes = [UInt8](repeating: 0, count: w * h * 4)

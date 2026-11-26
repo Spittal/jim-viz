@@ -11,7 +11,7 @@ enum ToolCardinality: String, CaseIterable, Codable, Hashable {
 struct Tool: Identifiable, Hashable {
     var id: String { "\(kind.rawValue):\(name)" }
     let kind: DeviceKind
-    /// Tool id: `audio`, `midi`, a camera rig (`orbit`, `static`…), a lens shader, `palette`, a generator shader or an effect shader name.
+    /// Tool id: `audio`, `webcam`, `video`, `picture`, a camera rig (`orbit`, `static`…), a lens shader, `palette`, a generator shader or an effect shader name.
     let name: String
     let label: String
     let cardinality: ToolCardinality
@@ -35,7 +35,6 @@ enum Tools {
         switch (kind, name) {
         case (.input, "audio"): return "Audio In"
         case (.modulation, _): return ModulatorType(rawValue: name)?.label ?? humanize(name)
-        case (.input, "midi"): return "MIDI Input"
         case (.input, "webcam"): return "Webcam"
         case (.input, "video"): return "Video"
         case (.input, "picture"): return "Picture"
@@ -55,7 +54,6 @@ enum Tools {
         switch kind {
         case .input:
             switch name {
-            case "midi": return "pianokeys"
             case "webcam": return "video"
             case "video": return "play.rectangle"
             case "picture": return "photo"
@@ -145,7 +143,7 @@ enum Tools {
             return Tool(kind: kind, name: name, label: label(kind, name), cardinality: cardinality(kind, name),
                         presets: presets, category: category)
         }
-        return [tool(.input, "audio"), tool(.input, "midi"), tool(.input, "webcam"),
+        return [tool(.input, "audio"), tool(.input, "webcam"),
                 tool(.input, "video"), tool(.input, "picture"),
                 tool(.modulation, "lfo"), tool(.modulation, "math"), tool(.modulation, "macro"),
                 tool(.modulation, "toggle")]

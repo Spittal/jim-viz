@@ -5,8 +5,9 @@ import SwiftUI
 /// selected it lists every mapping in the scene.
 ///
 /// Map an output by clicking its + and then a knob (Shift-click maps several), from its
-/// → menu, or by dragging it onto a knob. MIDI controllers are MIDI Input devices whose
-/// learned controls are outputs like any other. Mappings belong to the scene and save with it (⌘S).
+/// → menu, or by dragging it onto a knob. Mappings belong to the scene and save with it (⌘S).
+/// In MIDI map mode (the toolbar's keyboard button) it lists every MIDI mapping instead: this
+/// Mac's, onto Output and the playlist, and the scene's.
 struct MappingsInspector: View {
     @Environment(Engine.self) private var engine
 
@@ -18,7 +19,9 @@ struct MappingsInspector: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         hint
-                        if let key = engine.selectedDevice, scene.deviceKeys.contains(key) {
+                        if engine.midiMap.isOn {
+                            MIDIMapInspector(scene: scene)
+                        } else if let key = engine.selectedDevice, scene.deviceKeys.contains(key) {
                             DeviceInspector(scene: scene, key: key)
                         } else {
                             Text("Select a device in the chain to see its outputs and map them.")
@@ -70,15 +73,17 @@ struct MappingsInspector: View {
 
     @ViewBuilder
     private var hint: some View {
-        if let m = engine.remapping {
+        if engine.midiMap.isOn {
+            let target = engine.midiMap.learning
+            banner(target.map { "Move a control on your MIDI controller to map it onto \(engine.targetLabel($0)). Click it again to cancel." }
+                   ?? "MIDI map: click a knob, trigger or playlist button, then move a control. Mapping one replaces the MIDI mapping there. Esc to finish.",
+                   color: Theme.midi) { engine.setMIDIMapMode(false) }
+        } else if let m = engine.remapping {
             banner("Click a \(m.kind.inputNoun) to move \(m.sourceLabel) → \(m.targetLabel) there. Esc to cancel.",
                    color: Theme.modulation) { engine.mapSource = nil }
         } else if let source = engine.mapSource {
             banner("Click a \(engine.kind(of: source) == .trigger ? "trigger input" : "knob") to map \(Outputs.label(source, in: engine.current?.outputs ?? [])). Shift-click for several, Esc to finish.",
                    color: Theme.modulation) { engine.mapSource = nil }
-        } else if let input = engine.current?.learningMIDI {
-            banner("Learning: move controls on \(engine.deviceName(input.key)) to add them as outputs. Esc to finish.",
-                   color: Theme.midi) { input.isLearning = false }
         }
     }
 
@@ -163,9 +168,7 @@ private struct DeviceInspector: View {
         InspectorSection("Outputs", key: "outputs") {
             ForEach(streams) { StreamOutputCard(scene: scene, stream: $0) }
             if outputs.isEmpty && streams.isEmpty {
-                empty(key.hasPrefix("midi.")
-                      ? "No controls yet. Turn on Learn on the device, then move the controls you want to use."
-                      : "\(engine.deviceName(key)) has no outputs. Its knobs can still be driven by other devices' outputs.")
+                empty("\(engine.deviceName(key)) has no outputs. Its knobs can still be driven by other devices' outputs.")
             }
             ForEach(outputs) { output in
                 OutputCard(scene: scene, output: output)
@@ -213,7 +216,7 @@ private struct DeviceInspector: View {
             if key.hasPrefix("mod.") {
                 return "Modulation · " + (engine.current?.modulators.first { "mod.\($0.id)" == key }?.type.label ?? "")
             }
-            return key.hasPrefix("midi.") ? "Input · MIDI" : "Effect"
+            return "Effect"
         }
     }
 }
@@ -235,11 +238,6 @@ private struct OutputCard: View {
             ForEach(mapped) { MappingRow(mapping: $0, showSource: false) }
         }
         .padding(.vertical, 4)
-        .contextMenu {
-            if output.key.hasPrefix("midi.") {
-                Button("Forget Control", role: .destructive) { engine.forgetMIDIControl(output.key) }
-            }
-        }
     }
 }
 
@@ -389,6 +387,28 @@ private struct RemapMenu: View {
     }
 }
 
+// MARK: - MIDI map
+
+/// Every MIDI mapping, while in MIDI map mode: this Mac's (Output, the playlist), which work in
+/// every scene, then the scene's.
+private struct MIDIMapInspector: View {
+    @Environment(Engine.self) private var engine
+    let scene: RenderScene
+
+    var body: some View {
+        let app = engine.midiMap.appMappings
+        let sceneMIDI = scene.mappings.filter { $0.source.hasPrefix("midi.") }
+        InspectorSection("This Mac", key: "midi.app") {
+            if app.isEmpty { empty("Output and the playlist's Previous and Next. Mapped here, they work in every scene.") }
+            ForEach(app) { MappingRow(mapping: $0) }
+        }
+        InspectorSection("This Scene", key: "midi.scene") {
+            if sceneMIDI.isEmpty { empty("No MIDI mapped in \(scene.name) yet. Saved with the scene.") }
+            ForEach(sceneMIDI) { MappingRow(mapping: $0) }
+        }
+    }
+}
+
 // MARK: - Mappings
 
 private struct MappingRow: View {
@@ -401,6 +421,7 @@ private struct MappingRow: View {
     var body: some View {
         let selected = engine.selectedTarget == mapping.target
         let color = mapping.source.hasPrefix("midi.") ? Theme.midi : Theme.modulation
+        let isApp = MIDIMap.isAppTarget(mapping.target)
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 if mapping.kind != .value {
@@ -422,6 +443,7 @@ private struct MappingRow: View {
                 .lineLimit(1)
                 Spacer(minLength: 2)
                 let remapping = engine.remapping?.source == mapping.source && engine.remapping?.target == mapping.target
+                if !isApp {
                 Button { engine.startRemap(mapping) } label: {
                     Image(systemName: remapping ? "scope" : "plus.circle").font(.system(size: 14, weight: remapping ? .bold : .regular))
                         .frame(width: 16, height: 16)
@@ -433,6 +455,7 @@ private struct MappingRow: View {
                                 : "Remap: click this, then the \(mapping.kind.inputNoun) to move it to")
                 RemapMenu(mapping: mapping)
                     .frame(width: 16, height: 16)
+                }
                 Button { engine.removeMapping(mapping) } label: {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
                         .frame(width: 16, height: 16)
@@ -488,9 +511,11 @@ private struct MappingRow: View {
         .contentShape(Rectangle())
         .onTapGesture { engine.selectedTarget = mapping.target }
         .contextMenu {
-            Button("Copy Mapping") { engine.copyMappings([mapping]) }
+            if !isApp { Button("Copy Mapping") { engine.copyMappings([mapping]) } }
             Button("Remove", role: .destructive) { engine.removeMapping(mapping) }
         }
+        // This Mac's mappings aren't in the scene, so they save as their settings change.
+        .onChange(of: mapping.spec) { if isApp { engine.midiMap.save() } }
     }
 
     private func toggleEnabled() {

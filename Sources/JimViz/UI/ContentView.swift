@@ -42,12 +42,12 @@ struct ContentView: View {
                 MappingsInspector()
                     .inspectorColumnWidth(min: 250, ideal: 290, max: 420)
             }
-            // Esc leaves map mode and MIDI learning.
+            // Esc leaves map mode and MIDI map mode.
             .background {
-                Button("") { engine.mapSource = nil; engine.current?.learnMIDI(nil); engine.playlists.mapMode = false; engine.learnPlaylistMIDI(nil) }
+                Button("") { engine.mapSource = nil; engine.setMIDIMapMode(false) }
                     .keyboardShortcut(.escape, modifiers: [])
                     .opacity(0)
-                    .disabled(engine.mapSource == nil && engine.current?.learningMIDI == nil && !engine.playlists.mapMode)
+                    .disabled(engine.mapSource == nil && !engine.midiMap.isOn)
             }
         }
         .navigationTitle(engine.current?.name ?? "Jim Viz")
@@ -152,7 +152,23 @@ private struct TransportToolbar: ToolbarContent {
     var body: some ToolbarContent {
         @Bindable var engine = engine
         ToolbarItemGroup(placement: .primaryAction) {
-            OutputMenu(output: engine.output)
+            Toggle(isOn: Binding(get: { engine.midiMap.isOn }, set: { engine.setMIDIMapMode($0) })) {
+                Label("MIDI Map", systemImage: "keyboard")
+            }
+            .tint(Theme.midi)
+            .help("MIDI map: click a knob, trigger or playlist button, then move a control on your controller. Esc to finish.")
+        }
+        // Output's level and where it goes share one button: the knob fades the projector and
+        // the preview to black, after the scenes are blended. Kept on this Mac.
+        ToolbarItem(placement: .primaryAction) {
+            HStack(spacing: 2) {
+                Knob(param: engine.midiMap.output, targetPath: MIDIMap.outputKey, compact: true)
+                OutputMenu(output: engine.output)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+            }
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
             Button { engine.togglePlaylistBar() } label: { Label("Playlist", systemImage: "rectangle.bottomthird.inset.filled") }
                 .help("Show or hide the playlist (⇧⌘Y)")
             Button { engine.showInspector.toggle() } label: { Label("Mappings", systemImage: "sidebar.right") }

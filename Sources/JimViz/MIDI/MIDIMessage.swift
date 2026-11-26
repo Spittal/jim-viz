@@ -34,8 +34,6 @@ struct MIDIMessage: Hashable {
     let data2: Int
     /// Exact receive timestamp.
     let timestamp: MIDITimeStamp
-    /// Name of the device it came from, when known.
-    var device: String? = nil
 
     /// Normalized 0...1 value for parameter modulation.
     var normalizedValue: Float {

@@ -14,8 +14,8 @@ struct Preset: Codable {
 // MARK: - Scene
 
 /// A scene is a composed device chain, left to right:
-/// inputs (Audio In, MIDI, Webcam) → modulation (LFOs) → camera, lens, palette, generators → effects.
-/// Plus mappings, which route any tool's outputs (and MIDI controls) to any knob.
+/// inputs (Audio In, Webcam, Video, Picture) → modulation (LFOs) → camera, lens, palette, generators → effects.
+/// Plus mappings, which route any tool's outputs (and MIDI controls, `midi.<control>`) to any knob.
 /// Each device names its tool and the preset it was loaded from; the preset's values are
 /// copied in, so a scene never depends on (or changes) a preset file.
 /// Edits happen in memory and are written with ⌘S.
@@ -71,30 +71,27 @@ struct ModulatorSpec: Codable, Equatable {
 }
 
 struct InputSpec: Codable, Equatable {
-    /// Input tool: `audio`, `midi`, `webcam`, `video` or `picture`.
+    /// Input tool: `audio`, `webcam`, `video` or `picture`.
     var type: String
-    /// MIDI inputs, webcams, videos, pictures: unique id within the scene. `midi.<id>`,
-    /// `webcam.<id>`, `video.<id>`, `picture.<id>` in mapping keys.
+    /// Webcams, videos, pictures: unique id within the scene. `webcam.<id>`, `video.<id>`,
+    /// `picture.<id>` in mapping keys.
     var id: String?
     /// Audio In: the source, required: `rekordbox`, `system` or `input:<device uid>`.
-    /// MIDI and webcam: the device by name. Leave out for every MIDI device, or the default camera.
+    /// Webcam: the camera by name. Leave out for the default camera.
     var device: String?
     /// Video and picture: path or filename of the media file.
     var file: String?
     /// Audio In: which stereo pair of the source to listen to, 0 (channels 1–2) when left out.
     var channelPair: Int?
-    /// MIDI: learned controls, which are its outputs (`cc-31-7`, `note-11-1`, `pb-0-1`).
-    var controls: [String]?
     var preset: String?
     var enabled: Bool?
     var params: [String: Float]?
 
-    var isMIDI: Bool { type == "midi" }
     var isWebcam: Bool { type == "webcam" }
     var isVideo: Bool { type == "video" }
     var isPicture: Bool { type == "picture" }
-    /// Chain key: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
-    var deviceKey: String { isMIDI || isWebcam || isVideo || isPicture ? "\(type).\(id ?? type)" : type }
+    /// Chain key: `audio`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
+    var deviceKey: String { isWebcam || isVideo || isPicture ? "\(type).\(id ?? type)" : type }
 }
 
 struct CameraSlot: Codable, Equatable {
@@ -153,7 +150,7 @@ struct EffectSpec: Codable, Equatable {
 }
 
 struct MappingSpec: Codable, Equatable {
-    /// A value output (`audio.kick`, `audio.pulse`, `mod.lfo.out`, `midi.midi.cc-31-7`, `camera.angle`)
+    /// A value output (`audio.kick`, `audio.pulse`, `mod.lfo.out`, `midi.cc-31-7`, `camera.angle`)
     /// or a stream output (`webcam.<id>.video`, `audio.spectrum`, `palette.colors`, `palette.<id>.colors`).
     var source: String
     /// A knob (`generator.<param>`, `camera.<param>`, `post.<id>.<param>`, `mod.<id>.<param>`,

@@ -100,7 +100,7 @@ enum Outputs {
         if let o = outputs.first(where: { $0.key == key }) { return "\(o.device) · \(o.name)" }
         let parts = key.split(separator: ".").map(String.init)
         switch parts.first {
-        case "midi" where parts.count == 3: return "MIDI · \(MIDIControl(key: parts[2])?.label ?? parts[2])"
+        case "midi" where parts.count == 2: return "MIDI · \(MIDIControl(key: parts[1])?.label ?? parts[1])"
         case "audio": return "Audio In · \(humanize(parts.last ?? key))"
         case "mod" where parts.count == 3: return "\(parts[1]) · \(humanize(parts[2]))"
         default: return key
@@ -110,8 +110,8 @@ enum Outputs {
 
 // MARK: - MIDI
 
-/// A physical MIDI control: `cc-31-7`, `note-11-1`, `pb-0-1` (kind, number, channel).
-/// A MIDI Input device's learned controls are its outputs, keyed `midi.<id>.<control>`.
+/// A physical MIDI control: `cc-31-7`, `note-11-1`, `pb-0-1` (kind, number, channel), from
+/// any connected device. As an output it is keyed `midi.<control>` (`MIDIMap`).
 struct MIDIControl: Hashable {
     enum Kind: String { case cc, note, pb }
     let kind: Kind
@@ -136,6 +136,25 @@ struct MIDIControl: Hashable {
     }
 
     var key: String { "\(kind.rawValue)-\(number)-\(channel)" }
+
+    /// The control as an output: `midi.cc-27-1`.
+    var sourceKey: String { "midi.\(key)" }
+
+    init?(sourceKey: String) {
+        guard sourceKey.hasPrefix("midi.") else { return nil }
+        self.init(key: String(sourceKey.dropFirst(5)))
+    }
+
+    /// Short, for a knob in MIDI map mode: `CC 27`, `Note 25`, `PB`, with the channel when not 1.
+    var shortLabel: String {
+        let base: String
+        switch kind {
+        case .cc: base = "CC \(number)"
+        case .note: base = "Note \(number)"
+        case .pb: base = "PB"
+        }
+        return channel == 1 ? base : "\(channel)/\(base)"
+    }
 
     /// FLX4 control name when known, otherwise `Ch 7 CC 31`.
     var label: String {
@@ -168,62 +187,6 @@ struct MIDIControl: Hashable {
         "note-11-1": "CH1 Play", "note-11-2": "CH2 Play",
         "note-12-1": "CH1 Cue", "note-12-2": "CH2 Cue",
     ]
-}
-
-/// A MIDI controller in the Inputs section. Each control it has learned is an output
-/// holding the control's latest value. Messages arrive on main; the render thread reads.
-@Observable
-final class MIDIInputRuntime: Identifiable {
-    /// Scene id: `midi`, `midi2`…
-    let id: String
-    /// Device name to listen to; nil listens to every device.
-    let device: String?
-    let controls: [MIDIControl]
-    @ObservationIgnored private(set) var outputs: [OutputSignal] = []
-    @ObservationIgnored private var held: [MIDIControl: Held] = [:]
-    /// The last control that moved, for the device view.
-    private(set) var lastControl: MIDIControl?
-    /// While on, each new control moved on its device is handed back by `handle` to be learned.
-    /// One input in a scene learns at a time (`RenderScene.learnMIDI`).
-    var isLearning = false
-    @ObservationIgnored private(set) var lastActivity: CFAbsoluteTime = 0
-
-    final class Held { var value: Float = 0 }
-
-    var key: String { "midi.\(id)" }
-    var title: String { device ?? "All MIDI devices" }
-
-    init(id: String, device: String?, controls: [MIDIControl], reuse old: MIDIInputRuntime?) {
-        self.id = id; self.device = device; self.controls = controls
-        for c in controls {
-            let h = old?.held[c] ?? Held()
-            held[c] = h
-            outputs.append(OutputSignal("midi.\(id).\(c.key)", c.label, device: device ?? "MIDI") { _ in h.value })
-        }
-        lastControl = old?.lastControl
-        lastActivity = old?.lastActivity ?? 0
-        isLearning = old?.isLearning ?? false
-    }
-
-    func listens(to msg: MIDIMessage) -> Bool { device == nil || msg.device == device }
-
-    /// Main thread. Takes a message from its device. Returns the control and its value when
-    /// the control is new and this input is learning, for the scene to add as an output.
-    func handle(_ msg: MIDIMessage) -> (MIDIControl, Float)? {
-        guard listens(to: msg), let control = MIDIControl(msg) else { return nil }
-        let value = MIDIControl.value(msg)
-        return receive(control, value) || !isLearning ? nil : (control, value)
-    }
-
-    /// Main thread. Returns false if the control isn't one of its outputs yet.
-    @discardableResult
-    func receive(_ control: MIDIControl, _ value: Float) -> Bool {
-        lastActivity = CFAbsoluteTimeGetCurrent()
-        if lastControl != control { lastControl = control }
-        guard let h = held[control] else { return false }
-        h.value = value
-        return true
-    }
 }
 
 // MARK: - Mappings

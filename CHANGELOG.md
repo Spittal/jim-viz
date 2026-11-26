@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 (2026-11-26)
+
+- **MIDI map mode replaces the MIDI Input tool:** the toolbar's keyboard button turns it on. Click a knob, a trigger input or the playlist's Previous or Next, then move a control on any connected controller to map it. Each control is an output, `midi.<control>`, so there's nothing to add to the chain and no controls to learn first. While it's on, knobs and triggers show the control mapped onto them, and the inspector lists every MIDI mapping. Esc finishes.
+- **Output knob:** a master fade in the toolbar, beside the output menu, that fades the projector and the preview to black after the scenes are blended. Feedback effects still see the unfaded picture. It, and the playlist's Previous and Next, map to MIDI on this Mac and work in every scene.
+- The MIDI Input device and its Learn Controls button are gone, and so is the playlist bar's own MIDI map button.
+
 ## 1.4.1 (2026-11-25)
 
 - **Arrows step a knob wherever the focus is:** with a knob clicked, the up and down arrows step it even after clicking in the Scenes list, where they used to switch scenes instead. Loading another scene deselects the knob.

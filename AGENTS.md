@@ -46,7 +46,7 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 
 | Kind | Example outputs | Consumed by |
 |---|---|---|
-| value (0–1) | Audio In · Kick, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control, Webcam · Motion | any knob, with amount, curve and smooth |
+| value (0–1) | Audio In · Kick, Audio In · Drums Stem, Audio In · Pulse, LFO, MIDI control (`midi.cc-27-1`), Webcam · Motion | any knob, with amount, curve and smooth |
 | video | Webcam · Video, Webcam · Depth | `// @video name Label` inputs |
 | spectrum | Audio In · Spectrum, Drums/Bass/Vocals/Other Spectrum (128 log bins, with their last four seconds) | `// @spectrum name Label` inputs |
 | palette | Palette · Colours | `// @palette name Label` inputs |
@@ -67,16 +67,21 @@ Outputs and inputs have a kind, and a kind only connects to the same kind
 The device chain reads like an Ableton track, and the picture is built left to right:
 
 ```
-Inputs (Audio In, MIDI, Webcam) → Modulation (LFOs) → Camera → Lens → Palette → Generator → Effects…
+Inputs (Audio In, Webcam, Video, Picture) → Modulation (LFOs) → Camera → Lens → Palette → Generator → Effects…
 ```
 
 - Inputs and modulators produce signals.
 - The generator renders the scene.
 - Each effect processes the previous effect's output (`src`), in chain order. Reordering
   effects changes the image.
-- Chain keys: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
+- Chain keys: `audio`, `webcam.<id>`, `video.<id>`, `picture.<id>`,
   `mod.<id>`, `camera`, `lens`, `palette` (the first palette) and `palette.<id>` (the rest),
   `generator` (the first generator) and `generator.<id>` (the rest), `post.<id>`.
+- **MIDI is not a tool in the chain.** Every control on any connected device is an output,
+  `midi.<control>`. The toolbar's keyboard button turns on MIDI map mode: click a knob,
+  trigger or playlist button, then move a control. Scene targets save in the scene; the app
+  targets (`app.output`, the master fade, and `app.previous`/`app.next` for the playlist) are
+  kept in this Mac's defaults (`MIDIMap`).
 - **A scene** is one such chain plus its mappings, saved as JSON in the library's `Scenes` folder (see Storage).
 - **Switching scenes** renders the outgoing and incoming scenes at once and blends them.
   Today that's a crossfade.

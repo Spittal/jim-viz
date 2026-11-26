@@ -39,6 +39,8 @@ final class RenderLoop: NSObject {
 
     /// Returns the scene to draw. Called on the render thread; must be cheap and thread-safe.
     var sceneProvider: () -> RenderScene? = { nil }
+    /// Output's level this frame (0 is black), after its mappings. Called on the render thread.
+    var outputLevel: ((SignalFrame) -> Float)?
 
     private var thread: Thread!
     private var link: CADisplayLink?
@@ -150,9 +152,10 @@ final class RenderLoop: NSObject {
             renderer.present(cmd, tex, into: drawable.texture)
             cmd.present(drawable)
         }
+        let level = outputLevel?(signals) ?? 1
         for s in visibleSurfaces {
             guard let drawable = s.layer.nextDrawable() else { continue }
-            renderer.present(cmd, into: drawable.texture)
+            renderer.present(cmd, into: drawable.texture, level: level)
             cmd.present(drawable)
         }
         cmd.addCompletedHandler { [weak self] cb in

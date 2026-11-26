@@ -312,63 +312,6 @@ private struct MeterBar: View {
     }
 }
 
-/// A MIDI controller (or every connected one). Learned controls become its outputs, which
-/// the inspector lists and maps like any other output.
-struct MIDIInputDevice: View {
-    @Environment(Engine.self) private var engine
-    let input: MIDIInputRuntime
-    var accent: Color? = nil
-
-    var body: some View {
-        let learning = input.isLearning
-        let connected = input.device.map { name in engine.midi.devices.contains { $0.name == name } } ?? !engine.midi.devices.isEmpty
-        DevicePanel(title: "MIDI Input", icon: Tools.icon(.input, "midi"), subtitle: input.title, statusColor: connected ? Theme.beatOn : Theme.knobTrack,
-                    accent: accent,
-                    select: input.key, onClose: { engine.removeInput(input.key) }) {
-            VStack(alignment: .leading, spacing: 7) {
-                Menu {
-                    Button("All Devices") { engine.setMIDIDevice(input.key, nil) }
-                    Divider()
-                    ForEach(engine.midi.devices) { d in
-                        Button(d.name) { engine.setMIDIDevice(input.key, d.name) }
-                    }
-                } label: {
-                    Text(input.title).font(.system(size: 11))
-                }
-                .controlSize(.small)
-                .help(connected ? "Which controller to listen to" : "Not connected. Plug it in, or pick another device.")
-                Toggle(isOn: Binding(get: { learning }, set: { on in
-                    engine.current?.learnMIDI(on ? input.key : nil)
-                    if on { engine.selectDevice(input.key); engine.showInspector = true }
-                })) {
-                    Label(learning ? "Learning…" : "Learn Controls", systemImage: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                }
-                .toggleStyle(.button)
-                .tint(Theme.midi)
-                .controlSize(.small)
-                .help("While on, each new control you move becomes an output you can map")
-                TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-                    let recent = CFAbsoluteTimeGetCurrent() - input.lastActivity < 0.2
-                    HStack(spacing: 5) {
-                        Circle().fill(recent ? Theme.midi : Theme.knobTrack).frame(width: 7, height: 7)
-                        Text(input.lastControl?.label ?? "No MIDI yet")
-                            .font(Theme.labelFont)
-                            .foregroundStyle(Theme.textDim)
-                            .lineLimit(1)
-                    }
-                }
-                Text("\(input.controls.count) control\(input.controls.count == 1 ? "" : "s") learned")
-                    .font(Theme.labelFont)
-                    .foregroundStyle(Theme.textDim)
-            }
-            .frame(width: 150, alignment: .leading)
-        }
-        .onAppear { engine.midi.refreshEndpoints() }
-    }
-}
-
 /// A Webcam input: a live preview of its processed video, the camera picker and its
 /// processing knobs. Its video goes to the generator's Video In; motion and brightness are
 /// value outputs, in the inspector.

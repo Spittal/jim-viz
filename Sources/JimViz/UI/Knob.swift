@@ -6,7 +6,8 @@ import SwiftUI
 /// resets it and the up and down arrows step it (Shift for fine).
 /// Mappable knobs (those with a `targetPath`) also receive an output when clicked while one is
 /// waiting to be mapped, or when one is dropped on them (the chain's drop delegate does the
-/// routing), and show a cyan arc for the range their mappings can reach.
+/// routing), and show a cyan arc for the range their mappings can reach. In MIDI map mode a
+/// click picks the knob to learn the next MIDI control moved.
 struct Knob: View {
     @Environment(Engine.self) private var engine
     let param: Param
@@ -19,34 +20,47 @@ struct Knob: View {
     private static let startAngle = 135.0
     private static let sweep = 270.0
 
+    /// The dial alone, for a toolbar button; its name and value are in the tooltip.
+    var compact = false
+
     var body: some View {
         let mappable = targetPath != nil
         let mapMode = mappable && engine.mapSource.map { engine.kind(of: $0) == .value } ?? false
-        let selected = (mappable && engine.selectedTarget == targetPath || engine.activeKnob === param) && !mapMode
+        let midiMode = mappable && engine.midiMap.isOn
+        let learning = midiMode && engine.midiMap.learning == targetPath
+        let selected = (mappable && engine.selectedTarget == targetPath || engine.activeKnob === param) && !mapMode && !midiMode
         let mappings = targetPath.map { engine.mappings(for: $0) } ?? []
         let dropHover = mappable && engine.dropKnob == targetPath
+        let midiControl = mappings.lazy.compactMap { MIDIControl(sourceKey: $0.source) }.first
 
-        VStack(spacing: 1) {
-            Text(knobLabel(param.def.name))
-                .font(Theme.labelFont)
-                .foregroundStyle(selected ? Theme.text : Theme.textDim)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .contentShape(Rectangle())
-                .onTapGesture { click(double: startEdit) }
-
-            ZStack {
-                dial(mappings).frame(width: 30, height: 30)
-                if mapMode || dropHover {
-                    RoundedRectangle(cornerRadius: 3)
-                        .stroke(Theme.modulation, lineWidth: dropHover ? 2 : 1)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(Theme.modulation.opacity(dropHover ? 0.25 : 0.12)))
-                }
-            }
+        let label = Text(knobLabel(param.def.name))
+            .font(Theme.labelFont)
+            .foregroundStyle(selected ? Theme.text : Theme.textDim)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
             .contentShape(Rectangle())
-            .gesture(mapMode ? nil : drag)
-            .onTapGesture { click(double: { engine.editKnob(param, "Reset") { param.reset() } }) }
+            .onTapGesture { click(double: startEdit) }
 
+        // In a toolbar button the highlights are round, like the button's own.
+        let shape = compact ? AnyShape(Capsule()) : AnyShape(RoundedRectangle(cornerRadius: 3))
+        let dialView = ZStack {
+            if midiMode {
+                shape.fill(Theme.midi.opacity(midiControl != nil ? 0.4 : 0.15))
+                shape.stroke(learning ? Color.white : Theme.midi, lineWidth: learning ? 2 : 1)
+            } else if mapMode || dropHover {
+                shape.fill(Theme.modulation.opacity(dropHover ? 0.25 : 0.12))
+                shape.stroke(Theme.modulation, lineWidth: dropHover ? 2 : 1)
+            } else if compact && selected {
+                shape.fill(Color.white.opacity(0.1))
+            }
+            dial(mappings).frame(width: compact ? 20 : 30, height: compact ? 20 : 30)
+                .padding(compact ? 4 : 0)
+        }
+        .contentShape(shape)
+        .gesture(mapMode || midiMode ? nil : drag)
+        .onTapGesture { click(double: { engine.editKnob(param, "Reset") { param.reset() } }) }
+
+        let value = Group {
             if let editText {
                 TextField("", text: Binding(get: { editText }, set: { self.editText = $0 }))
                     .textFieldStyle(.plain)
@@ -57,6 +71,12 @@ struct Knob: View {
                     .onSubmit { commitEdit() }
                     .onExitCommand { self.editText = nil }
                     .onChange(of: editFocused) { _, focused in if !focused { self.editText = nil } }
+            } else if midiMode {
+                // In MIDI map mode the value gives way to the control mapped onto the knob.
+                Text(learning ? "…" : midiControl?.shortLabel ?? "–")
+                    .font(Theme.valueFont)
+                    .foregroundStyle(midiControl != nil || learning ? Color.white : Theme.textDim)
+                    .lineLimit(1)
             } else {
                 Text(valueText)
                     .font(Theme.valueFont)
@@ -64,8 +84,16 @@ struct Knob: View {
                     .lineLimit(1)
             }
         }
-        .frame(width: 54, height: 58)
-        .background(RoundedRectangle(cornerRadius: 3).fill(selected ? Color.white.opacity(0.07) : .clear))
+
+        Group {
+            if compact {
+                dialView
+            } else {
+                VStack(spacing: 1) { label; dialView; value }
+                    .frame(width: 54, height: 58)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 3).fill(selected && !compact ? Color.white.opacity(0.07) : .clear))
         .help(tooltip(mappings))
         // Outputs dropped here are routed by the chain's drop delegate, which finds the knob by frame.
         .chainFrame(targetPath.map { ChainDropDelegate.knobKey($0) } ?? "")
@@ -126,7 +154,8 @@ struct Knob: View {
 
     @ViewBuilder
     private func menu(_ target: String, _ mappings: [MappingRuntime]) -> some View {
-        if let scene = engine.current {
+        // App targets (Output) take MIDI only, in MIDI map mode.
+        if let scene = engine.current, !MIDIMap.isAppTarget(target) {
             Menu("Map") {
                 ForEach(Array(Dictionary(grouping: scene.outputs, by: \.device).sorted { a, b in
                     (scene.outputs.firstIndex { $0.device == a.key } ?? 0) < (scene.outputs.firstIndex { $0.device == b.key } ?? 0)
@@ -196,7 +225,7 @@ struct Knob: View {
                 if dragStart == nil {
                     dragStart = param.def.position(param.base)
                     dragSnapshot = engine.currentSnapshot()
-                    if let targetPath { engine.selectedTarget = targetPath; engine.selectDevice(devicePath(targetPath)) }
+                    if let targetPath { engine.selectedTarget = targetPath; if !MIDIMap.isAppTarget(targetPath) { engine.selectDevice(devicePath(targetPath)) } }
                     engine.activeKnob = param
                 }
                 let fine: Float = NSEvent.modifierFlags.contains(.shift) ? 0.1 : 1
@@ -238,9 +267,13 @@ struct Knob: View {
     private func tooltip(_ mappings: [MappingRuntime]) -> String {
         let d = param.def
         var t = "\(d.name)  \(Knob.format(d.min, d))…\(Knob.format(d.max, d))  default \(Knob.format(d.defaultValue, d))"
+        if compact { t = "\(knobLabel(d.name)) \(valueText)\n" + t }
         for m in mappings { t += "\n← \(m.sourceLabel)\(m.isActive ? "" : " (inactive)")" }
         t += "\nDrag to change, Shift for fine, double-click to reset, double-click the label to type a value, ↑↓ to step"
-        if targetPath != nil { t += "\nDrop an output here, or right-click to map" }
+        if let targetPath {
+            t += MIDIMap.isAppTarget(targetPath) ? "\nMap a MIDI control with the keyboard button in the toolbar"
+                                                 : "\nDrop an output here, or right-click to map"
+        }
         return t
     }
 }

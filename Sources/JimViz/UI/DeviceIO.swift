@@ -182,6 +182,7 @@ struct StreamInputTag: View {
 /// by hand or pick what fires it: trigger outputs on their event, value outputs each time they
 /// rise past ½. It takes any number. While an output that can fire it is waiting to be mapped,
 /// click it to map that (Shift-click to keep mapping), or drop one on it. It flashes when it fires.
+/// In MIDI map mode a click picks it to learn the next MIDI control moved.
 struct TriggerInputTag: View {
     @Environment(Engine.self) private var engine
     let scene: RenderScene
@@ -191,10 +192,19 @@ struct TriggerInputTag: View {
         let sources = scene.mappings.filter { $0.target == input.key }
         let waiting = engine.mapSource.flatMap { engine.kind(of: $0).connects(to: .trigger) ? $0 : nil }
         let detail = sources.isEmpty ? nil : sources.count > 1 ? "\(sources.count) mapped" : sources[0].isActive ? sources[0].sourceLabel : "waiting"
+        let midiMode = engine.midiMap.isOn
+        let learning = midiMode && engine.midiMap.learning == input.key
+        let midiControl = sources.lazy.compactMap { MIDIControl(sourceKey: $0.source) }.first
         let label = TagLabel(icon: { TriggerFlash(lastFired: { input.lastFired }, icon: true) },
-                             name: input.label, detail: detail, connected: !sources.isEmpty)
+                             name: input.label,
+                             detail: midiMode ? (learning ? "…" : midiControl?.shortLabel ?? "–") : detail,
+                             connected: midiMode ? midiControl != nil : !sources.isEmpty)
         Group {
-            if let waiting {
+            if midiMode {
+                Button { engine.learnMIDI(input.key) } label: { label }
+                    .buttonStyle(.plain)
+                    .help("Click, then move a MIDI control to map it onto \(input.label)")
+            } else if let waiting {
                 Button { engine.mapWaiting(to: input.key, keepMapping: NSEvent.modifierFlags.contains(.shift)) } label: { label }
                     .buttonStyle(.plain)
                     .help("Click to map \(engine.sourceLabel(waiting)) onto \(input.label)")
@@ -232,7 +242,14 @@ struct TriggerInputTag: View {
                 .help("\(input.label): a trigger input. Click to fire it or pick what fires it: a trigger, or a value that fires it when it rises past ½.")
             }
         }
-        .tagHighlight(waiting != nil, hover: engine.dropKnob == input.key)
+        .tagHighlight(waiting != nil && !midiMode, hover: engine.dropKnob == input.key)
+        .overlay {
+            if midiMode {
+                RoundedRectangle(cornerRadius: 4).stroke(learning ? Color.white : Theme.midi, lineWidth: learning ? 2 : 1)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.midi.opacity(midiControl != nil ? 0.3 : 0.1)))
+                    .allowsHitTesting(false)
+            }
+        }
         .chainFrame(ChainDropDelegate.knobKey(input.key))
     }
 }

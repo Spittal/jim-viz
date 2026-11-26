@@ -14,9 +14,12 @@ final class Engine {
     // uses it (`activateHardware`). Tools in the chain own their settings and analysis.
     /// The audio sources Audio Ins listen to, one capture per source in use.
     let audioCaptures = AudioCaptures()
-    /// MIDI controllers, for MIDI Inputs.
+    /// MIDI controllers, every connected one.
     let midi = MIDIEngine()
-    /// The playlist bar's state and MIDI bindings.
+    /// MIDI controls' values, this Mac's MIDI mappings (Output, the playlist), Output's knob and
+    /// MIDI map mode.
+    let midiMap: MIDIMap
+    /// The playlist bar's state.
     let playlists: PlaylistState
     /// Cameras, and a feed per camera in use.
     let webcams: WebcamManager
@@ -80,12 +83,16 @@ final class Engine {
         webcams.captureEnabled = !headless
         videos = VideoManager(device: device)
         pictures = PictureManager(device: device)
-        playlists = PlaylistState(defaults: headless ? Self.selfCheckDefaults() : .standard)
+        let defaults = headless ? Self.selfCheckDefaults() : .standard
+        playlists = PlaylistState(defaults: defaults)
+        midiMap = MIDIMap(defaults: defaults)
         output = OutputController(device: device, loop: loop)
         loop.sceneProvider = { [unowned self] in
             self.sceneLock.lock(); defer { self.sceneLock.unlock() }
             return self.renderScene
         }
+        loop.outputLevel = { [midiMap] f in midiMap.modulateOutput(f) }
+        if let e = midiMap.loadError { errors["midi"] = e }
         midi.onMessage = { [weak self] msg in
             self?.handleMIDI(msg)
         }
@@ -116,7 +123,7 @@ final class Engine {
     }
     @ObservationIgnored private var launchObserver: NSObjectProtocol?
 
-    /// Empty defaults for the self-check, so it never touches the app's saved MIDI bindings.
+    /// Empty defaults for the self-check, so it never touches the app's saved MIDI mappings or Output.
     private static func selfCheckDefaults() -> UserDefaults {
         let suite = "jim-viz.selfcheck"
         UserDefaults().removePersistentDomain(forName: suite)
@@ -459,25 +466,13 @@ final class Engine {
         let label = presetName(kind, tool, preset) ?? Tools.label(kind, tool)
         let cardinality = Tools.cardinality(kind, tool)
         switch kind {
-        case .input where tool == "midi":
-            var key = ""
-            edit("Added MIDI Input\(preset.map { " (\($0))" } ?? "")") { file in
-                let id = Self.uniqueID(tool, taken: Set(file.inputs.compactMap(\.id)))
-                file.inputs.append(InputSpec(type: tool, id: id, device: preset))
-                key = "midi.\(id)"
-            }
-            // A new MIDI Input starts learning, with the inspector open to show what it learns.
-            current?.learnMIDI(key)
-            selectDevice(key)
-            showInspector = true
         case .input where tool == "webcam" || tool == "video" || tool == "picture":
             var key = ""
             let toolLabel = Tools.label(kind, tool)
             edit("Added \(toolLabel)\(preset.map { " (\($0))" } ?? "")") { file in
                 let id = Self.uniqueID(tool, taken: Set(file.inputs.compactMap(\.id)))
-                let i = file.inputs.lastIndex { !$0.isMIDI }.map { $0 + 1 } ?? 0
-                file.inputs.insert(InputSpec(type: tool, id: id, device: tool == "webcam" ? preset : nil,
-                                             file: tool == "webcam" ? nil : preset), at: i)
+                file.inputs.append(InputSpec(type: tool, id: id, device: tool == "webcam" ? preset : nil,
+                                             file: tool == "webcam" ? nil : preset))
                 key = "\(tool).\(id)"
             }
             selectDevice(key)
@@ -491,7 +486,7 @@ final class Engine {
                 info = "\(label) is already in the chain"; selectDevice(tool); return
             }
             edit("Added \(label)") { file in
-                // Audio In first, then MIDI inputs. Audio In's presets are its sources.
+                // Audio In first. Its presets are its sources.
                 let i = tool == "audio" ? 0 : file.inputs.prefix { $0.type == "audio" }.count
                 let device = tool == "audio" ? preset ?? Self.defaultAudioSource.key : nil
                 file.inputs.insert(InputSpec(type: tool, device: device), at: i)
@@ -579,7 +574,7 @@ final class Engine {
         return id
     }
 
-    /// Removes an input by chain key: `audio`, `midi.<id>`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
+    /// Removes an input by chain key: `audio`, `webcam.<id>`, `video.<id>` or `picture.<id>`.
     func removeInput(_ key: String) {
         let name = deviceName(key)
         if selectedDevice == key { selectDevice(nil) }
@@ -718,7 +713,7 @@ final class Engine {
             removeLens()
         } else if key == "palette" || key.hasPrefix("palette.") {
             removePalette(key: key)
-        } else if key == "audio" || key.hasPrefix("midi.") || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
+        } else if key == "audio" || key.hasPrefix("webcam.") || key.hasPrefix("video.") || key.hasPrefix("picture.") {
             removeInput(key)
         } else if key.hasPrefix("mod.") {
             let id = String(key.dropFirst(4))
@@ -799,7 +794,7 @@ final class Engine {
     /// any number), a trigger or value output to a trigger input (any number too), or a stream
     /// (video, spectrum, palette) to a stream input of that kind (each takes one; mapping
     /// another replaces it).
-    func addMapping(source: String, target: String) {
+    func addMapping(source: String, target: String, amount: Float = 0.25) {
         let label = "\(sourceLabel(source)) → \(targetLabel(target))"
         let sourceKind = kind(of: source), targetKind = kind(of: target)
         guard sourceKind.connects(to: targetKind) else {
@@ -814,7 +809,7 @@ final class Engine {
         edit("Mapped \(label)") { file in
             var list = file.mappings ?? []
             if stream { list.removeAll { $0.target == target } }
-            list.append(targetKind == .value ? MappingSpec(source: source, target: target, amount: 0.25) : MappingSpec(source: source, target: target))
+            list.append(targetKind == .value ? MappingSpec(source: source, target: target, amount: amount) : MappingSpec(source: source, target: target))
             file.mappings = list
         }
         selectedTarget = target
@@ -840,16 +835,29 @@ final class Engine {
         selectedTarget = target
     }
 
+    /// Removes a mapping from the scene, or from this Mac's MIDI mappings if it maps onto an app target.
     func removeMapping(_ m: MappingRuntime) {
+        if MIDIMap.isAppTarget(m.target) {
+            midiMap.setAppMappings(midiMap.appSpecs.filter { !($0.source == m.source && $0.target == m.target) })
+            activateHardware()
+            info = "Removed mapping"
+            return
+        }
         edit("Removed mapping") { $0.mappings?.removeAll { $0.source == m.source && $0.target == m.target } }
     }
 
     func removeMappings(target: String) {
+        if MIDIMap.isAppTarget(target) {
+            midiMap.setAppMappings(midiMap.appSpecs.filter { $0.target != target })
+            activateHardware()
+            return
+        }
         edit("Removed mappings") { $0.mappings?.removeAll { $0.target == target } }
     }
 
     func mappings(for target: String) -> [MappingRuntime] {
-        current?.mappings.filter { $0.target == target } ?? []
+        if MIDIMap.isAppTarget(target) { return midiMap.appMappings.filter { $0.target == target } }
+        return current?.mappings.filter { $0.target == target } ?? []
     }
 
     /// Waits for a click on a knob (or input of its kind) to move a mapping there. Again to cancel.
@@ -875,17 +883,22 @@ final class Engine {
     /// Clicked a knob: routes the output waiting to be mapped, if any, or selects the knob.
     /// Returns true if the click was used for mapping.
     func knobClicked(_ target: String, keepMapping: Bool) -> Bool {
+        if midiMap.isOn {
+            learnMIDI(target)
+            return true
+        }
         if let source = mapSource, kind(of: source) == .value {
             mapWaiting(to: target, keepMapping: keepMapping)
             return true
         }
         selectedTarget = target
-        selectDevice(devicePath(target))
+        if !MIDIMap.isAppTarget(target) { selectDevice(devicePath(target)) }
         return false
     }
 
     /// "Low Poly · explode", "glow2 · amount", "Low Poly · Background".
     func targetLabel(_ target: String) -> String {
+        if MIDIMap.isAppTarget(target) { return MIDIMap.label(target) }
         if let v = current?.streamInputs.first(where: { $0.key == target }) { return "\(deviceName(v.deviceKey)) · \(v.label)" }
         if let t = current?.triggerInputs.first(where: { $0.key == target }) { return "\(deviceName(t.deviceKey)) · \(t.label)" }
         let parts = target.split(separator: ".").map(String.init)
@@ -986,7 +999,7 @@ final class Engine {
     }
 
     /// Runs only the hardware the scenes on screen (both, mid-transition) use: the audio
-    /// sources their Audio Ins listen to, MIDI while one has a MIDI Input, and the cameras their webcams
+    /// sources their Audio Ins listen to, MIDI while anything is mapped to it (or in MIDI map mode), and the cameras their webcams
     /// use, with depth estimation for those whose Depth is mapped. Everything else stops.
     func activateHardware() {
         let scenes = [current, pendingScene?.scene].compactMap { $0 }
@@ -1000,7 +1013,8 @@ final class Engine {
 
         guard hardwareReady else { return }
         audioCaptures.activate(scenes.compactMap { $0.audioIn?.capture })
-        midi.setActive(playlistWantsMIDI || scenes.contains { !$0.midiInputs.isEmpty })
+        midi.setActive(midiMap.isOn || !midiMap.appMappings.isEmpty
+                       || scenes.contains { $0.mappings.contains { $0.source.hasPrefix("midi.") } })
     }
 
     /// The source a new Audio In listens to.
@@ -1085,8 +1099,6 @@ final class Engine {
             return current?.videos.first { $0.key == key }.map { "Video · \($0.displayName)" } ?? "Video"
         case _ where key.hasPrefix("picture."):
             return current?.pictures.first { $0.key == key }.map { "Picture · \($0.displayName)" } ?? "Picture"
-        case _ where key.hasPrefix("midi."):
-            return current?.midiInputs.first { $0.key == key }.map { "MIDI Input · \($0.title)" } ?? "MIDI Input"
         default: return key.split(separator: ".").dropFirst().joined(separator: ".")
         }
     }
@@ -1223,7 +1235,7 @@ final class Engine {
                                          bank: bank, gpu: old?.gpu ?? renderer.makePaletteTextures()))
         }
 
-        // Inputs: one Audio In at most, any number of MIDI inputs, webcams, videos and pictures.
+        // Inputs: one Audio In at most, any number of webcams, videos and pictures.
         // Rebuilding a scene carries each on; a different scene's pick up where the current
         // scene's are, so levels and the beat continue across a switch.
         var inputs: [InputDevice] = []
@@ -1242,13 +1254,6 @@ final class Engine {
                                        makeSpectrum: renderer.makeSpectrumTextures,
                                        reuse: old, continuing: reuse == nil ? current?.audioIn : nil)
                 inputs.append(.audio(a)); outputs += a.outputs
-            case "midi":
-                let id = spec.id ?? "midi"
-                guard !inputs.contains(where: { $0.id == "midi.\(id)" }) else { continue }
-                let old = reuse?.midiInputs.first { $0.id == id }
-                let m = MIDIInputRuntime(id: id, device: spec.device, controls: (spec.controls ?? []).compactMap(MIDIControl.init(key:)),
-                                         reuse: old)
-                inputs.append(.midi(m)); outputs += m.outputs
             case "webcam":
                 let id = spec.id ?? "webcam"
                 guard !inputs.contains(where: { $0.id == "webcam.\(id)" }) else { continue }
@@ -1277,12 +1282,19 @@ final class Engine {
                 continue
             default:
                 errors["input"] = "unknown input \(spec.type)"
+                return nil
             }
         }
         if let cameraMotion {
             outputs += cameraMotion.outputs
         }
         outputs += modulators.flatMap(\.outputs)
+        // MIDI controls the scene maps, each an output reading the control's latest value.
+        var midiControls: [MIDIControl] = []
+        for spec in file.mappings ?? [] {
+            if let c = MIDIControl(sourceKey: spec.source), !midiControls.contains(c) { midiControls.append(c) }
+        }
+        outputs += midiControls.map(midiMap.makeOutput)
 
         // Mappings. Removing a tool removes its mappings, so one whose source or target isn't
         // in the scene comes from the file, and shows inactive with its problem.
@@ -1293,7 +1305,6 @@ final class Engine {
             case .webcam(let w): banks[w.key] = w.bank
             case .video(let v): banks[v.key] = v.bank
             case .picture(let p): banks[p.key] = p.bank
-            case .midi: break
             }
         }
         if let camera { banks["camera"] = camera }
@@ -1317,7 +1328,6 @@ final class Engine {
             case .webcam(let w): streamOutputs += [w.video, w.depthVideo]
             case .video(let v): streamOutputs += [v.video, v.depthVideo]
             case .picture(let p): streamOutputs += [p.video, p.depthVideo]
-            case .midi: break
             }
         }
         if let lens { streamOutputs.append(lens.output) }
@@ -1356,10 +1366,7 @@ final class Engine {
             if source.hasPrefix("webcam.") { return "Needs its Webcam in the chain" }
             if source.hasPrefix("video.") { return "Needs its Video in the chain" }
             if source.hasPrefix("picture.") { return "Needs its Picture in the chain" }
-            if source.hasPrefix("midi.") {
-                return inputs.contains { $0.id == device } ? "The MIDI input hasn't learned this control"
-                                                           : "Needs its MIDI Input in the chain"
-            }
+            if source.hasPrefix("midi.") { return "Not a MIDI control: \(source)" }
             return "Unknown source \(source)"
         }
 
@@ -1649,44 +1656,75 @@ final class Engine {
             }
         }
 
+        let out = midiMap.output
+        if out.isModulated, abs(out.display - out.live) > 0.002 { out.display = out.live }
+        midiMap.saveOutputIfChanged()
+
         if abs(fps - loop.fps) > 0.5 { fps = loop.fps }
         if abs(gpuMs - loop.gpuMs) > 0.05 { gpuMs = loop.gpuMs }
     }
 
-    /// MIDI arrives on main and goes to the scene's MIDI inputs. Each takes what is for it;
-    /// a control new to one that is learning is added to the scene as that input's output.
+    // MARK: MIDI
+
+    /// Turns MIDI map mode on or off. While on, clicking a knob, trigger or playlist button picks
+    /// it to learn the next control moved, and the inspector lists every MIDI mapping.
+    func setMIDIMapMode(_ on: Bool) {
+        midiMap.isOn = on
+        if on { mapSource = nil; showInspector = true }
+        activateHardware()
+    }
+
+    /// In MIDI map mode: picks a target to learn the next control moved, or cancels (again, or nil).
+    func learnMIDI(_ target: String?) {
+        midiMap.learning = midiMap.learning == target ? nil : target
+        if let target { selectedTarget = target }
+    }
+
+    /// MIDI arrives on main. Every control's value is kept for the outputs reading it; a target
+    /// waiting in MIDI map mode learns the control; the playlist steps for its mappings.
     func handleMIDI(_ msg: MIDIMessage) {
-        if handlePlaylistMIDI(msg) { return }
-        guard let scene = current else { return }
-        for input in scene.midiInputs {
-            if let (control, value) = input.handle(msg) { learn(control, into: input, value: value) }
+        guard let control = MIDIControl(msg) else { return }
+        let value = MIDIControl.value(msg)
+        midiMap.receive(control, value)
+        if let target = midiMap.learning {
+            // A note learns on its press, not its release.
+            if control.kind == .note && value < 0.5 { return }
+            learn(control, onto: target)
+            return
+        }
+        for target in midiMap.firedTargets(control, value) {
+            stepPlaylist(target == MIDIMap.nextKey ? 1 : -1)
         }
     }
 
-    private func learn(_ control: MIDIControl, into input: MIDIInputRuntime, value: Float) {
-        edit("Learned \(control.label)") { file in
-            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == input.key }) else { return }
-            file.inputs[i].controls = (file.inputs[i].controls ?? []) + [control.key]
+    /// Maps a control onto a target, replacing the MIDI mappings already there: an app target
+    /// in this Mac's mappings, anything else in the scene. A knob gets the whole of its range
+    /// (amount 100%) from the knob's own value up.
+    private func learn(_ control: MIDIControl, onto target: String) {
+        midiMap.learning = nil
+        let source = control.sourceKey
+        let label = "\(control.label) → \(targetLabel(target))"
+        if MIDIMap.isAppTarget(target) {
+            var specs = midiMap.appSpecs.filter { !($0.target == target && $0.source.hasPrefix("midi.")) }
+            specs.append(target == MIDIMap.outputKey ? MappingSpec(source: source, target: target, amount: 1)
+                                                     : MappingSpec(source: source, target: target))
+            midiMap.setAppMappings(specs)
+            midiMap.disarm(control)
+            info = "Mapped \(label)"
+        } else {
+            let targetKind = kind(of: target)
+            guard targetKind == .value || targetKind == .trigger else {
+                info = "\(targetLabel(target)) takes \(targetKind.noun), not MIDI"; return
+            }
+            edit("Mapped \(label)") { file in
+                var list = (file.mappings ?? []).filter { !($0.target == target && $0.source.hasPrefix("midi.")) }
+                list.append(targetKind == .value ? MappingSpec(source: source, target: target, amount: 1)
+                                                 : MappingSpec(source: source, target: target))
+                file.mappings = list
+            }
         }
-        // The rebuilt input has the control now; give it the value that taught it.
-        current?.midiInputs.first { $0.key == input.key }?.receive(control, value)
-    }
-
-    /// Points a MIDI input at a device by name, or at every device (nil).
-    func setMIDIDevice(_ key: String, _ device: String?) {
-        edit("MIDI Input: \(device ?? "All devices")") { file in
-            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
-            file.inputs[i].device = device
-        }
-    }
-
-    /// Forgets a learned control. Mappings from it stay, inactive, in case it's learned again.
-    func forgetMIDIControl(_ outputKey: String) {
-        let key = devicePath(outputKey), control = outputKey.split(separator: ".").last.map(String.init)
-        edit("Forgot \(control.flatMap(MIDIControl.init(key:))?.label ?? outputKey)") { file in
-            guard let i = file.inputs.firstIndex(where: { $0.deviceKey == key }) else { return }
-            file.inputs[i].controls?.removeAll { $0 == control }
-        }
+        selectedTarget = target
+        activateHardware()
     }
 
     private func describe(_ error: Error) -> String {
