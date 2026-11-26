@@ -231,7 +231,8 @@ final class Engine {
     /// The device selected in the chain, by chain key (`audio`, `clock`, `mod.<id>`, `camera`,
     /// `palette`, `generator`, `post.<id>`). The inspector shows its outputs and mappings.
     var selectedDevice: String?
-    /// The knob last clicked or turned, which Delete resets. Selecting a device clears it.
+    /// The knob last clicked or turned, which Delete resets and the arrows step. Selecting a device or
+    /// loading another scene clears it.
     var activeKnob: Param?
 
     /// Folded devices, by scene file and chain key. Kept for the session, not saved in the scene.
@@ -324,6 +325,7 @@ final class Engine {
             let isReload = url == currentURL
             guard let nextScene = build(file, reuse: isReload ? current : nil) else { return }
             playingURL = url
+            if !isReload { activeKnob = nil }
             autoSaveWorkItem?.cancel()
             autoSaveWorkItem = nil
             isDirty = false

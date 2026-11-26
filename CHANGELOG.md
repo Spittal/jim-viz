@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1 (2026-11-25)
+
+- **Arrows step a knob wherever the focus is:** with a knob clicked, the up and down arrows step it even after clicking in the Scenes list, where they used to switch scenes instead. Loading another scene deselects the knob.
+- **⌘↑ and ⌘↓ switch scenes:** to the previous and next scene, or through the playlist, as ⌘[ and ⌘] do.
+
 ## 1.4.0 (2026-11-25)
 
 - **Placement on every geo:** x, y and z knobs, in a Placement section, move the whole generator through the world. They start at 0 and can be mapped like any knob.

@@ -88,17 +88,23 @@ struct Knob: View {
         editFocused = true
     }
 
-    /// Lets the up and down arrows step the active knob. Keys typed into a text field or a list
-    /// (the Scenes sidebar) are left alone.
+    /// Lets the up and down arrows step the active knob, even while the Scenes list has the
+    /// keyboard focus (it keeps it after a click, and would switch scenes). With ⌘ they step
+    /// to the previous or next scene, as ⌘[ and ⌘] do. Keys typed into a text field are left alone.
     static func installArrowKeys(_ engine: Engine) {
         guard arrowMonitor == nil else { return }
         arrowMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let up = event.keyCode == 126, down = event.keyCode == 125
-            guard up || down, engine.activeKnob != nil,
-                  event.modifierFlags.isDisjoint(with: [.command, .option, .control]) else { return event }
-            let responder = event.window?.firstResponder
-            if responder is NSText || responder is NSTableView { return event }
-            engine.nudgeActiveKnob(up ? 1 : -1, fine: event.modifierFlags.contains(.shift))
+            let flags = event.modifierFlags
+            guard up || down, flags.isDisjoint(with: [.option, .control]),
+                  !(event.window?.firstResponder is NSText) else { return event }
+            if flags.contains(.command) {
+                guard !flags.contains(.shift) else { return event }
+                engine.stepScene(up ? -1 : 1)
+                return nil
+            }
+            guard engine.activeKnob != nil else { return event }
+            engine.nudgeActiveKnob(up ? 1 : -1, fine: flags.contains(.shift))
             return nil
         }
     }
